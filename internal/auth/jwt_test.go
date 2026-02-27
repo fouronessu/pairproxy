@@ -149,3 +149,49 @@ func TestNewManagerEmptySecret(t *testing.T) {
 		t.Error("NewManager should fail with empty secret")
 	}
 }
+
+func TestJWTTamperedPayload(t *testing.T) {
+	logger := testLogger(t)
+	m, _ := NewManager(logger, "secret")
+
+	token, _ := m.Sign(JWTClaims{UserID: "u1"}, time.Hour)
+
+	// 将 token 中间某个字符改掉，使签名失效
+	b := []byte(token)
+	b[len(b)/2] ^= 0x01
+	tampered := string(b)
+
+	_, err := m.Parse(tampered)
+	if err == nil {
+		t.Fatal("Parse should fail for tampered token")
+	}
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("error should wrap ErrInvalidToken, got: %v", err)
+	}
+}
+
+func TestJWTConcurrentSafe(t *testing.T) {
+	logger := testLogger(t)
+	m, _ := NewManager(logger, "concurrent-secret")
+
+	const goroutines = 20
+	errs := make(chan error, goroutines*2)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			token, err := m.Sign(JWTClaims{UserID: "u-concurrent"}, time.Hour)
+			if err != nil {
+				errs <- err
+				return
+			}
+			_, err = m.Parse(token)
+			errs <- err
+		}()
+	}
+
+	for i := 0; i < goroutines; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent Sign/Parse error: %v", err)
+		}
+	}
+}

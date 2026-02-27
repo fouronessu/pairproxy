@@ -196,3 +196,32 @@ func TestApplyDefaultsCProxy(t *testing.T) {
 		t.Errorf("default Log.Level = %q, want info", cfg.Log.Level)
 	}
 }
+
+func TestPricingComputeCost(t *testing.T) {
+	p := PricingConfig{
+		Models: map[string]ModelPrice{
+			"claude-3-5-sonnet": {InputPer1K: 3.0, OutputPer1K: 15.0},
+		},
+		DefaultInputPer1K:  1.0,
+		DefaultOutputPer1K: 5.0,
+	}
+
+	// 已知模型：1000 input + 500 output
+	cost := p.ComputeCost("claude-3-5-sonnet", 1000, 500)
+	want := 1000.0/1000*3.0 + 500.0/1000*15.0 // 3.0 + 7.5 = 10.5
+	if cost != want {
+		t.Errorf("ComputeCost(known model) = %f, want %f", cost, want)
+	}
+
+	// 未知模型 → 使用默认定价
+	cost2 := p.ComputeCost("unknown-model", 2000, 1000)
+	want2 := 2000.0/1000*1.0 + 1000.0/1000*5.0 // 2.0 + 5.0 = 7.0
+	if cost2 != want2 {
+		t.Errorf("ComputeCost(unknown model) = %f, want %f", cost2, want2)
+	}
+
+	// 零 token → 零费用
+	if cost3 := p.ComputeCost("claude-3-5-sonnet", 0, 0); cost3 != 0 {
+		t.Errorf("ComputeCost(0 tokens) = %f, want 0", cost3)
+	}
+}

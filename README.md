@@ -117,8 +117,10 @@ cproxy start
 ```bash
 # 在 shell profile 中添加（或在 IDE 中设置环境变量）
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=any-placeholder   # 随意填写，cproxy 会替换
+export ANTHROPIC_API_KEY=any-placeholder   # 值任意填写，cproxy 会用 JWT 替换真实认证头
 ```
+
+> **说明**：`ANTHROPIC_API_KEY` 仅用于满足 Claude Code SDK 的非空校验，其值不会被发送给 Anthropic。cproxy 会将此 header 替换为用户 JWT，sproxy 再将其替换为真实 API Key。
 
 之后正常使用 Claude Code，所有请求自动经过代理统计。
 
@@ -143,6 +145,24 @@ sproxy 转发给 Anthropic:
 ```
 
 用户永远看不到真实 API Key。
+
+### JWT 自动刷新机制
+
+cproxy 启动时读取 `~/.pairproxy/token.json`，并在请求前检查 token 有效期：
+
+```
+token 有效期 > refresh_threshold（默认30分钟）
+  → 直接使用当前 access token
+
+token 有效期 ≤ refresh_threshold
+  → 用 refresh_token 向 sproxy 换取新的 access token
+  → 新 token 保存到 token.json
+
+refresh_token 也已过期（> 7天未使用）
+  → 返回 401，提示用户重新执行 cproxy login
+```
+
+access token 有效期 24h，refresh token 7天，正常使用下用户无需手动登录。
 
 ### Streaming Token 捕获
 

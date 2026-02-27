@@ -340,3 +340,113 @@ func TestUpstreamErrorRecorded(t *testing.T) {
 			log.InputTokens, log.OutputTokens)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestMultipleTargetsRoundRobin：验证多 LLM 目标按轮询分发
+// ---------------------------------------------------------------------------
+
+func TestMultipleTargetsRoundRobin(t *testing.T) {
+	var hits [2]int
+
+	// 两个 mock LLM，各自记录命中次数
+	mkServer := func(idx int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits[idx]++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"id":"msg","type":"message","usage":{"input_tokens":10,"output_tokens":5}}`)
+		}))
+	}
+	s0 := mkServer(0)
+	defer s0.Close()
+	s1 := mkServer(1)
+	defer s1.Close()
+
+	logger := zaptest.NewLogger(t)
+	jwtMgr, _ := auth.NewManager(logger, "secret")
+	gormDB, _ := db.Open(logger, ":memory:")
+	_ = db.Migrate(logger, gormDB)
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+
+	sp, err := NewSProxy(logger, jwtMgr, writer, []LLMTarget{
+		{URL: s0.URL, APIKey: "k0"},
+		{URL: s1.URL, APIKey: "k1"},
+	})
+	if err != nil {
+		t.Fatalf("NewSProxy: %v", err)
+	}
+
+	const requests = 4
+	for i := 0; i < requests; i++ {
+		token, _ := jwtMgr.Sign(auth.JWTClaims{UserID: "u-rr", Username: "rr"}, time.Hour)
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+		req.Header.Set("X-PairProxy-Auth", token)
+		rr := httptest.NewRecorder()
+		sp.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("request %d: status = %d, want 200", i, rr.Code)
+		}
+	}
+
+	// 轮询应均匀分配（各 2 次）
+	if hits[0] != requests/2 {
+		t.Errorf("server 0 hits = %d, want %d", hits[0], requests/2)
+	}
+	if hits[1] != requests/2 {
+		t.Errorf("server 1 hits = %d, want %d", hits[1], requests/2)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestModelExtractedFromNonStreamingResponse：非 streaming 响应中 model 字段写入 usage
+// ---------------------------------------------------------------------------
+
+func TestModelExtractedFromNonStreamingResponse(t *testing.T) {
+	const wantModel = "claude-3-5-sonnet-20241022"
+
+	// Mock LLM：在响应 body 中包含 model 字段
+	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		body := `{"id":"msg","type":"message","model":"` + wantModel + `","usage":{"input_tokens":20,"output_tokens":10}}`
+		_, _ = io.WriteString(w, body)
+	}))
+	defer mockLLM.Close()
+
+	logger := zaptest.NewLogger(t)
+	jwtMgr, _ := auth.NewManager(logger, "secret")
+	gormDB, _ := db.Open(logger, ":memory:")
+	_ = db.Migrate(logger, gormDB)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+	writer.Start(ctx)
+
+	sp, _ := NewSProxy(logger, jwtMgr, writer, []LLMTarget{{URL: mockLLM.URL, APIKey: "key"}})
+
+	// 请求中不设置 X-PairProxy-Model，让 sproxy 从响应 body 提取
+	token, _ := jwtMgr.Sign(auth.JWTClaims{UserID: "u-model", Username: "model"}, time.Hour)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+	req.Header.Set("X-PairProxy-Auth", token)
+	rr := httptest.NewRecorder()
+	sp.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	cancel()
+	writer.Wait()
+
+	repo := db.NewUsageRepo(gormDB, logger)
+	logs, err := repo.Query(db.UsageFilter{UserID: "u-model", Limit: 10})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 usage log, got %d", len(logs))
+	}
+	if logs[0].Model != wantModel {
+		t.Errorf("Model = %q, want %q", logs[0].Model, wantModel)
+	}
+}

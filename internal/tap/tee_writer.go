@@ -135,3 +135,8 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 func (tw *TeeResponseWriter) StatusCode() int {
 	return tw.statusCode
 }
+
+// UpdateModel 补充 usage record 中的模型字段（在 Director 之后获取 body 时调用）。
+func (tw *TeeResponseWriter) UpdateModel(model string) {
+	tw.record.Model = model
+}

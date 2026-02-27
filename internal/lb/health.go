@@ -193,5 +193,11 @@ func (hc *HealthChecker) recordFailure(id string) {
 				},
 			})
 		}
+	} else {
+		hc.logger.Debug("target failure recorded",
+			zap.String("target", id),
+			zap.Int("consecutive_failures", count),
+			zap.Int("threshold", hc.failThreshold),
+		)
 	}
 }

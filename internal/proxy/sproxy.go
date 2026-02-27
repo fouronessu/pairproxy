@@ -126,7 +126,13 @@ func (sp *SProxy) HealthHandler() http.HandlerFunc {
 // pickTarget 按轮询选择 LLM 目标。
 func (sp *SProxy) pickTarget() LLMTarget {
 	n := sp.idx.Add(1)
-	return sp.targets[int(n-1)%len(sp.targets)]
+	t := sp.targets[int(n-1)%len(sp.targets)]
+	sp.logger.Debug("picked LLM target",
+		zap.String("url", t.URL),
+		zap.Int("index", int(n-1)%len(sp.targets)),
+		zap.Int("total_targets", len(sp.targets)),
+	)
+	return t
 }
 
 // serveProxy 核心代理逻辑：
@@ -221,6 +227,22 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					)
 				}
 
+				// 尝试从 body 补充 model 字段（Director 阶段请求 body 已转发，只能在此处补充）
+				if usageRecord.Model == "" {
+					if m := extractModelFromBody(body); m != "" {
+						usageRecord.Model = m
+						tw.UpdateModel(m)
+						sp.logger.Debug("model extracted from response body",
+							zap.String("request_id", reqID),
+							zap.String("model", m),
+						)
+					} else {
+						sp.logger.Debug("model field not found in request or response",
+							zap.String("request_id", reqID),
+						)
+					}
+				}
+
 				// 通过 TeeWriter 记录（token 解析 + 写入 UsageWriter）
 				tw.RecordNonStreaming(body, resp.StatusCode, durationMs)
 			}
@@ -230,6 +252,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// sp-1 模式：向 c-proxy 注入路由表更新
 			if sp.clusterMgr != nil {
 				sp.clusterMgr.InjectResponseHeaders(resp.Header, clientRoutingVersion)
+				if resp.Header.Get("X-Routing-Update") != "" {
+					sp.logger.Debug("routing table injected into response",
+						zap.String("request_id", reqID),
+						zap.Int64("client_version", clientRoutingVersion),
+					)
+				}
 			}
 
 			return nil

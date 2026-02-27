@@ -220,10 +220,14 @@ func (c *Checker) PurgeRateLimiter() {
 // getUsage 返回用户今日和本月的 token 用量（缓存优先）。
 func (c *Checker) getUsage(userID string) (daily, monthly int64, err error) {
 	if entry := c.cache.get(userID); entry != nil {
+		c.logger.Debug("quota cache hit",
+			zap.String("user_id", userID),
+			zap.Int64("daily_used", entry.dailyUsed),
+			zap.Int64("monthly_used", entry.monthlyUsed),
+		)
 		return entry.dailyUsed, entry.monthlyUsed, nil
 	}
-
-	// 缓存 miss → 查 DB
+	c.logger.Debug("quota cache miss, querying DB", zap.String("user_id", userID))
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())

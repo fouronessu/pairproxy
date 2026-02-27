@@ -91,6 +91,55 @@ func TestRateLimiterResetAt(t *testing.T) {
 	}
 }
 
+func TestRateLimiterBoundaryExact(t *testing.T) {
+	rl := NewRateLimiter()
+	const limit = 5
+
+	// 恰好允许 limit 个请求
+	for i := 0; i < limit; i++ {
+		allowed, count := rl.Allow("boundary", limit)
+		if !allowed {
+			t.Errorf("request %d should be allowed, got denied (count=%d)", i+1, count)
+		}
+	}
+
+	// 第 limit+1 个必须被拒
+	allowed, count := rl.Allow("boundary", limit)
+	if allowed {
+		t.Errorf("request %d should be denied, got allowed (count=%d)", limit+1, count)
+	}
+	if count != limit {
+		t.Errorf("count on denial = %d, want %d", count, limit)
+	}
+}
+
+func TestRateLimiterConcurrent(t *testing.T) {
+	const (
+		limit      = 10
+		goroutines = 20
+	)
+	rl := NewRateLimiter()
+
+	allowed := make(chan bool, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			ok, _ := rl.Allow("concurrent", limit)
+			allowed <- ok
+		}()
+	}
+
+	allowedCount := 0
+	for i := 0; i < goroutines; i++ {
+		if <-allowed {
+			allowedCount++
+		}
+	}
+
+	if allowedCount > limit {
+		t.Errorf("concurrent Allow() allowed %d > limit %d", allowedCount, limit)
+	}
+}
+
 func TestRateLimiterPurge(t *testing.T) {
 	rl := &RateLimiter{
 		windows: make(map[string][]time.Time),
