@@ -476,6 +476,23 @@ make clean          # 清理 bin/
 
 ---
 
+## 发布新版本
+
+确认所有改动已合并到 `main` 后，推送一个符合语义版本的 tag，CI 自动完成剩余全部工作：
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+GitHub Actions [`release.yml`](.github/workflows/release.yml) 随后自动执行：
+
+1. **交叉编译** 5 个平台的二进制（Linux/macOS/Windows × amd64/arm64）
+2. **生成** `SHA256SUMS.txt` 校验文件
+3. **创建** GitHub Release，附上所有产物和自动生成的 release notes
+4. **构建** 多架构 Docker 镜像（`linux/amd64` + `linux/arm64`）并推送到 `ghcr.io/l17728/pairproxy`，标签包含 `v1.2.3`、`1.2`、`1`、`latest`
+
+---
+
 ## 项目结构
 
 ```
