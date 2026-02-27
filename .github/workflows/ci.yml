@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "config/*.example"
+      - "config/*.service"
+      - "docker-compose.yml"
+      - ".env.example"
+  pull_request:
+    branches: [main]
+
+# 同一分支/PR 有新提交时取消旧的 CI run，节省资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # test: 构建 + 静态检查 + 竞态检测测试 + 覆盖率
+  # ----------------------------------------------------------------------------
+  test:
+    name: Test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        go: ["1.25"]   # 与 go.mod 保持一致；如需多版本测试可在此追加
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race + coverage)
+        run: |
+          go test ./... \
+            -race \
+            -count=1 \
+            -timeout=120s \
+            -coverprofile=coverage.out \
+            -covermode=atomic
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.go }}
+          path: coverage.out
+          retention-days: 7
+
+  # ----------------------------------------------------------------------------
+  # lint: golangci-lint 静态分析
+  # ----------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m

@@ -1,5 +1,9 @@
 # PairProxy
 
+[![CI](https://github.com/l17728/pairproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/l17728/pairproxy/actions/workflows/ci.yml)
+[![Release](https://github.com/l17728/pairproxy/actions/workflows/release.yml/badge.svg)](https://github.com/l17728/pairproxy/actions/workflows/release.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pairproxy/pairproxy)](https://goreportcard.com/report/github.com/pairproxy/pairproxy)
+
 > 企业级 Claude Code 透明代理 — 统一管控 LLM API Key，精确追踪 token 用量，零侵入接入。
 
 ```

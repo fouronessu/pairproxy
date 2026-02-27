@@ -1,0 +1,48 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - bodyclose      # 检查 HTTP response body 是否关闭
+    - errcheck       # 检查未处理的 error 返回值
+    - gosimple       # 简化代码建议
+    - govet          # go vet 内置检查
+    - ineffassign    # 无效赋值
+    - staticcheck    # 静态分析（包含 SA/S/ST 系列）
+    - unused         # 未使用的代码
+    - noctx          # HTTP 请求缺少 context
+    - gocritic       # 各类代码风格建议
+
+linters-settings:
+  errcheck:
+    # 允许忽略特定函数的 error 返回（这些在项目中有合理理由忽略）
+    exclude-functions:
+      - (*go.uber.org/zap.Logger).Sync
+      - (net/http.ResponseWriter).Write
+      - (*bufio.Writer).Flush
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment   # 结构体字段对齐优化提示，项目中可读性优先
+
+  gocritic:
+    disabled-checks:
+      - commentedOutCode  # 允许注释掉的代码（示例代码合理）
+
+issues:
+  exclude-rules:
+    # 测试文件允许忽略 errcheck（测试中大量使用 t.Fatal/require）
+    - path: _test\.go
+      linters:
+        - errcheck
+        - noctx
+
+    # 允许 //nolint:noctx 注释（HTTP 转发场景中不适合强制 context）
+    - linters:
+        - noctx
+      source: "nolint:noctx"
+
+  # 最大显示问题数（0 = 不限制）
+  max-issues-per-linter: 0
+  max-same-issues: 0
