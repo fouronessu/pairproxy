@@ -1,0 +1,109 @@
+# ==============================================================================
+# sproxy.service — systemd unit for pairproxy s-proxy
+#
+# 安装步骤：
+#   1. 将二进制复制到 /usr/local/bin/
+#      sudo cp bin/sproxy /usr/local/bin/sproxy
+#      sudo chmod +x /usr/local/bin/sproxy
+#
+#   2. 创建系统用户（最小权限原则）
+#      sudo useradd --system --no-create-home --shell /usr/sbin/nologin pairproxy
+#
+#   3. 创建目录并设置权限
+#      sudo mkdir -p /etc/pairproxy /var/lib/pairproxy /var/log/pairproxy
+#      sudo chown pairproxy:pairproxy /var/lib/pairproxy /var/log/pairproxy
+#      sudo chmod 750 /var/lib/pairproxy /var/log/pairproxy
+#
+#   4. 复制并编辑配置文件
+#      sudo cp config/sproxy.yaml.example /etc/pairproxy/sproxy.yaml
+#      sudo chmod 640 /etc/pairproxy/sproxy.yaml
+#      sudo chown root:pairproxy /etc/pairproxy/sproxy.yaml
+#
+#   5. 创建 EnvironmentFile（存放敏感密钥，不写进配置文件）
+#      sudo install -m 640 -o root -g pairproxy /dev/null /etc/pairproxy/sproxy.env
+#      sudo tee /etc/pairproxy/sproxy.env <<'EOF'
+#      ANTHROPIC_API_KEY_1=sk-ant-api03-...
+#      JWT_SECRET=your-32-char-random-secret
+#      ADMIN_PASSWORD_HASH=$2a$10$...
+#      EOF
+#
+#   6. 安装并启动服务
+#      sudo cp config/sproxy.service /etc/systemd/system/sproxy.service
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now sproxy
+#
+#   7. 查看状态和日志
+#      sudo systemctl status sproxy
+#      sudo journalctl -u sproxy -f
+# ==============================================================================
+
+[Unit]
+Description=PairProxy s-proxy — enterprise LLM API gateway
+Documentation=https://github.com/l17728/pairproxy
+After=network-online.target
+Wants=network-online.target
+# 若使用外部数据库或 NFS 挂载，可在此添加额外依赖：
+# After=nfs-client.target
+
+[Service]
+# --- 进程 ---
+Type=simple
+ExecStart=/usr/local/bin/sproxy start --config /etc/pairproxy/sproxy.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# --- 用户权限 ---
+User=pairproxy
+Group=pairproxy
+
+# --- 敏感环境变量（API Key / JWT Secret）---
+# 该文件每行一个 KEY=VALUE，不要提交到版本控制
+EnvironmentFile=/etc/pairproxy/sproxy.env
+
+# --- 工作目录 ---
+WorkingDirectory=/var/lib/pairproxy
+
+# --- 日志（输出到 journald，用 journalctl -u sproxy 查看）---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sproxy
+
+# --- 安全加固 ---
+# 禁止获取新特权
+NoNewPrivileges=true
+# 只读文件系统（数据目录单独例外）
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pairproxy /var/log/pairproxy
+# 禁止访问 /home
+ProtectHome=true
+# 私有 /tmp
+PrivateTmp=true
+# 私有 /dev（仅保留基本设备）
+PrivateDevices=true
+# 保护内核调优接口
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# 限制地址族（只需 IPv4/IPv6）
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# 禁止命名空间操作
+RestrictNamespaces=true
+# 锁定 personality（防止通过 personality 系统调用降权绕过）
+LockPersonality=true
+# 禁止内存可写可执行（防止 JIT shellcode 注入）
+MemoryDenyWriteExecute=true
+# 系统调用过滤（白名单：仅允许 Go 进程必要的 syscall 集合）
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @reboot @swap @privileged
+SystemCallErrorNumber=EPERM
+
+# --- 资源限制 ---
+# 最大文件描述符数（高并发时需要）
+LimitNOFILE=65536
+# 禁止 core dump（防止内存中的密钥泄漏到磁盘）
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

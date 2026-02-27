@@ -7,6 +7,8 @@
 | `cproxy.yaml.example` | 开发者本地运行的 c-proxy 配置 |
 | `sproxy.yaml.example` | 服务端 s-proxy 主节点（primary）配置 |
 | `sproxy-worker.yaml.example` | 服务端 s-proxy 工作节点（worker）配置 |
+| `sproxy.service` | systemd unit 文件（primary / 单机节点） |
+| `sproxy-worker.service` | systemd unit 文件（worker 节点） |
 
 ## 快速开始
 
