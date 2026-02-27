@@ -10,8 +10,8 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // newTestSProxy 创建一个指向 mockLLMURL 的 SProxy（使用内存 DB）。

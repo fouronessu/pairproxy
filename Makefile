@@ -16,7 +16,7 @@
 # 变量
 # --------------------------------------------------------------------------
 
-MODULE  := github.com/pairproxy/pairproxy
+MODULE  := github.com/l17728/pairproxy
 BINDIR  := bin
 DISTDIR := dist
 

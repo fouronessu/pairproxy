@@ -11,8 +11,8 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/lb"
 )
 
 // newTestCProxy 创建一个指向 mockSProxyURL 的 CProxy。

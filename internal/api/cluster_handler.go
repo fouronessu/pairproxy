@@ -7,8 +7,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/cluster"
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // ClusterHandler 处理 sp-2 → sp-1 的内部 API 请求。

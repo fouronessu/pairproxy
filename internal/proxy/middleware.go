@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/auth"
 )
 
 // contextKey is an unexported type for context keys in this package.

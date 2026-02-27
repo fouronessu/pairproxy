@@ -9,9 +9,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/cluster"
-	"github.com/pairproxy/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/lb"
 )
 
 // CProxy c-proxy 核心处理器。

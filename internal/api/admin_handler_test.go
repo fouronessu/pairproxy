@@ -12,8 +12,8 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // setupAdminTest 创建用于 admin handler 集成测试的测试环境

@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/lb"
 )
 
 func makeManager(t *testing.T, targets []lb.Target) (*Manager, *lb.WeightedRandomBalancer) {

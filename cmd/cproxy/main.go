@@ -16,12 +16,12 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/term"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/cluster"
-	"github.com/pairproxy/pairproxy/internal/config"
-	"github.com/pairproxy/pairproxy/internal/lb"
-	"github.com/pairproxy/pairproxy/internal/proxy"
-	"github.com/pairproxy/pairproxy/internal/version"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/config"
+	"github.com/l17728/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/proxy"
+	"github.com/l17728/pairproxy/internal/version"
 )
 
 func main() {

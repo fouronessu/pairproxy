@@ -6,8 +6,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/alert"
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/alert"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // ExceededError 超出配额或频率限制时返回的错误（携带重置时间信息）。

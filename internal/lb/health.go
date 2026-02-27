@@ -9,7 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/alert"
+	"github.com/l17728/pairproxy/internal/alert"
 )
 
 const (

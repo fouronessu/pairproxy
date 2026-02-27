@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 func TestReporterHeartbeat(t *testing.T) {

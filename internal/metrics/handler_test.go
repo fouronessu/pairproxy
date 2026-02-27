@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // setupMetricsTest 创建内存数据库和 metrics Handler

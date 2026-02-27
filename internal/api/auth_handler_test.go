@@ -11,8 +11,8 @@ import (
 	"go.uber.org/zap/zaptest"
 	"gorm.io/gorm"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // setupTest 初始化内存 DB + 测试用户，返回 AuthHandler 和 HTTP mux。

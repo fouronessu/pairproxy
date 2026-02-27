@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // Handler 提供 GET /metrics 端点（Prometheus text format）

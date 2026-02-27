@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/lb"
 )
 
 // Manager 维护当前路由表，并提供给 s-proxy 注入响应头。

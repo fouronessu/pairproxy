@@ -14,11 +14,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/cluster"
-	"github.com/pairproxy/pairproxy/internal/db"
-	"github.com/pairproxy/pairproxy/internal/quota"
-	"github.com/pairproxy/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/quota"
+	"github.com/l17728/pairproxy/internal/tap"
 )
 
 // LLMTarget 代表一个 LLM 后端（含 API Key）。

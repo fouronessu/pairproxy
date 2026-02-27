@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // TeeResponseWriter 包装 http.ResponseWriter，在不缓冲的情况下同时：

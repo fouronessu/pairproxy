@@ -1,4 +1,4 @@
-module github.com/pairproxy/pairproxy
+module github.com/l17728/pairproxy
 
 go 1.25.0
 

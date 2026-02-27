@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/l17728/pairproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/l17728/pairproxy/actions/workflows/ci.yml)
 [![Release](https://github.com/l17728/pairproxy/actions/workflows/release.yml/badge.svg)](https://github.com/l17728/pairproxy/actions/workflows/release.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/pairproxy/pairproxy)](https://goreportcard.com/report/github.com/pairproxy/pairproxy)
+[![Go Report Card](https://goreportcard.com/badge/github.com/l17728/pairproxy)](https://goreportcard.com/report/github.com/l17728/pairproxy)
 
 > 企业级 Claude Code 透明代理 — 统一管控 LLM API Key，精确追踪 token 用量，零侵入接入。
 
@@ -519,7 +519,7 @@ pairproxy/
 │   ├── sproxy.yaml.example
 │   └── sproxy-worker.yaml.example
 ├── Makefile
-└── go.mod                    # module: github.com/pairproxy/pairproxy
+└── go.mod                    # module: github.com/l17728/pairproxy
 ```
 
 ---

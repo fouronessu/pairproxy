@@ -11,10 +11,10 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/db"
-	"github.com/pairproxy/pairproxy/internal/quota"
-	"github.com/pairproxy/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/quota"
+	"github.com/l17728/pairproxy/internal/tap"
 )
 
 // newSProxyWithQuota 创建带配额检查的 SProxy（用于集成测试）。

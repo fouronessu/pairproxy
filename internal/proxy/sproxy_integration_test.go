@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/auth"
-	"github.com/pairproxy/pairproxy/internal/db"
-	"github.com/pairproxy/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/tap"
 )
 
 // newIntegrationSProxy 创建一个完整的 SProxy（带内存 DB 和 UsageWriter）。

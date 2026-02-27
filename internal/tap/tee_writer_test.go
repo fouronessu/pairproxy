@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
-	"github.com/pairproxy/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/db"
 )
 
 // setupTeeWriter 创建一个带内存 DB 的 TeeResponseWriter，供测试复用。
