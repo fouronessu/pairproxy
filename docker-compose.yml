@@ -1,0 +1,108 @@
+# ==============================================================================
+# docker-compose.yml — 本地开发 / 单机生产部署
+#
+# 使用前准备：
+#   1. 复制并编辑配置
+#      cp config/sproxy.yaml.example ./sproxy.yaml
+#
+#   2. 创建环境变量文件（存放密钥，不提交到 git）
+#      cp .env.example .env
+#      # 编辑 .env，填入真实值
+#
+#   3. 启动
+#      docker compose up -d
+#
+#   4. 查看日志
+#      docker compose logs -f sproxy
+# ==============================================================================
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # sproxy — 服务端代理（单机 primary 模式）
+  # ----------------------------------------------------------------------------
+  sproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: sproxy
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILT: ${BUILT:-unknown}
+    image: pairproxy/sproxy:${VERSION:-dev}
+    container_name: sproxy
+    restart: unless-stopped
+
+    ports:
+      - "9000:9000"
+
+    # 敏感环境变量从 .env 文件注入
+    env_file:
+      - .env
+
+    volumes:
+      # 配置文件（只读挂载）
+      - type: bind
+        source: ./sproxy.yaml
+        target: /etc/pairproxy/sproxy.yaml
+        read_only: true
+
+      # SQLite 数据库（持久化）
+      - sproxy-data:/var/lib/pairproxy
+
+    # 健康检查：调用 /health 端点
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sproxy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # 资源限制（根据实际负载调整）
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ----------------------------------------------------------------------------
+  # sproxy-worker — 可选：扩容工作节点
+  # 取消注释并修改 sproxy-worker.yaml 中的 cluster.primary 地址后启用
+  # ----------------------------------------------------------------------------
+  # sproxy-worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     args:
+  #       BINARY: sproxy
+  #   image: pairproxy/sproxy:${VERSION:-dev}
+  #   container_name: sproxy-worker
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9001:9000"
+  #   env_file:
+  #     - .env.worker
+  #   volumes:
+  #     - type: bind
+  #       source: ./sproxy-worker.yaml
+  #       target: /etc/pairproxy/sproxy.yaml
+  #       read_only: true
+  #     - sproxy-worker-data:/var/lib/pairproxy
+  #   depends_on:
+  #     sproxy:
+  #       condition: service_healthy
+
+volumes:
+  sproxy-data:
+    driver: local
+  # sproxy-worker-data:
+  #   driver: local

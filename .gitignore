@@ -21,7 +21,8 @@ go.work.sum
 *.local.yaml
 *.local.yml
 .env
-.env.*
+.env.*.local
+# .env.example 保留（模板文件，需要提交）
 
 # Database
 *.db

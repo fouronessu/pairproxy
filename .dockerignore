@@ -1,0 +1,42 @@
+# 编译产物
+bin/
+dist/
+*.exe
+
+# 运行时文件（不打包进镜像）
+*.db
+*.db-shm
+*.db-wal
+token.json
+
+# 开发/测试
+*.test
+*.out
+*.prof
+coverage.html
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# 文档（镜像不需要）
+*.md
+docs/
+
+# 临时文件
+tmp/
+temp/
+chat.txt
+plan.md
+spec/
+
+# Claude Code
+.claude/
