@@ -112,7 +112,7 @@ func (r *Reporter) sendHeartbeat() {
 	}
 
 	url := r.sp1Addr + defaultRegisterPath
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		r.logger.Error("failed to create register request", zap.Error(err))
 		return
@@ -162,7 +162,7 @@ func (r *Reporter) ReportUsage(records []db.UsageRecord) error {
 	}
 
 	url := r.sp1Addr + defaultUsageReportPath
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("create usage report request: %w", err)
 	}

@@ -25,10 +25,12 @@ linters-settings:
     enable-all: true
     disable:
       - fieldalignment   # 结构体字段对齐优化提示，项目中可读性优先
+      - shadow           # if err := ...; err != nil 是惯用写法，不强制改名
 
   gocritic:
     disabled-checks:
       - commentedOutCode  # 允许注释掉的代码（示例代码合理）
+      - ifElseChain       # switch 改写为可选风格，不强制
 
 issues:
   exclude-rules:

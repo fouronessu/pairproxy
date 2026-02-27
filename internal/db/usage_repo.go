@@ -99,9 +99,7 @@ func (w *UsageWriter) Record(r UsageRecord) {
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
-	if r.TotalTokens() <= 0 {
-		// 没有 token 数据的记录仍然写入（记录错误请求）
-	}
+	// 没有 token 数据的记录仍然写入（记录错误请求），无需特殊处理
 	select {
 	case w.ch <- r:
 		w.logger.Debug("usage record queued",

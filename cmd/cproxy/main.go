@@ -355,7 +355,7 @@ func runLogout(cmd *cobra.Command, args []string) error {
 	if tf != nil && tf.ServerAddr != "" {
 		logoutURL := strings.TrimRight(tf.ServerAddr, "/") + "/auth/logout"
 		body, _ := json.Marshal(map[string]string{"refresh_token": tf.RefreshToken})
-		req, _ := http.NewRequest(http.MethodPost, logoutURL, bytes.NewReader(body))
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, logoutURL, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+tf.AccessToken)
 		resp, err := http.DefaultClient.Do(req)

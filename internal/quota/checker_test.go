@@ -40,16 +40,6 @@ func setupQuotaTest(t *testing.T) (*db.UserRepo, *db.GroupRepo, *db.UsageRepo, *
 		func() { cancel(); writer.Wait() }
 }
 
-// insertUsage 直接写入 usage 记录并等待异步写入完成。
-func insertUsage(t *testing.T, writer *db.UsageWriter, cancel context.CancelFunc, records []db.UsageRecord) {
-	t.Helper()
-	for _, r := range records {
-		writer.Record(r)
-	}
-	cancel()
-	writer.Wait()
-}
-
 // ---------------------------------------------------------------------------
 // TestCheckerNoGroup — 无分组用户 → 无限制（不 block）
 // ---------------------------------------------------------------------------
