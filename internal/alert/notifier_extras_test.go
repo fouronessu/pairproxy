@@ -98,14 +98,14 @@ func TestNotifierWebhookErrorStatus(t *testing.T) {
 // can be sent without error.
 func TestNotifierAllEventTypes(t *testing.T) {
 	var received atomic.Int32
-	var lastKind string
+	var lastKind atomic.Value // stores string; safe for concurrent handler goroutines
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var evt Event
 		if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
 			t.Errorf("decode event: %v", err)
 		}
-		lastKind = evt.Kind
+		lastKind.Store(evt.Kind)
 		received.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -133,7 +133,8 @@ func TestNotifierAllEventTypes(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if got := int(received.Load()); got < len(eventTypes) {
-		t.Errorf("received %d events, want %d (last seen kind: %q)", got, len(eventTypes), lastKind)
+		lk, _ := lastKind.Load().(string)
+		t.Errorf("received %d events, want %d (last seen kind: %q)", got, len(eventTypes), lk)
 	}
 }
 
