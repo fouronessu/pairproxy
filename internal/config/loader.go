@@ -77,6 +77,9 @@ func LoadCProxyConfig(path string) (*CProxyConfig, []string, error) {
 	}
 
 	applyDefaults(&cfg)
+	if err := cfg.Validate(); err != nil {
+		return nil, missing, err
+	}
 	return &cfg, missing, nil
 }
 
@@ -95,6 +98,9 @@ func LoadSProxyConfig(path string) (*SProxyFullConfig, []string, error) {
 	}
 
 	applySProxyDefaults(&cfg)
+	if err := cfg.Validate(); err != nil {
+		return nil, missing, err
+	}
 	return &cfg, missing, nil
 }
 

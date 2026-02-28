@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -118,6 +119,7 @@ type ClusterConfig struct {
 	AlertWebhook        string        `yaml:"alert_webhook"`         // 可选 Webhook URL
 	ReportInterval      time.Duration `yaml:"report_interval"`       // worker 用量上报间隔，默认 30s
 	PeerMonitorInterval time.Duration `yaml:"peer_monitor_interval"` // primary 监控 peer 间隔，默认 30s
+	SharedSecret        string        `yaml:"shared_secret"`         // 集群内部 API 共享密钥（HMAC Bearer token）
 }
 
 // DashboardConfig Dashboard 配置
@@ -141,4 +143,47 @@ func (l ListenConfig) Addr() string {
 		port = 8080
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// ---------------------------------------------------------------------------
+// 配置校验
+// ---------------------------------------------------------------------------
+
+// Validate 校验 s-proxy 配置的必填字段和合法性。
+// 应在 applyDefaults 之后调用，以确保默认值已填充。
+func (c *SProxyFullConfig) Validate() error {
+	var errs []string
+
+	if c.Auth.JWTSecret == "" {
+		errs = append(errs, "auth.jwt_secret is required (set ${JWT_SECRET} or provide the value directly)")
+	}
+	if c.Database.Path == "" {
+		errs = append(errs, "database.path is required")
+	}
+	if len(c.LLM.Targets) == 0 {
+		errs = append(errs, "llm.targets must not be empty (at least one LLM target is required)")
+	}
+	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
+		errs = append(errs, fmt.Sprintf("listen.port %d is out of range (1–65535)", c.Listen.Port))
+	}
+	if c.Cluster.Role == "worker" && c.Cluster.Primary == "" {
+		errs = append(errs, "cluster.primary is required when cluster.role is \"worker\"")
+	}
+	if c.Cluster.Role != "" && c.Cluster.Role != "primary" && c.Cluster.Role != "worker" {
+		errs = append(errs, fmt.Sprintf("cluster.role %q is invalid; must be \"primary\" or \"worker\"", c.Cluster.Role))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
+}
+
+// Validate 校验 c-proxy 配置的必填字段和合法性。
+// 应在 applyDefaults 之后调用。
+func (c *CProxyConfig) Validate() error {
+	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
+		return fmt.Errorf("config validation failed: listen.port %d is out of range (1–65535)", c.Listen.Port)
+	}
+	return nil
 }

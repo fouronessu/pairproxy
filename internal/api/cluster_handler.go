@@ -144,12 +144,28 @@ func (h *ClusterHandler) handleGetRouting(w http.ResponseWriter, r *http.Request
 }
 
 // checkAuth 验证请求中的 Bearer token（shared secret）。
-// sharedSecret 为空时跳过鉴权（仅测试环境）。
+//
+// 安全策略（fail-closed）：
+//   - sharedSecret 为空时拒绝所有请求并记录 WARN 日志，防止配置缺失时意外放行。
+//   - 生产环境必须在 cluster.shared_secret 中配置非空密钥。
 func (h *ClusterHandler) checkAuth(r *http.Request) bool {
 	if h.sharedSecret == "" {
-		return true
+		// fail-closed：未配置共享密钥，拒绝所有内部 API 请求。
+		// 若确实希望禁用认证（如单机测试），请在配置中显式设置 shared_secret: "test-only"。
+		h.logger.Warn("cluster shared_secret not configured; rejecting internal API request (fail-closed)",
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("path", r.URL.Path),
+		)
+		return false
 	}
 	authHeader := r.Header.Get("Authorization")
 	expected := "Bearer " + h.sharedSecret
-	return strings.TrimSpace(authHeader) == expected
+	ok := strings.TrimSpace(authHeader) == expected
+	if !ok {
+		h.logger.Warn("cluster API authentication failed: invalid or missing shared secret",
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("path", r.URL.Path),
+		)
+	}
+	return ok
 }

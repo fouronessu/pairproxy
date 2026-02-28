@@ -544,6 +544,17 @@ pairproxy/
 
 ---
 
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [docs/manual.md](docs/manual.md) | 完整用户手册（部署、配置、CLI 命令、Dashboard 使用） |
+| [docs/API.md](docs/API.md) | REST API 参考（Auth、Admin、Stats 端点） |
+| [docs/CLUSTER_DESIGN.md](docs/CLUSTER_DESIGN.md) | 多节点集群架构设计（路由分发、心跳、故障恢复） |
+| [docs/SECURITY.md](docs/SECURITY.md) | 安全模型说明（JWT 防护、集群 API 鉴权、配额、审计日志） |
+
+---
+
 ## 技术选型
 
 | 组件 | 选型 | 理由 |

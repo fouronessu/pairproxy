@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"golang.org/x/term"
+	"gorm.io/gorm"
 
 	"github.com/l17728/pairproxy/internal/alert"
 	"github.com/l17728/pairproxy/internal/api"
@@ -113,6 +114,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
+	// P0-1: 确保进程退出时关闭数据库连接，释放文件锁和文件描述符
+	defer closeGormDB(logger, database)
+
 	if err := db.Migrate(logger, database); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
@@ -220,11 +224,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 			reportInterval = 30 * time.Second
 		}
 		reporter = cluster.NewReporter(logger, cluster.ReporterConfig{
-			SP1Addr:    cfg.Cluster.Primary,
-			SelfID:     cfg.Cluster.SelfAddr,
-			SelfAddr:   cfg.Cluster.SelfAddr,
-			SelfWeight: cfg.Cluster.SelfWeight,
-			Interval:   reportInterval,
+			SP1Addr:      cfg.Cluster.Primary,
+			SelfID:       cfg.Cluster.SelfAddr,
+			SelfAddr:     cfg.Cluster.SelfAddr,
+			SelfWeight:   cfg.Cluster.SelfWeight,
+			Interval:     reportInterval,
+			SharedSecret: cfg.Cluster.SharedSecret, // P0-4: 集群内部 API 认证密钥
 		}, usageRepo)
 		reporter.Start(ctx)
 
@@ -329,9 +334,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// 集群内部 API（仅 primary）
 	if peerRegistry != nil {
-		clusterHandler := api.NewClusterHandler(logger, peerRegistry, writer, cfg.Cluster.SelfAddr)
+		// P0-4: 使用 cluster.shared_secret 作为内部 API 认证密钥，而非节点地址
+		clusterHandler := api.NewClusterHandler(logger, peerRegistry, writer, cfg.Cluster.SharedSecret)
 		clusterHandler.RegisterRoutes(mux)
-		logger.Info("cluster handler registered")
+		if cfg.Cluster.SharedSecret == "" {
+			logger.Warn("cluster.shared_secret is not configured; internal API will reject all requests (fail-closed). " +
+				"Set cluster.shared_secret in sproxy.yaml to enable worker heartbeat.")
+		} else {
+			logger.Info("cluster handler registered with shared secret authentication")
+		}
 	}
 
 	// Dashboard（Phase 5）
@@ -449,11 +460,27 @@ func init() {
 	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd)
 }
 
-// openAdminDB 加载配置并打开数据库，供 admin CLI 子命令使用
-func openAdminDB() (*db.UserRepo, *db.GroupRepo, *db.UsageRepo, *db.RefreshTokenRepo, *zap.Logger, error) {
+// closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
+// 应通过 defer 调用，确保在任何退出路径下都能执行。
+func closeGormDB(logger *zap.Logger, database *gorm.DB) {
+	sqlDB, err := database.DB()
+	if err != nil {
+		logger.Error("failed to get underlying sql.DB for close", zap.Error(err))
+		return
+	}
+	if err := sqlDB.Close(); err != nil {
+		logger.Error("failed to close database connection", zap.Error(err))
+	} else {
+		logger.Info("database connection closed")
+	}
+}
+
+// openAdminDB 加载配置并打开数据库，供 admin CLI 子命令使用。
+// 调用方必须在使用完毕后调用 defer closeGormDB(logger, database) 以防止连接泄漏。
+func openAdminDB() (*db.UserRepo, *db.GroupRepo, *db.UsageRepo, *db.RefreshTokenRepo, *zap.Logger, *gorm.DB, error) {
 	logger, err := zap.NewProduction()
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("init logger: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("init logger: %w", err)
 	}
 	cfgPath := adminConfigFlag
 	if cfgPath == "" {
@@ -461,20 +488,23 @@ func openAdminDB() (*db.UserRepo, *db.GroupRepo, *db.UsageRepo, *db.RefreshToken
 	}
 	cfg, _, err := config.LoadSProxyConfig(cfgPath)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("load config from %q: %w", cfgPath, err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("load config from %q: %w", cfgPath, err)
 	}
 	database, err := db.Open(logger, cfg.Database.Path)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("open database: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("open database: %w", err)
 	}
 	if err := db.Migrate(logger, database); err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("migrate database: %w", err)
+		// 迁移失败：关闭已打开的 DB，防止泄漏
+		closeGormDB(logger, database)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return db.NewUserRepo(database, logger),
 		db.NewGroupRepo(database, logger),
 		db.NewUsageRepo(database, logger),
 		db.NewRefreshTokenRepo(database, logger),
 		logger,
+		database, // P0-2: 返回 DB handle 供调用方 defer close
 		nil
 }
 
@@ -539,10 +569,11 @@ var adminUserAddCmd = &cobra.Command{
 			return fmt.Errorf("password must not be empty")
 		}
 
-		userRepo, groupRepo, _, _, logger, err := openAdminDB()
+		userRepo, groupRepo, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(logger, database)
 
 		hash, err := auth.HashPassword(logger, password)
 		if err != nil {
@@ -586,10 +617,11 @@ var adminUserListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List users",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		userRepo, _, _, _, _, err := openAdminDB()
+		userRepo, _, _, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 		users, err := userRepo.ListByGroup("")
 		if err != nil {
 			return fmt.Errorf("list users: %w", err)
@@ -634,10 +666,11 @@ var adminUserEnableCmd = &cobra.Command{
 }
 
 func setUserActive(username string, active bool) error {
-	userRepo, _, _, _, _, err := openAdminDB()
+	userRepo, _, _, _, _, database, err := openAdminDB()
 	if err != nil {
 		return err
 	}
+	defer closeGormDB(zap.NewNop(), database)
 	user, err := userRepo.GetByUsername(username)
 	if err != nil {
 		return fmt.Errorf("lookup user: %w", err)
@@ -678,10 +711,11 @@ var adminUserResetPasswordCmd = &cobra.Command{
 			return fmt.Errorf("password must not be empty")
 		}
 
-		userRepo, _, _, _, logger, err := openAdminDB()
+		userRepo, _, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(logger, database)
 		user, err := userRepo.GetByUsername(username)
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)
@@ -736,10 +770,11 @@ var adminGroupAddCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, groupRepo, _, _, _, err := openAdminDB()
+		_, groupRepo, _, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 
 		g := &db.Group{Name: name}
 		if cmd.Flags().Changed("daily-limit") {
@@ -771,10 +806,11 @@ var adminGroupListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List groups",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, groupRepo, _, _, _, err := openAdminDB()
+		_, groupRepo, _, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 		groups, err := groupRepo.List()
 		if err != nil {
 			return fmt.Errorf("list groups: %w", err)
@@ -814,10 +850,11 @@ var adminGroupSetQuotaCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, groupRepo, _, _, _, err := openAdminDB()
+		_, groupRepo, _, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 		grp, err := groupRepo.GetByName(name)
 		if err != nil {
 			return fmt.Errorf("lookup group: %w", err)
@@ -864,10 +901,11 @@ var adminStatsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show token usage statistics",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		userRepo, _, usageRepo, _, _, err := openAdminDB()
+		userRepo, _, usageRepo, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 
 		now := time.Now()
 		from := now.AddDate(0, 0, -statsDays+1).Truncate(24 * time.Hour)
@@ -946,10 +984,11 @@ var adminTokenRevokeCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		username := args[0]
-		userRepo, _, _, tokenRepo, _, err := openAdminDB()
+		userRepo, _, _, tokenRepo, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
+		defer closeGormDB(zap.NewNop(), database)
 		user, err := userRepo.GetByUsername(username)
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)

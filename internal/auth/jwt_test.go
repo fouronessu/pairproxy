@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -193,5 +194,74 @@ func TestJWTConcurrentSafe(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Errorf("concurrent Sign/Parse error: %v", err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P0-3: JWT 算法混淆攻击防御测试
+// ---------------------------------------------------------------------------
+
+// TestJWTAlgorithmConfusion_HS384Rejected 验证用 HS384 签名的 token 被拒绝。
+// 攻击者可能尝试将同一密钥以不同 HMAC 变体签名来绕过算法检查。
+func TestJWTAlgorithmConfusion_HS384Rejected(t *testing.T) {
+	logger := testLogger(t)
+	m, _ := NewManager(logger, "test-secret-key")
+
+	// 直接用 HS384 签发一个 token（绕过 Manager.Sign 强制使用 HS256）
+	claims := JWTClaims{UserID: "attacker"}
+	claims.JTI = "fake-jti"
+	token := jwt.NewWithClaims(jwt.SigningMethodHS384, claims)
+	signed, err := token.SignedString([]byte("test-secret-key"))
+	if err != nil {
+		t.Fatalf("sign HS384 token: %v", err)
+	}
+
+	_, parseErr := m.Parse(signed)
+	if parseErr == nil {
+		t.Fatal("Parse should reject HS384-signed token, but returned nil error")
+	}
+	if !errors.Is(parseErr, ErrInvalidToken) {
+		t.Errorf("error should wrap ErrInvalidToken, got: %v", parseErr)
+	}
+}
+
+// TestJWTAlgorithmConfusion_HS512Rejected 验证用 HS512 签名的 token 被拒绝。
+func TestJWTAlgorithmConfusion_HS512Rejected(t *testing.T) {
+	logger := testLogger(t)
+	m, _ := NewManager(logger, "test-secret-key")
+
+	claims := JWTClaims{UserID: "attacker"}
+	claims.JTI = "fake-jti-512"
+	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
+	signed, err := token.SignedString([]byte("test-secret-key"))
+	if err != nil {
+		t.Fatalf("sign HS512 token: %v", err)
+	}
+
+	_, parseErr := m.Parse(signed)
+	if parseErr == nil {
+		t.Fatal("Parse should reject HS512-signed token, but returned nil error")
+	}
+	if !errors.Is(parseErr, ErrInvalidToken) {
+		t.Errorf("error should wrap ErrInvalidToken, got: %v", parseErr)
+	}
+}
+
+// TestJWTAlgorithmHS256Accepted 验证标准 HS256 签名的 token 正常通过（回归测试）。
+func TestJWTAlgorithmHS256Accepted(t *testing.T) {
+	logger := testLogger(t)
+	m, _ := NewManager(logger, "test-secret-key")
+
+	token, err := m.Sign(JWTClaims{UserID: "user1", Username: "alice", Role: "user"}, time.Hour)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	parsed, err := m.Parse(token)
+	if err != nil {
+		t.Fatalf("Parse should accept HS256 token, got: %v", err)
+	}
+	if parsed.UserID != "user1" {
+		t.Errorf("UserID = %q, want user1", parsed.UserID)
 	}
 }

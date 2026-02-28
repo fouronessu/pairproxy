@@ -18,6 +18,9 @@
 #   JWT_SECRET           — 用于签发/验证用户 JWT 的密钥（建议 32+ 字符随机字符串）
 #   ADMIN_PASSWORD_HASH  — admin 面板密码的 bcrypt hash
 #                          生成命令：sproxy admin hash-password
+#   CLUSTER_SECRET       — 集群内部 API 的共享密钥（primary ↔ worker 通信鉴权）
+#                          仅在多节点集群部署时必须；单机模式可留空
+#                          生成示例：openssl rand -hex 32
 # ==============================================================================
 
 
@@ -133,6 +136,17 @@ cluster:
   # report_interval: worker 向 primary 上报心跳+用量的间隔（仅 worker 使用）
   # primary 节点此字段无效
   report_interval: 30s
+
+  # shared_secret: 集群内部 API 的 Bearer token（primary ↔ worker 通信鉴权）
+  #
+  # 安全策略（fail-closed）：
+  #   - 为空时，primary 拒绝所有 /api/internal/* 请求（不存在"无鉴权"模式）
+  #   - 单机部署时可留空（无 worker 注册，internal API 永远用不到）
+  #   - 集群部署时**必须**设置为非空值，且 primary 和所有 worker 必须使用相同密钥
+  #
+  # 生成示例：openssl rand -hex 32
+  shared_secret: "${CLUSTER_SECRET}"
+  # shared_secret: ""   # 单机部署时留空即可
 
 
 # ------------------------------------------------------------------------------

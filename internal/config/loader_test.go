@@ -235,9 +235,22 @@ func TestLoadSProxyConfig_InvalidYAML(t *testing.T) {
 	}
 }
 
-// TestApplyDefaultsSProxy verifies that an empty s-proxy config gets sensible defaults.
+// TestApplyDefaultsSProxy verifies that a minimal s-proxy config (with required fields)
+// gets sensible defaults for all optional settings.
 func TestApplyDefaultsSProxy(t *testing.T) {
-	path := writeTempFile(t, "{}")
+	// 提供 Validate() 要求的必填字段，其余字段验证默认值
+	minimalYAML := `
+auth:
+  jwt_secret: "test-secret"
+database:
+  path: "./test.db"
+llm:
+  targets:
+    - url: "https://api.anthropic.com"
+      api_key: "sk-ant-test"
+      weight: 1
+`
+	path := writeTempFile(t, minimalYAML)
 	cfg, _, err := LoadSProxyConfig(path)
 	if err != nil {
 		t.Fatalf("LoadSProxyConfig: %v", err)

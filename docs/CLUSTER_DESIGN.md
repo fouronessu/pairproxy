@@ -207,6 +207,10 @@ cluster:
   self_weight: 50
   alert_webhook: "https://hooks.slack.com/..."   # optional
   peer_monitor_interval: 30s                     # eviction check interval
+  # Shared secret for cluster internal API authentication (fail-closed).
+  # Workers must present this value as a Bearer token.
+  # Leave empty only on single-node deployments (internal API is never called).
+  shared_secret: "${CLUSTER_SECRET}"
 ```
 
 ### Worker node (`sproxy.yaml`)
@@ -218,6 +222,7 @@ cluster:
   self_addr: "http://sp-2:9000"  # this node's externally reachable address
   self_weight: 50                # relative weight in sp-1's load balancer
   report_interval: 30s           # heartbeat + usage upload interval
+  # Must exactly match the primary's cluster.shared_secret.
   shared_secret: "${CLUSTER_SECRET}"
 ```
 
@@ -275,7 +280,7 @@ With sproxy.targets (or routing cache):
   When sp-1 recovers, health check marks it Healthy:true → traffic resumes normally.
 ```
 
-### Operational Recommendation
+## Operational Recommendation
 
 For clusters with N s-proxy nodes, populate `sproxy.targets` in every
 developer's `cproxy.yaml` with all known worker addresses. This provides
@@ -292,3 +297,44 @@ sproxy:
 The disk cache (`routing-cache.json`) complements `targets`: it captures
 dynamically discovered nodes (e.g., workers added while c-proxy is already
 running) and restores them on the next restart without manual config changes.
+
+---
+
+## Security: Cluster Internal API Authentication
+
+The cluster internal API (`/api/internal/register`, `/api/internal/usage`,
+`/cluster/routing`) is protected by a **shared secret** Bearer token.
+
+### Fail-Closed Policy
+
+The primary enforces a strict **fail-closed** policy:
+
+| `shared_secret` value | Behavior |
+|-----------------------|----------|
+| Empty string (`""`) | **All requests rejected (401)** — a WARN log is emitted. This protects deployments where `shared_secret` was accidentally omitted. |
+| Non-empty | Requests must carry `Authorization: Bearer <shared_secret>` exactly. Wrong or missing headers → 401. |
+
+There is no "unauthenticated mode" for the cluster API. If you run a
+single-node deployment without any workers, leave `shared_secret` empty — no
+worker will ever call the internal API, so the fail-closed behavior is harmless.
+
+### Key Requirements
+
+1. **Generate a strong secret**: at least 32 bytes of random data.
+   ```bash
+   openssl rand -hex 32
+   ```
+2. **Use the same value** on primary and all workers (`cluster.shared_secret`).
+3. **Never hard-code** the secret in config files — use environment variable
+   substitution (`${CLUSTER_SECRET}`) and set the variable in your shell profile
+   or systemd unit file.
+4. **Rotate regularly**: update the secret on all nodes simultaneously during a
+   maintenance window (workers will get 401 until restarted with the new secret).
+
+### Network Isolation Recommendation
+
+The cluster internal API should not be exposed to the public internet. Use
+firewall rules or a private network to restrict `/api/internal/*` access to
+only the nodes that need it (i.e., the workers and the primary).
+
+---

@@ -14,6 +14,7 @@
 # 必须设置的环境变量：
 #   ANTHROPIC_API_KEY  — 本节点使用的 Anthropic API Key
 #   JWT_SECRET         — 必须与 primary 使用同一个密钥
+#   CLUSTER_SECRET     — 集群内部 API 的共享密钥，必须与 primary 完全一致
 # ==============================================================================
 
 
@@ -81,6 +82,11 @@ cluster:
 
   # report_interval: 向 primary 上报心跳+用量的间隔
   report_interval: 30s
+
+  # shared_secret: 集群内部 API 的 Bearer token
+  # **必须**与 primary 的 cluster.shared_secret 完全一致，否则心跳被拒绝（fail-closed）
+  # 生成示例：openssl rand -hex 32
+  shared_secret: "${CLUSTER_SECRET}"
 
   # alert_threshold / alert_webhook: worker 节点也可以独立配置告警
   alert_threshold: 80

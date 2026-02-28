@@ -16,7 +16,10 @@ import (
 	"github.com/l17728/pairproxy/internal/lb"
 )
 
-// setupClusterHandler 创建用于测试的 ClusterHandler（无鉴权）。
+const testClusterSecret = "test-shared-secret-for-cluster"
+
+// setupClusterHandler 创建用于测试的 ClusterHandler（使用 testClusterSecret 鉴权）。
+// 所有测试必须在请求中携带正确 Bearer token，模拟生产环境 fail-closed 行为。
 func setupClusterHandler(t *testing.T) (*ClusterHandler, *cluster.PeerRegistry, *db.UsageWriter, *db.UsageRepo, context.CancelFunc) {
 	t.Helper()
 	logger := zaptest.NewLogger(t)
@@ -38,7 +41,7 @@ func setupClusterHandler(t *testing.T) (*ClusterHandler, *cluster.PeerRegistry, 
 	writer.Start(ctx)
 
 	repo := db.NewUsageRepo(gormDB, logger)
-	handler := NewClusterHandler(logger, registry, writer, "") // 空密钥=不鉴权
+	handler := NewClusterHandler(logger, registry, writer, testClusterSecret)
 
 	t.Cleanup(func() {
 		cancel()
@@ -46,6 +49,142 @@ func setupClusterHandler(t *testing.T) (*ClusterHandler, *cluster.PeerRegistry, 
 	})
 
 	return handler, registry, writer, repo, cancel
+}
+
+// authReq 构造带正确 Bearer 认证头的请求，供测试使用
+func authReq(method, target string, body []byte) *http.Request {
+	var r *http.Request
+	if body != nil {
+		r = httptest.NewRequest(method, target, bytes.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	} else {
+		r = httptest.NewRequest(method, target, nil)
+	}
+	r.Header.Set("Authorization", "Bearer "+testClusterSecret)
+	return r
+}
+
+// ---------------------------------------------------------------------------
+// TestClusterAuth — P0-4 fail-closed 认证测试
+// ---------------------------------------------------------------------------
+
+// TestClusterAuth_EmptySecret 验证 shared_secret 为空时所有请求被拒绝（fail-closed）。
+func TestClusterAuth_EmptySecret(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	balancer := lb.NewWeightedRandom(nil)
+	mgr := cluster.NewManager(logger, balancer, nil, "")
+	registry := cluster.NewPeerRegistry(logger, mgr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	gormDB, _ := db.Open(logger, ":memory:")
+	_ = db.Migrate(logger, gormDB)
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+	writer.Start(ctx)
+	// 注意 defer 顺序（LIFO）：先 Wait 后 cancel，确保 cancel 先执行使 goroutine 退出。
+	defer writer.Wait()
+	defer cancel()
+
+	// 空密钥：任何请求都应被拒绝
+	handler := NewClusterHandler(logger, registry, writer, "")
+
+	body, _ := json.Marshal(cluster.RegisterPayload{ID: "sp-2", Addr: "http://sp-2:9000"})
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// 即使带了 Bearer ""，也应拒绝
+	req.Header.Set("Authorization", "Bearer ")
+
+	rr := httptest.NewRecorder()
+	handler.handleRegister(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("empty shared_secret: status = %d, want 401 (fail-closed)", rr.Code)
+	}
+}
+
+// TestClusterAuth_WrongSecret 验证错误密钥被拒绝（401）。
+func TestClusterAuth_WrongSecret(t *testing.T) {
+	handler, _, _, _, _ := setupClusterHandler(t)
+
+	body, _ := json.Marshal(cluster.RegisterPayload{ID: "sp-2", Addr: "http://sp-2:9000"})
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+
+	rr := httptest.NewRecorder()
+	handler.handleRegister(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("wrong secret: status = %d, want 401", rr.Code)
+	}
+}
+
+// TestClusterAuth_MissingHeader 验证缺少 Authorization 头时返回 401。
+func TestClusterAuth_MissingHeader(t *testing.T) {
+	handler, _, _, _, _ := setupClusterHandler(t)
+
+	body, _ := json.Marshal(cluster.RegisterPayload{ID: "sp-2", Addr: "http://sp-2:9000"})
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// 故意不设置 Authorization 头
+
+	rr := httptest.NewRecorder()
+	handler.handleRegister(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("missing auth header: status = %d, want 401", rr.Code)
+	}
+}
+
+// TestClusterAuth_CorrectSecret 验证正确密钥允许通过（200）。
+func TestClusterAuth_CorrectSecret(t *testing.T) {
+	handler, _, _, _, _ := setupClusterHandler(t)
+
+	body, _ := json.Marshal(cluster.RegisterPayload{ID: "sp-auth-ok", Addr: "http://sp-auth-ok:9000"})
+	req := authReq(http.MethodPost, "/api/internal/register", body)
+
+	rr := httptest.NewRecorder()
+	handler.handleRegister(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("correct secret: status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestClusterAuth_AllEndpointsEnforced 验证三个端点都执行鉴权。
+func TestClusterAuth_AllEndpointsEnforced(t *testing.T) {
+	handler, registry, _, _, _ := setupClusterHandler(t)
+	registry.Register("sp-x", "http://sp-x:9000", "sp-x", 1)
+
+	endpoints := []struct {
+		method  string
+		path    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{http.MethodPost, "/api/internal/register", handler.handleRegister},
+		{http.MethodPost, "/api/internal/usage", handler.handleUsageReport},
+		{http.MethodGet, "/cluster/routing", handler.handleGetRouting},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.path, func(t *testing.T) {
+			var body []byte
+			if ep.method == http.MethodPost {
+				body, _ = json.Marshal(map[string]string{})
+			}
+			var req *http.Request
+			if body != nil {
+				req = httptest.NewRequest(ep.method, ep.path, bytes.NewReader(body))
+			} else {
+				req = httptest.NewRequest(ep.method, ep.path, nil)
+			}
+			// 不带 Authorization
+			rr := httptest.NewRecorder()
+			ep.handler(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s without auth: status = %d, want 401", ep.method, ep.path, rr.Code)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -62,9 +201,7 @@ func TestRegisterEndpoint(t *testing.T) {
 		Weight:     1,
 	}
 	body, _ := json.Marshal(payload)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req := authReq(http.MethodPost, "/api/internal/register", body)
 	rr := httptest.NewRecorder()
 
 	handler.handleRegister(rr, req)
@@ -83,8 +220,7 @@ func TestRegisterEndpointMissingFields(t *testing.T) {
 	handler, _, _, _, _ := setupClusterHandler(t)
 
 	body, _ := json.Marshal(map[string]string{"id": ""})
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req := authReq(http.MethodPost, "/api/internal/register", body)
 	rr := httptest.NewRecorder()
 
 	handler.handleRegister(rr, req)
@@ -95,23 +231,13 @@ func TestRegisterEndpointMissingFields(t *testing.T) {
 }
 
 func TestRegisterEndpointAuthRequired(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	balancer := lb.NewWeightedRandom(nil)
-	mgr := cluster.NewManager(logger, balancer, nil, "")
-	registry := cluster.NewPeerRegistry(logger, mgr)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gormDB, _ := db.Open(logger, ":memory:")
-	_ = db.Migrate(logger, gormDB)
-	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
-	writer.Start(ctx)
-
-	handler := NewClusterHandler(logger, registry, writer, "my-secret")
+	handler, _, _, _, _ := setupClusterHandler(t)
 
 	body, _ := json.Marshal(cluster.RegisterPayload{ID: "sp-2", Addr: "http://sp-2:9000"})
+
+	// 不带认证头
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
-	// 不设置 Authorization
+	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.handleRegister(rr, req)
 
@@ -120,8 +246,7 @@ func TestRegisterEndpointAuthRequired(t *testing.T) {
 	}
 
 	// 带正确密钥
-	req2 := httptest.NewRequest(http.MethodPost, "/api/internal/register", bytes.NewReader(body))
-	req2.Header.Set("Authorization", "Bearer my-secret")
+	req2 := authReq(http.MethodPost, "/api/internal/register", body)
 	rr2 := httptest.NewRecorder()
 	handler.handleRegister(rr2, req2)
 
@@ -154,9 +279,7 @@ func TestUsageReportEndpoint(t *testing.T) {
 		Records:    records,
 	}
 	body, _ := json.Marshal(payload)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/usage", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req := authReq(http.MethodPost, "/api/internal/usage", body)
 	rr := httptest.NewRecorder()
 
 	handler.handleUsageReport(rr, req)
@@ -194,7 +317,7 @@ func TestGetRoutingEndpoint(t *testing.T) {
 	// 注册一个 peer
 	registry.Register("sp-2", "http://sp-2:9000", "sp-2", 1)
 
-	req := httptest.NewRequest(http.MethodGet, "/cluster/routing", nil)
+	req := authReq(http.MethodGet, "/cluster/routing", nil)
 	rr := httptest.NewRecorder()
 
 	handler.handleGetRouting(rr, req)

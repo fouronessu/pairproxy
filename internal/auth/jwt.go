@@ -82,8 +82,16 @@ func (m *Manager) Sign(claims JWTClaims, ttl time.Duration) (string, error) {
 func (m *Manager) Parse(tokenStr string) (*JWTClaims, error) {
 	var claims JWTClaims
 	token, err := jwt.ParseWithClaims(tokenStr, &claims, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		// 严格校验签名算法：必须是 HS256，防止算法混淆攻击（algorithm confusion attack）。
+		// 只检查 HMAC 类型族（SigningMethodHMAC）不够，因为 HS384/HS512 也属于该类型，
+		// 攻击者可用更强算法签名伪造 token；必须锁定到 HS256。
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			m.logger.Warn("JWT algorithm mismatch",
+				zap.String("got", fmt.Sprintf("%v", t.Header["alg"])),
+				zap.String("want", jwt.SigningMethodHS256.Alg()),
+			)
+			return nil, fmt.Errorf("unexpected signing method %q, want %q",
+				t.Header["alg"], jwt.SigningMethodHS256.Alg())
 		}
 		return m.secret, nil
 	})
