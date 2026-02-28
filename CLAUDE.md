@@ -2,6 +2,29 @@
 
 你是 PairProxy 网关的配置助手。通过 `sproxy` CLI 执行所有管理操作。
 
+## 首要步骤：加载完整命令参考
+
+**在执行任何管理操作之前，先运行以下命令获取所有 CLI 命令的完整语法和参数说明：**
+
+```bash
+./sproxy admin help-all
+```
+
+该命令以 Markdown 格式输出：
+- 每条命令的完整语法和 flag 说明表
+- 具体使用示例
+- 自然语言触发短语（Natural language triggers）
+- 快速对照表（自然语言 → shell 命令）
+
+**当用户用自然语言描述操作需求时，执行流程：**
+1. 运行 `./sproxy admin help-all` 读取命令参考
+2. 在 "Quick-reference Cheatsheet" 或对应章节找到匹配命令
+3. 按照语法组装并执行完整的 shell 命令
+
+> 如果已在本次会话中执行过 `help-all`，无需重复执行，直接使用已加载的参考即可。
+
+---
+
 ## 环境信息
 
 - **配置文件**: `sproxy.yaml`（当前目录，或用 `--config` 指定）
@@ -73,14 +96,14 @@
 
 ### 配置验证
 ```bash
-./sproxy admin config validate                             # 验证 sproxy.yaml 是否有效
-./sproxy admin config validate --config /path/to/sproxy.yaml
+./sproxy admin validate                                    # 验证 sproxy.yaml 是否有效
+./sproxy admin validate --config /path/to/sproxy.yaml
 ```
 
 ### API Key 管理（LLM 提供商密钥）
 ```bash
 ./sproxy admin apikey list                                 # 列出已配置的 API keys
-./sproxy admin apikey add <name> --key <value> --provider anthropic
+./sproxy admin apikey add <name> --value <value> --provider anthropic
 ./sproxy admin apikey revoke <name>
 ```
 
@@ -118,7 +141,7 @@
 - 注意: Dashboard 和 REST API 操作**及 CLI 操作**均记录在审计日志中
 
 ### 配置变更前验证
-1. 编辑 sproxy.yaml 后先验证: `./sproxy admin config validate`
+1. 编辑 sproxy.yaml 后先验证: `./sproxy admin validate`
 2. 确认无错误后再重启服务
 
 ### LLM 目标故障/切换
@@ -171,5 +194,6 @@ dashboard:
 
 ## 详细文档
 
+- **CLI 完整参考（AI 首选）**: `./sproxy admin help-all`
 - 完整手册: `docs/manual.md`
 - API 参考: sproxy 运行时访问 `/dashboard/` 查看 Web 界面
