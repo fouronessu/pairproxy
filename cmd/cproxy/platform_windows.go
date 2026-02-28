@@ -71,16 +71,21 @@ func init() {
 }
 
 func runInstallService(cmd *cobra.Command, args []string) error {
+	logger, _ := zap.NewProduction()
+	defer logger.Sync() //nolint:errcheck
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
+	logger.Debug("install-service: executable path", zap.String("path", exePath))
 
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("connect to service manager (try running as Administrator): %w", err)
 	}
 	defer m.Disconnect()
+	logger.Debug("install-service: connected to Windows Service Manager")
 
 	// Fail fast if service already exists.
 	if s, openErr := m.OpenService(winsvcName); openErr == nil {
@@ -93,6 +98,7 @@ func runInstallService(cmd *cobra.Command, args []string) error {
 	if installServiceConfigFlag != "" {
 		startArgs = append(startArgs, "--config", installServiceConfigFlag)
 	}
+	logger.Debug("install-service: service start args", zap.Strings("args", startArgs))
 
 	s, err := m.CreateService(winsvcName, exePath, mgr.Config{
 		DisplayName: winsvcDisplayName,
@@ -103,6 +109,7 @@ func runInstallService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create service: %w", err)
 	}
 	defer s.Close()
+	logger.Info("install-service: service created in SCM", zap.String("name", winsvcName))
 
 	// Configure automatic restart on failure (up to 3 attempts with increasing delay).
 	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
@@ -110,12 +117,24 @@ func runInstallService(cmd *cobra.Command, args []string) error {
 		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
 	}, 86400); err != nil {
+		logger.Warn("install-service: could not set recovery actions", zap.Error(err))
 		fmt.Printf("Warning: could not set recovery actions: %v\n", err)
+	} else {
+		logger.Debug("install-service: recovery actions configured (5s, 30s, 60s restart)")
 	}
 
 	// Register event log source so the service can write to Event Viewer.
-	_ = eventlog.InstallAsEventCreate(winsvcName, eventlog.Error|eventlog.Warning|eventlog.Info)
+	if err := eventlog.InstallAsEventCreate(winsvcName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+		logger.Warn("install-service: could not register event log source", zap.Error(err))
+	} else {
+		logger.Debug("install-service: event log source registered")
+	}
 
+	logger.Info("install-service: completed successfully",
+		zap.String("service", winsvcName),
+		zap.String("binary", exePath),
+		zap.String("config", installServiceConfigFlag),
+	)
 	fmt.Printf("✓ Service %q installed successfully.\n", winsvcName)
 	fmt.Printf("  Binary: %s\n", exePath)
 	if installServiceConfigFlag != "" {
@@ -129,6 +148,9 @@ func runInstallService(cmd *cobra.Command, args []string) error {
 }
 
 func runUninstallService(cmd *cobra.Command, args []string) error {
+	logger, _ := zap.NewProduction()
+	defer logger.Sync() //nolint:errcheck
+
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("connect to service manager (try running as Administrator): %w", err)
@@ -143,7 +165,9 @@ func runUninstallService(cmd *cobra.Command, args []string) error {
 
 	// Stop the service first if it is running.
 	if status, qErr := s.Query(); qErr == nil && status.State == svc.Running {
+		logger.Info("uninstall-service: stopping running service before removal")
 		if _, stopErr := s.Control(svc.Stop); stopErr != nil {
+			logger.Warn("uninstall-service: could not send Stop control", zap.Error(stopErr))
 			fmt.Printf("Warning: could not stop service: %v\n", stopErr)
 		} else {
 			// Wait up to 10 s for the service to reach Stopped state.
@@ -154,6 +178,7 @@ func runUninstallService(cmd *cobra.Command, args []string) error {
 				}
 				time.Sleep(500 * time.Millisecond)
 			}
+			logger.Info("uninstall-service: service stopped")
 		}
 	}
 
@@ -162,6 +187,7 @@ func runUninstallService(cmd *cobra.Command, args []string) error {
 	}
 	_ = eventlog.Remove(winsvcName)
 
+	logger.Info("uninstall-service: service removed", zap.String("name", winsvcName))
 	fmt.Printf("✓ Service %q removed successfully.\n", winsvcName)
 	return nil
 }
@@ -175,6 +201,7 @@ func isWindowsService() bool {
 // runAsWindowsService hands the HTTP server off to the Windows Service Control Manager.
 // It blocks until the SCM requests Stop or Shutdown.
 func runAsWindowsService(server *http.Server, logger *zap.Logger) error {
+	logger.Info("starting under Windows Service Control Manager", zap.String("service", winsvcName))
 	return svc.Run(winsvcName, &cproxyService{server: server, logger: logger})
 }
 
@@ -185,6 +212,7 @@ type cproxyService struct {
 }
 
 func (s *cproxyService) Execute(_ []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
+	s.logger.Debug("service Execute: sending StartPending")
 	status <- svc.Status{State: svc.StartPending}
 
 	elog, _ := eventlog.Open(winsvcName)
@@ -192,22 +220,25 @@ func (s *cproxyService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 		defer elog.Close()
 		_ = elog.Info(1, "cproxy service starting on "+s.server.Addr)
 	}
+	s.logger.Info("cproxy service starting", zap.String("addr", s.server.Addr))
 
 	// Start the HTTP server in a goroutine.
 	serverErr := make(chan error, 1)
 	go func() {
+		s.logger.Debug("HTTP server goroutine starting", zap.String("addr", s.server.Addr))
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
 
 	// Signal that we are running and accept Stop / Shutdown requests.
+	s.logger.Info("cproxy service running", zap.String("addr", s.server.Addr))
 	status <- svc.Status{
 		State:   svc.Running,
 		Accepts: svc.AcceptStop | svc.AcceptShutdown,
 	}
 	if elog != nil {
-		_ = elog.Info(1, "cproxy service running")
+		_ = elog.Info(1, "cproxy service running on "+s.server.Addr)
 	}
 
 	for {
@@ -215,6 +246,7 @@ func (s *cproxyService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 		case c := <-r:
 			switch c.Cmd {
 			case svc.Stop, svc.Shutdown:
+				s.logger.Info("service Execute: received Stop/Shutdown, initiating graceful shutdown")
 				status <- svc.Status{State: svc.StopPending}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
@@ -223,13 +255,17 @@ func (s *cproxyService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 					if elog != nil {
 						_ = elog.Error(1, fmt.Sprintf("shutdown error: %v", err))
 					}
+				} else {
+					s.logger.Info("graceful shutdown completed")
 				}
 				if elog != nil {
 					_ = elog.Info(1, "cproxy service stopped")
 				}
 				return false, 0
 			default:
-				// Acknowledge any other request and remain running.
+				// Acknowledge any other SCM request and remain running.
+				s.logger.Debug("service Execute: unrecognised SCM command, staying Running",
+					zap.Uint32("cmd", uint32(c.Cmd)))
 				status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 			}
 
@@ -244,6 +280,6 @@ func (s *cproxyService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 }
 
 // daemonize is not supported on Windows; the Windows service subsystem is used instead.
-func daemonize(_ string) error {
+func daemonize(_ string, _ *zap.Logger) error {
 	return fmt.Errorf("--daemon is not supported on Windows; use 'cproxy install-service' to run cproxy as a background service")
 }

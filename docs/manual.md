@@ -952,6 +952,21 @@ cproxy uninstall-service
 
 > **令牌过期提醒**：Windows 服务使用的令牌文件存放在 `C:\ProgramData\pairproxy\token.json`。令牌过期后，你需要重新登录并将新令牌复制到该目录，或配置自动刷新（令牌有效期 24 小时，刷新令牌 7 天）。
 
+---
+
+#### 注意事项与边界情况
+
+| 情况 | 说明 |
+|------|------|
+| **Linux/macOS — 日志目录不可写** | 默认日志写入 `~/.config/pairproxy/cproxy.log`；若该目录不可写，自动回退到系统临时目录（`/tmp/cproxy.log`），终端会打印实际路径 |
+| **Linux/macOS — PID 文件写入失败** | PID 文件是方便工具，非必须。若写入失败，会显示警告并改用 `kill <PID>` 方式提示停止命令；cproxy 仍正常运行 |
+| **Linux/macOS — 符号链接二进制** | `--daemon` 自动解析符号链接，确保子进程执行的是真实二进制文件 |
+| **Linux/macOS — 环境变量继承** | 子进程继承父进程的全部环境变量，并追加 `_CPROXY_DAEMON=1`（防递归标志）。若父进程环境中有敏感变量，子进程同样持有 |
+| **Windows — 服务停止宽限期** | 收到 Stop/Shutdown 命令后，cproxy 有 **10 秒** 宽限期优雅关闭现有连接。超时后强制退出 |
+| **Windows — 故障自动重启策略** | 服务崩溃后按以下间隔自动重启：第 1 次 5 秒，第 2 次 30 秒，第 3 次 60 秒，24 小时后计数重置 |
+| **Windows — 服务日志位置** | 运行日志写入 **Windows 事件查看器**（事件查看器 → Windows 日志 → 应用程序，来源筛选：`CProxy`） |
+| **Windows — 重新安装服务** | 若需更换配置或升级二进制，先 `cproxy uninstall-service` 再重新 `cproxy install-service` |
+
 ### 6.5 查看运行状态
 
 ```bash

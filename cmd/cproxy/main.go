@@ -284,13 +284,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Windows service mode: lifecycle managed by the Service Control Manager.
 	if isWindowsService() {
+		logger.Info("detected Windows service mode, handing off to SCM")
 		return runAsWindowsService(server, logger)
 	}
 
 	// Daemon mode: re-exec detached from the terminal (--daemon flag).
 	// On Windows, daemonize() returns an error directing the user to install-service.
 	if startDaemonFlag {
-		return daemonize(startConfigFlag)
+		logger.Info("daemon flag set, daemonizing process", zap.String("config", startConfigFlag))
+		return daemonize(startConfigFlag, logger)
 	}
 
 	// Foreground mode.
