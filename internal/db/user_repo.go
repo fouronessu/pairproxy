@@ -154,6 +154,24 @@ func (r *UserRepo) GetByExternalID(provider, externalID string) (*User, error) {
 	return &u, nil
 }
 
+// SetGroup 更新用户所属分组（groupID=nil 表示从分组移除）
+func (r *UserRepo) SetGroup(userID string, groupID *string) error {
+	updates := map[string]interface{}{"group_id": groupID}
+	if err := r.db.Model(&User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+		r.logger.Error("failed to set user group",
+			zap.String("user_id", userID),
+			zap.Any("group_id", groupID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("set group for user %q: %w", userID, err)
+	}
+	r.logger.Info("user group updated",
+		zap.String("user_id", userID),
+		zap.Any("group_id", groupID),
+	)
+	return nil
+}
+
 // ListByGroup 按分组列出用户（groupID="" 表示列出所有用户）
 func (r *UserRepo) ListByGroup(groupID string) ([]User, error) {
 	var users []User
@@ -262,6 +280,31 @@ func (r *GroupRepo) SetQuota(id string, daily, monthly *int64, rpm *int, maxReqT
 		zap.Any("max_tokens_per_request", maxReqTokens),
 		zap.Any("concurrent_requests", concurrent),
 	)
+	return nil
+}
+
+// Delete 删除分组（若分组内仍有用户则拒绝，除非 force=true）
+func (r *GroupRepo) Delete(id string, force bool) error {
+	if !force {
+		var count int64
+		if err := r.db.Model(&User{}).Where("group_id = ?", id).Count(&count).Error; err != nil {
+			return fmt.Errorf("check group members: %w", err)
+		}
+		if count > 0 {
+			return fmt.Errorf("group has %d user(s); use --force to delete anyway (users will become ungrouped)", count)
+		}
+	}
+	// 若 force，先将组内用户的 group_id 清空
+	if force {
+		if err := r.db.Model(&User{}).Where("group_id = ?", id).Update("group_id", nil).Error; err != nil {
+			return fmt.Errorf("unassign users from group: %w", err)
+		}
+	}
+	if err := r.db.Delete(&Group{}, "id = ?", id).Error; err != nil {
+		r.logger.Error("failed to delete group", zap.String("group_id", id), zap.Error(err))
+		return fmt.Errorf("delete group %q: %w", id, err)
+	}
+	r.logger.Info("group deleted", zap.String("group_id", id), zap.Bool("force", force))
 	return nil
 }
 

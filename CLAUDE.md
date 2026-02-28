@@ -20,6 +20,8 @@
 ./sproxy admin user disable <username>                     # 禁用用户
 ./sproxy admin user enable <username>                      # 启用用户
 ./sproxy admin user reset-password <username> --password <newpw>
+./sproxy admin user set-group <username> --group <name>    # 变更用户分组
+./sproxy admin user set-group <username> --ungroup         # 从分组移除用户
 ```
 
 ### 分组与配额管理
@@ -30,6 +32,14 @@
   --daily <tokens> \                                       # 日 token 上限（0=不限）
   --monthly <tokens> \                                     # 月 token 上限（0=不限）
   --rpm <n>                                                # 每分钟请求上限（0=不限）
+./sproxy admin group delete <name>                         # 删除分组（需无成员）
+./sproxy admin group delete <name> --force                 # 强制删除（成员自动解绑）
+```
+
+### 配额用量查询
+```bash
+./sproxy admin quota status --user <username>              # 查看用户今日/本月用量 vs 配额
+./sproxy admin quota status --group <name>                 # 查看分组今日/本月总用量 vs 配额
 ```
 
 ### LLM 目标管理
@@ -65,10 +75,21 @@
 3. 验证: `./sproxy admin user list`
 
 ### 用户超额/限速
-1. 查看用量: `./sproxy admin stats --user <name>`
-2. 查看分组配额: `./sproxy admin group list`
-3. 调整配额: `./sproxy admin group set-quota <group> --daily <n>`
-4. 或吊销 token 强制重新登录: `./sproxy admin token revoke <name>`
+1. 快速查看剩余配额: `./sproxy admin quota status --user <name>`
+2. 查看详细用量: `./sproxy admin stats --user <name>`
+3. 查看分组配额上限: `./sproxy admin group list`
+4. 调整配额: `./sproxy admin group set-quota <group> --daily <n>`
+5. 或吊销 token 强制重新登录: `./sproxy admin token revoke <name>`
+
+### 用户转组
+1. 查看当前分组: `./sproxy admin user list`
+2. 变更分组: `./sproxy admin user set-group <username> --group <newgroup>`
+3. 验证: `./sproxy admin user list --group <newgroup>`
+
+### 删除废弃分组
+1. 查看成员: `./sproxy admin user list --group <name>`
+2. 移出所有成员: `./sproxy admin user set-group <u> --ungroup`（逐一）或直接强制删除
+3. 删除分组: `./sproxy admin group delete <name>`（或 `--force` 自动解绑）
 
 ### LLM 目标故障/切换
 1. 查看健康状态: `./sproxy admin llm targets`

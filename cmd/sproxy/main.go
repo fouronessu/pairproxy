@@ -687,7 +687,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd)
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
@@ -771,6 +771,7 @@ func init() {
 		adminUserDisableCmd,
 		adminUserEnableCmd,
 		adminUserResetPasswordCmd,
+		adminUserSetGroupCmd,
 	)
 }
 
@@ -843,16 +844,31 @@ func init() {
 
 // --- user list ---
 
+var userListGroup string
+
 var adminUserListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List users",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		userRepo, _, _, _, _, database, err := openAdminDB()
+		userRepo, groupRepo, _, _, _, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
 		defer closeGormDB(zap.NewNop(), database)
-		users, err := userRepo.ListByGroup("")
+
+		filterGroupID := ""
+		if userListGroup != "" {
+			g, err := groupRepo.GetByName(userListGroup)
+			if err != nil {
+				return fmt.Errorf("lookup group: %w", err)
+			}
+			if g == nil {
+				return fmt.Errorf("group %q not found", userListGroup)
+			}
+			filterGroupID = g.ID
+		}
+
+		users, err := userRepo.ListByGroup(filterGroupID)
 		if err != nil {
 			return fmt.Errorf("list users: %w", err)
 		}
@@ -871,6 +887,10 @@ var adminUserListCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func init() {
+	adminUserListCmd.Flags().StringVar(&userListGroup, "group", "", "filter by group name")
 }
 
 // --- user disable ---
@@ -969,6 +989,69 @@ func init() {
 	adminUserResetPasswordCmd.Flags().StringVar(&userResetPassword, "password", "", "new password (prompted if omitted)")
 }
 
+// --- user set-group ---
+
+var (
+	userSetGroupName   string
+	userSetGroupRemove bool
+)
+
+var adminUserSetGroupCmd = &cobra.Command{
+	Use:   "set-group <username>",
+	Short: "Assign or remove a user's group",
+	Long: `Assign a user to a group (--group <name>) or remove them from any group (--ungroup).
+
+Examples:
+  sproxy admin user set-group alice --group enterprise
+  sproxy admin user set-group alice --ungroup`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !userSetGroupRemove && userSetGroupName == "" {
+			return fmt.Errorf("provide --group <name> to assign, or --ungroup to remove")
+		}
+		userRepo, groupRepo, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		u, err := userRepo.GetByUsername(args[0])
+		if err != nil {
+			return fmt.Errorf("lookup user: %w", err)
+		}
+		if u == nil {
+			return fmt.Errorf("user %q not found", args[0])
+		}
+
+		var groupID *string
+		if !userSetGroupRemove {
+			g, err := groupRepo.GetByName(userSetGroupName)
+			if err != nil {
+				return fmt.Errorf("lookup group: %w", err)
+			}
+			if g == nil {
+				return fmt.Errorf("group %q not found", userSetGroupName)
+			}
+			groupID = &g.ID
+		}
+
+		if err := userRepo.SetGroup(u.ID, groupID); err != nil {
+			return err
+		}
+		if userSetGroupRemove {
+			fmt.Printf("User %q removed from group\n", args[0])
+		} else {
+			fmt.Printf("User %q assigned to group %q\n", args[0], userSetGroupName)
+		}
+		return nil
+	},
+}
+
+func init() {
+	adminUserSetGroupCmd.Flags().StringVar(&userSetGroupName, "group", "", "target group name")
+	adminUserSetGroupCmd.Flags().BoolVar(&userSetGroupRemove, "ungroup", false, "remove user from any group")
+}
+
 // ---------------------------------------------------------------------------
 // sproxy admin group
 // ---------------------------------------------------------------------------
@@ -983,6 +1066,7 @@ func init() {
 		adminGroupAddCmd,
 		adminGroupListCmd,
 		adminGroupSetQuotaCmd,
+		adminGroupDeleteCmd,
 	)
 }
 
@@ -1146,6 +1230,48 @@ func init() {
 	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaRPM, "rpm", 0, "max requests per minute (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().Int64Var(&setQuotaMaxReqTokens, "max-tokens-per-request", 0, "max max_tokens per request (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaConcurrentReqs, "concurrent-requests", 0, "max concurrent requests per user (0 = remove limit)")
+}
+
+// --- group delete ---
+
+var groupDeleteForce bool
+
+var adminGroupDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Delete a group",
+	Long: `Delete a group by name.
+
+If the group has members, the command fails unless --force is specified.
+With --force, all members are automatically ungrouped before deletion.
+
+Examples:
+  sproxy admin group delete trial
+  sproxy admin group delete trial --force`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		_, groupRepo, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		g, err := groupRepo.GetByName(args[0])
+		if err != nil {
+			return fmt.Errorf("lookup group: %w", err)
+		}
+		if g == nil {
+			return fmt.Errorf("group %q not found", args[0])
+		}
+		if err := groupRepo.Delete(g.ID, groupDeleteForce); err != nil {
+			return err
+		}
+		fmt.Printf("Group %q deleted\n", args[0])
+		return nil
+	},
+}
+
+func init() {
+	adminGroupDeleteCmd.Flags().BoolVar(&groupDeleteForce, "force", false, "ungroup members and delete")
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,6 +1473,154 @@ var adminTokenRevokeCmd = &cobra.Command{
 		fmt.Println("Note: existing access tokens will expire within their TTL (up to 24h)")
 		return nil
 	},
+}
+
+// ---------------------------------------------------------------------------
+// sproxy admin quota
+// ---------------------------------------------------------------------------
+
+var adminQuotaCmd = &cobra.Command{
+	Use:   "quota",
+	Short: "Inspect quota usage",
+}
+
+var (
+	quotaStatusUser  string
+	quotaStatusGroup string
+)
+
+var adminQuotaStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show current quota usage vs limits for a user or group",
+	Long: `Show today's and this month's token usage compared to the configured limits.
+
+Examples:
+  sproxy admin quota status --user alice
+  sproxy admin quota status --group enterprise`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if quotaStatusUser == "" && quotaStatusGroup == "" {
+			return fmt.Errorf("provide --user <username> or --group <name>")
+		}
+		userRepo, groupRepo, usageRepo, _, _, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(zap.NewNop(), database)
+
+		now := time.Now()
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+		if quotaStatusUser != "" {
+			u, err := userRepo.GetByUsername(quotaStatusUser)
+			if err != nil {
+				return fmt.Errorf("lookup user: %w", err)
+			}
+			if u == nil {
+				return fmt.Errorf("user %q not found", quotaStatusUser)
+			}
+
+			todayIn, todayOut, err := usageRepo.SumTokens(u.ID, todayStart, now)
+			if err != nil {
+				return err
+			}
+			monthIn, monthOut, err := usageRepo.SumTokens(u.ID, monthStart, now)
+			if err != nil {
+				return err
+			}
+			todayTotal := todayIn + todayOut
+			monthTotal := monthIn + monthOut
+
+			fmt.Printf("User: %s (%s)\n", u.Username, u.ID)
+			if u.GroupID != nil {
+				fmt.Printf("Group: %s\n", u.Group.Name)
+			} else {
+				fmt.Println("Group: (none)")
+			}
+			fmt.Println()
+
+			var grp *db.Group
+			if u.GroupID != nil {
+				grp, _ = groupRepo.GetByID(*u.GroupID)
+			}
+			printQuotaRow("Today  (tokens)", todayTotal, ptrInt64Val(grp, "daily"))
+			printQuotaRow("Month  (tokens)", monthTotal, ptrInt64Val(grp, "monthly"))
+			return nil
+		}
+
+		// 分组统计
+		g, err := groupRepo.GetByName(quotaStatusGroup)
+		if err != nil {
+			return fmt.Errorf("lookup group: %w", err)
+		}
+		if g == nil {
+			return fmt.Errorf("group %q not found", quotaStatusGroup)
+		}
+		members, err := userRepo.ListByGroup(g.ID)
+		if err != nil {
+			return err
+		}
+
+		var todayTotal, monthTotal int64
+		for _, m := range members {
+			ti, to, _ := usageRepo.SumTokens(m.ID, todayStart, now)
+			mi, mo, _ := usageRepo.SumTokens(m.ID, monthStart, now)
+			todayTotal += ti + to
+			monthTotal += mi + mo
+		}
+
+		fmt.Printf("Group: %s (%d member(s))\n\n", g.Name, len(members))
+		printQuotaRow("Today  (tokens)", todayTotal, ptrInt64(g.DailyTokenLimit))
+		printQuotaRow("Month  (tokens)", monthTotal, ptrInt64(g.MonthlyTokenLimit))
+		if g.RequestsPerMinute != nil {
+			fmt.Printf("RPM limit:         %d req/min\n", *g.RequestsPerMinute)
+		} else {
+			fmt.Println("RPM limit:         unlimited")
+		}
+		return nil
+	},
+}
+
+// ptrInt64Val extracts the appropriate limit field from a Group (nil group = unlimited).
+func ptrInt64Val(g *db.Group, which string) int64 {
+	if g == nil {
+		return 0
+	}
+	switch which {
+	case "daily":
+		return ptrInt64(g.DailyTokenLimit)
+	case "monthly":
+		return ptrInt64(g.MonthlyTokenLimit)
+	}
+	return 0
+}
+
+func ptrInt64(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func printQuotaRow(label string, used, limit int64) {
+	if limit <= 0 {
+		fmt.Printf("%-20s  used=%-12d  limit=unlimited\n", label, used)
+		return
+	}
+	pct := float64(used) * 100 / float64(limit)
+	status := "OK"
+	if pct >= 100 {
+		status = "EXCEEDED"
+	} else if pct >= 80 {
+		status = "WARNING"
+	}
+	fmt.Printf("%-20s  used=%-12d  limit=%-12d  %.1f%%  [%s]\n", label, used, limit, pct, status)
+}
+
+func init() {
+	adminQuotaCmd.AddCommand(adminQuotaStatusCmd)
+	adminQuotaStatusCmd.Flags().StringVar(&quotaStatusUser, "user", "", "username to inspect")
+	adminQuotaStatusCmd.Flags().StringVar(&quotaStatusGroup, "group", "", "group name to inspect")
 }
 
 // ---------------------------------------------------------------------------
