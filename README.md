@@ -448,8 +448,8 @@ sudo systemctl enable --now sproxy
 sudo systemctl status sproxy          # 查看运行状态
 sudo journalctl -u sproxy -f          # 实时查看日志
 sudo journalctl -u sproxy --since today  # 今日日志
-sudo systemctl reload sproxy          # 热重载（发送 SIGHUP）
-sudo systemctl restart sproxy         # 重启服务
+sudo systemctl reload sproxy          # 热重载（发送 SIGHUP，仅重载 log.level）
+sudo systemctl restart sproxy         # 重启服务（完整配置重载）
 ```
 
 service 文件默认启用了以下安全加固：`NoNewPrivileges`、`ProtectSystem=strict`、`PrivateTmp`、`MemoryDenyWriteExecute`、系统调用白名单过滤、禁止 core dump（防止内存中密钥落盘）。
@@ -551,7 +551,8 @@ pairproxy/
 | [docs/manual.md](docs/manual.md) | 完整用户手册（部署、配置、CLI 命令、Dashboard 使用） |
 | [docs/API.md](docs/API.md) | REST API 参考（Auth、Admin、Stats 端点） |
 | [docs/CLUSTER_DESIGN.md](docs/CLUSTER_DESIGN.md) | 多节点集群架构设计（路由分发、心跳、故障恢复） |
-| [docs/SECURITY.md](docs/SECURITY.md) | 安全模型说明（JWT 防护、集群 API 鉴权、配额、审计日志） |
+| [docs/SECURITY.md](docs/SECURITY.md) | 安全模型说明（JWT 防护、集群 API 鉴权、TLS 配置、密钥轮换） |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 故障排查手册（启动失败、JWT 错误、配额超限、集群问题、性能调优） |
 
 ---
 

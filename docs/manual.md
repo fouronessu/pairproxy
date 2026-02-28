@@ -29,6 +29,9 @@
 8. [验证整条链路是否正常](#8-验证整条链路是否正常)
 9. [Web Dashboard 使用指南](#9-web-dashboard-使用指南)
 10. [监控与告警](#10-监控与告警)
+    - [10.1 Prometheus 指标接入](#101-prometheus-指标接入)
+    - [10.2 Webhook 告警](#102-webhook-告警)
+    - [10.3 动态调整日志级别（SIGHUP）](#103-动态调整日志级别不重启服务)
 11. [升级指南](#11-升级指南)
 12. [常见问题与排查](#12-常见问题与排查)
 13. [安全建议](#13-安全建议)
@@ -301,9 +304,23 @@ INFO  sproxy listening     addr=0.0.0.0:9000
 另开一个终端验证服务正常：
 
 ```bash
-curl http://localhost:9000/health
-# 应返回：{"status":"ok","service":"sproxy"}
+curl http://localhost:9000/health | jq .
+# 应返回：
+# {
+#   "status": "ok",
+#   "version": "v1.2.0 (abc1234) ...",
+#   "uptime_seconds": 3,
+#   "active_requests": 0,
+#   "usage_queue_depth": 0,
+#   "db_reachable": true
+# }
 ```
+
+- `status: "ok"` — 服务正常；若 SQLite 数据库不可达则返回 `"degraded"`（HTTP 503）
+- `uptime_seconds` — 进程已运行时长（秒）
+- `active_requests` — 当前正在处理的代理请求数
+- `usage_queue_depth` — 待写入数据库的用量记录积压数，通常为 0
+- `db_reachable` — 数据库是否可达（false 时 HTTP 状态码为 503）
 
 用 `Ctrl+C` 停止，继续下一步配置开机自启。
 
@@ -1068,10 +1085,10 @@ curl http://127.0.0.1:8080/health
 
 ```bash
 # 将地址替换为实际的 sproxy 地址
-curl http://proxy.company.com:9000/health
+curl http://proxy.company.com:9000/health | jq .
 ```
 
-返回 `{"status":"ok","service":"sproxy"}` 则正常。
+返回 `"status":"ok"` 且 `"db_reachable":true` 则正常。
 
 如果这一步失败，可能是：
 - 网络不通（确认防火墙/安全组已开放 9000 端口）
@@ -1209,9 +1226,37 @@ cluster:
 
 > 告警发送失败不影响正常代理功能，系统会静默忽略发送错误。
 
+### 10.3 动态调整日志级别（不重启服务）
+
+在 Linux/macOS 上，可以在**不停止服务**的情况下即时调整日志级别：
+
+1. 修改 `sproxy.yaml` 中的 `log.level` 字段（例如从 `info` 改为 `debug`）
+2. 向 sproxy 进程发送 `SIGHUP` 信号：
+
+```bash
+# 使用 systemctl（推荐）
+sudo systemctl reload sproxy
+
+# 或直接发送信号
+kill -HUP $(pidof sproxy)
+
+# 或通过 PID 文件（自管理部署）
+kill -HUP $(cat /var/run/sproxy.pid)
+```
+
+3. 排查完成后，将 `log.level` 改回 `info` 并再次发送 `SIGHUP`。
+
+**注意**：
+
+- `SIGHUP` **只重载** `log.level`，其他配置更改（如 LLM targets、JWT secret）需要完整重启才生效
+- Windows 不支持 `SIGHUP`，必须重启服务：`Restart-Service sproxy`
+- sproxy 收到 `SIGHUP` 时会打印日志：`INFO  SIGHUP received — reloading config`，若日志级别发生变化，还会打印：`INFO  log level changed via SIGHUP  old=info  new=debug`
+
+**可接受的日志级别**：`debug` | `info` | `warn` | `error`
+
 ---
 
-## 11. 升级指南
+
 
 ### 11.1 升级 sproxy（服务端）
 
@@ -1276,6 +1321,8 @@ sc stop CProxy && sc start CProxy
 ---
 
 ## 12. 常见问题与排查
+
+> 本章汇总开发者最常见的问题。如果遇到启动失败、JWT 错误、连接问题、集群节点异常等更复杂的故障，请参阅完整版故障排查手册：[docs/TROUBLESHOOTING.md](./TROUBLESHOOTING.md)。
 
 ### 12.1 cproxy 提示"请重新登录"
 
@@ -1397,11 +1444,17 @@ sudo journalctl -u sproxy -n 50
 # cproxy 调试模式
 LOG_LEVEL=debug cproxy start
 
-# sproxy 调试模式
+# sproxy 调试模式（无需重启，发 SIGHUP 即可）
+# 1. 修改 sproxy.yaml 中 log.level: "debug"
+# 2. 发送 SIGHUP 热重载
+sudo systemctl reload sproxy      # systemd 部署
+# 或：kill -HUP $(pidof sproxy)   # 直接运行时
+
+# Windows（需完整重启）
 LOG_LEVEL=debug sproxy start --config /etc/pairproxy/sproxy.yaml
 ```
 
-调试日志会显示每条请求的详细转发过程，帮助定位问题。
+调试日志会显示每条请求的详细转发过程，帮助定位问题。排查完成后记得恢复 `log.level: "info"` 并再次发送 `SIGHUP`。
 
 ---
 

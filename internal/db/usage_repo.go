@@ -93,6 +93,12 @@ func (w *UsageWriter) Wait() {
 	<-w.done
 }
 
+// QueueDepth 返回当前 channel 中待处理的用量记录数量。
+// 此值反映背压（backpressure）：接近 channel 容量时应关注写入性能。
+func (w *UsageWriter) QueueDepth() int {
+	return len(w.ch)
+}
+
 // Record 非阻塞写入一条用量记录到 channel
 // 如果 channel 已满，丢弃记录并记录警告（保证代理主路不阻塞）
 func (w *UsageWriter) Record(r UsageRecord) {

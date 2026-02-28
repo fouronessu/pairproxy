@@ -206,3 +206,207 @@ Please report security vulnerabilities by opening a **private** GitHub Security
 Advisory at: `https://github.com/l17728/pairproxy/security/advisories/new`
 
 Do **not** file public GitHub issues for security vulnerabilities.
+
+---
+
+## File Permission Hardening
+
+### Config Files
+
+Config files contain secrets (JWT secret, API keys, admin password hash).
+Restrict read access to the service account only:
+
+```bash
+chmod 600 /etc/pairproxy/sproxy.yaml
+chown sproxy:sproxy /etc/pairproxy/sproxy.yaml
+
+chmod 600 /etc/pairproxy/sproxy-worker.yaml
+chown sproxy:sproxy /etc/pairproxy/sproxy-worker.yaml
+
+# Verify
+ls -la /etc/pairproxy/
+# -rw------- 1 sproxy sproxy ... sproxy.yaml
+```
+
+### Database File
+
+The SQLite database contains usage logs and user credentials:
+
+```bash
+chmod 640 /var/lib/pairproxy/pairproxy.db
+chmod 640 /var/lib/pairproxy/pairproxy.db-wal
+chown sproxy:sproxy /var/lib/pairproxy/
+chmod 750 /var/lib/pairproxy/
+```
+
+### Token File (c-proxy users)
+
+The c-proxy JWT token file should be readable only by the local user:
+
+```bash
+chmod 600 ~/.config/pairproxy/token.json   # Linux/macOS
+# Windows: stored in %APPDATA%\pairproxy\token.json (accessible only to current user)
+```
+
+---
+
+## TLS / HTTPS Configuration
+
+PairProxy itself does **not** terminate TLS. Place a reverse proxy (nginx or
+Caddy) in front of `sproxy` for HTTPS in production.
+
+### Nginx + Let's Encrypt
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name proxy.company.com;
+
+    ssl_certificate     /etc/letsencrypt/live/proxy.company.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/proxy.company.com/privkey.pem;
+
+    # Modern TLS only
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:...';
+    ssl_prefer_server_ciphers off;
+
+    # SSE requires disabled buffering
+    proxy_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:9000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Redirect HTTP to HTTPS
+server {
+    listen 80;
+    server_name proxy.company.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+### Caddy (automatic HTTPS)
+
+```caddyfile
+proxy.company.com {
+    # Caddy automatically obtains and renews TLS certs via Let's Encrypt
+
+    # Disable response buffering (required for SSE / streaming)
+    @streaming {
+        header Content-Type text/event-stream
+    }
+    flush_interval -1
+
+    reverse_proxy 127.0.0.1:9000 {
+        flush_interval -1
+        transport http {
+            read_buffer 0
+        }
+    }
+}
+```
+
+### c-proxy with HTTPS sproxy
+
+Update `cproxy.yaml` to use the HTTPS address:
+
+```yaml
+sproxy:
+  primary: "https://proxy.company.com"   # Note: HTTPS, default port 443
+```
+
+### Network Isolation
+
+For the cluster internal API, restrict firewall access so only s-proxy nodes
+can reach each other:
+
+```bash
+# Linux: allow port 9000 only from cluster subnet
+ufw allow from 10.0.0.0/24 to any port 9000
+ufw deny 9000
+
+# Or iptables
+iptables -A INPUT -p tcp --dport 9000 -s 10.0.0.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 9000 -j DROP
+```
+
+---
+
+## API Key Rotation
+
+### Anthropic API Key Rotation
+
+1. Generate a new API key in the Anthropic Console.
+2. Add the new key to `sproxy.yaml` alongside the existing key:
+   ```yaml
+   llm:
+     targets:
+       - url: "https://api.anthropic.com"
+         api_key: "${ANTHROPIC_API_KEY_1}"  # existing
+         weight: 1
+       - url: "https://api.anthropic.com"
+         api_key: "${ANTHROPIC_API_KEY_NEW}" # new
+         weight: 1
+   ```
+3. Export the new environment variable and send SIGHUP (Linux) or restart:
+   ```bash
+   export ANTHROPIC_API_KEY_NEW=sk-ant-new-key
+   kill -HUP $(pidof sproxy)   # Linux/macOS only
+   # Windows: restart the service
+   ```
+   **Note**: API key changes require a restart on Linux because SIGHUP only
+   reloads `log.level`. Restart the process to pick up new key values.
+4. Verify the new key is working (check sproxy logs for LLM requests).
+5. Revoke the old key in the Anthropic Console.
+6. Remove the old key from config and restart.
+
+---
+
+## JWT Secret Rotation
+
+Rotating the JWT secret invalidates **all existing tokens** immediately.
+Plan for a maintenance window.
+
+**Steps:**
+
+1. Generate a new secret:
+   ```bash
+   openssl rand -hex 32
+   ```
+2. Update `JWT_SECRET` environment variable on all s-proxy nodes (primary + workers).
+3. Restart all s-proxy instances.
+4. Notify users to run `cproxy login` again (their existing tokens are invalid).
+
+**Mitigating disruption:**
+
+- Short-lived access tokens (24h default) limit blast radius if the secret leaks.
+- Consider setting `access_token_ttl: 1h` before rotating to minimize re-login friction.
+
+---
+
+## Cluster Shared Secret Rotation
+
+The cluster shared secret protects worker → primary communication.
+
+**Steps:**
+
+1. Generate a new secret:
+   ```bash
+   openssl rand -hex 32
+   ```
+2. Update `CLUSTER_SECRET` on the primary node first.
+3. Restart the primary (workers will get 401 during the window — they retry).
+4. Update `CLUSTER_SECRET` on each worker and restart.
+5. Verify workers re-register (check `GET /cluster/routing` output).
+
+**Rolling restart** (zero downtime for end users):
+- End users connect to c-proxy, which routes to healthy nodes.
+- c-proxy health checker detects nodes that go down during restart and re-routes.
+- Restart one node at a time, waiting for it to rejoin the cluster before the next.

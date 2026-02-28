@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/term"
 	"gorm.io/gorm"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/l17728/pairproxy/internal/metrics"
+	"github.com/l17728/pairproxy/internal/preflight"
 	"github.com/l17728/pairproxy/internal/proxy"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/version"
@@ -75,11 +78,9 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	// 初始化日志（先用 production logger，配置加载后再根据 log.level 重建）
-	logger, err := zap.NewProduction()
-	if err != nil {
-		return fmt.Errorf("init logger: %w", err)
-	}
+	// 初始化日志（使用 AtomicLevel 支持 SIGHUP 动态调整日志级别）
+	atom := zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	logger := buildLogger(atom)
 	defer logger.Sync() //nolint:errcheck
 
 	// 加载配置
@@ -95,8 +96,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 		logger.Warn("config warning", zap.String("detail", w))
 	}
 
-	if cfg.Log.Level == "debug" {
-		logger, _ = zap.NewDevelopment()
+	// 根据配置设置初始日志级别
+	atom.SetLevel(parseZapLevel(cfg.Log.Level))
+	if cfg.Log.Level != "" && cfg.Log.Level != "info" {
+		logger.Debug("log level applied from config", zap.String("level", cfg.Log.Level))
 	}
 
 	role := "primary"
@@ -108,6 +111,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		zap.String("listen", cfg.Listen.Addr()),
 		zap.Int("llm_targets", len(cfg.LLM.Targets)),
 	)
+
+	// Preflight 检查：DB 目录可写、监听端口未被占用
+	if err := preflight.CheckSProxy(logger, cfg); err != nil {
+		return fmt.Errorf("preflight: %w", err)
+	}
 
 	// 打开数据库
 	database, err := db.Open(logger, cfg.Database.Path)
@@ -265,6 +273,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	sp.SetQuotaChecker(quotaChecker)
 	logger.Info("quota checker enabled")
 
+	// P1-4: 设置 DB 连接供 /health 端点 ping 检查
+	sp.SetDB(database)
+	logger.Debug("health check: db ping enabled")
+
 	// Phase 6: 费用计算
 	if cfg.Pricing.DefaultInputPer1K > 0 || cfg.Pricing.DefaultOutputPer1K > 0 || len(cfg.Pricing.Models) > 0 {
 		writer.SetCostFunc(cfg.Pricing.ComputeCost)
@@ -371,6 +383,41 @@ func runStart(cmd *cobra.Command, args []string) error {
 		WriteTimeout: 10 * time.Minute, // 同上
 		IdleTimeout:  2 * time.Minute,
 	}
+
+	// SIGHUP 热重载（Unix/Linux only；Windows 上为 no-op）
+	// 重新加载：log.level 动态切换；其他字段（端口、DB 路径）需重启生效。
+	sighupCh := make(chan os.Signal, 1)
+	notifySIGHUP(sighupCh)
+	go func() {
+		for range sighupCh {
+			logger.Info("SIGHUP received — reloading config", zap.String("config", cfgPath))
+			newCfg, newWarnings, reloadErr := config.LoadSProxyConfig(cfgPath)
+			if reloadErr != nil {
+				logger.Error("config reload failed, keeping current config",
+					zap.String("config", cfgPath),
+					zap.Error(reloadErr),
+				)
+				continue
+			}
+			for _, w := range newWarnings {
+				logger.Warn("config reload warning", zap.String("detail", w))
+			}
+			// 动态更新日志级别（立即生效，无需重启）
+			newLevel := parseZapLevel(newCfg.Log.Level)
+			oldLevel := atom.Level()
+			if newLevel != oldLevel {
+				atom.SetLevel(newLevel)
+				logger.Info("log level changed via SIGHUP",
+					zap.String("old", oldLevel.String()),
+					zap.String("new", newLevel.String()),
+				)
+			} else {
+				logger.Info("config reloaded (no changes requiring restart)",
+					zap.String("log_level", newLevel.String()),
+				)
+			}
+		}
+	}()
 
 	// 优雅停机
 	sigCh := make(chan os.Signal, 1)
@@ -1003,4 +1050,37 @@ var adminTokenRevokeCmd = &cobra.Command{
 		fmt.Println("Note: existing access tokens will expire within their TTL (up to 24h)")
 		return nil
 	},
+}
+
+// ---------------------------------------------------------------------------
+// 日志级别辅助函数（支持 SIGHUP 热重载）
+// ---------------------------------------------------------------------------
+
+// buildLogger 使用给定的 AtomicLevel 构建一个结构化 JSON logger。
+// AtomicLevel 允许在运行时（例如通过 SIGHUP）动态修改日志级别。
+func buildLogger(atom zap.AtomicLevel) *zap.Logger {
+	encCfg := zap.NewProductionEncoderConfig()
+	encCfg.TimeKey = "ts"
+	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encCfg),
+		zapcore.AddSync(os.Stderr),
+		atom,
+	)
+	return zap.New(core, zap.AddCaller())
+}
+
+// parseZapLevel 将配置文件中的 log.level 字符串转换为 zapcore.Level。
+// 未知字符串默认返回 InfoLevel。
+func parseZapLevel(level string) zapcore.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return zapcore.DebugLevel
+	case "warn", "warning":
+		return zapcore.WarnLevel
+	case "error":
+		return zapcore.ErrorLevel
+	default:
+		return zapcore.InfoLevel
+	}
 }

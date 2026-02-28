@@ -20,6 +20,7 @@ import (
 	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/config"
 	"github.com/l17728/pairproxy/internal/lb"
+	"github.com/l17728/pairproxy/internal/preflight"
 	"github.com/l17728/pairproxy/internal/proxy"
 	"github.com/l17728/pairproxy/internal/version"
 )
@@ -197,6 +198,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		zap.String("sproxy_primary", cfg.SProxy.Primary),
 		zap.Strings("sproxy_targets", cfg.SProxy.Targets),
 	)
+
+	// Preflight 检查：监听端口未被占用
+	if err := preflight.CheckCProxy(logger, cfg); err != nil {
+		return fmt.Errorf("preflight: %w", err)
+	}
 
 	// 路由表缓存目录：与 token 文件放在同一目录；必须在构建 balancer 之前设置，
 	// 因为 buildInitialTargets 会读取磁盘缓存。

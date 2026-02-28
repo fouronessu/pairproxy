@@ -163,6 +163,16 @@ func (c *SProxyFullConfig) Validate() error {
 	if len(c.LLM.Targets) == 0 {
 		errs = append(errs, "llm.targets must not be empty (at least one LLM target is required)")
 	}
+	// 逐个检查 LLM target 的必填字段（尤其是 api_key 是否在 env var 展开后仍为空）
+	for i, t := range c.LLM.Targets {
+		if t.URL == "" {
+			errs = append(errs, fmt.Sprintf("llm.targets[%d].url is required", i))
+		}
+		if t.APIKey == "" {
+			errs = append(errs, fmt.Sprintf(
+				"llm.targets[%d].api_key is empty — ensure the environment variable is set and exported before starting sproxy", i))
+		}
+	}
 	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("listen.port %d is out of range (1–65535)", c.Listen.Port))
 	}

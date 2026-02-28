@@ -151,6 +151,32 @@ func TestValidateCProxy_ValidAfterDefaults(t *testing.T) {
 	}
 }
 
+// TestValidateSProxy_EmptyAPIKey 验证 llm.targets[i].api_key 为空时返回错误。
+func TestValidateSProxy_EmptyAPIKey(t *testing.T) {
+	cfg := validSProxyCfg()
+	cfg.LLM.Targets[0].APIKey = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty api_key, got nil")
+	}
+	if !strings.Contains(err.Error(), "api_key") {
+		t.Errorf("error should mention api_key, got: %v", err)
+	}
+}
+
+// TestValidateSProxy_EmptyTargetURL 验证 llm.targets[i].url 为空时返回错误。
+func TestValidateSProxy_EmptyTargetURL(t *testing.T) {
+	cfg := validSProxyCfg()
+	cfg.LLM.Targets[0].URL = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty target url, got nil")
+	}
+	if !strings.Contains(err.Error(), "url") {
+		t.Errorf("error should mention url, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

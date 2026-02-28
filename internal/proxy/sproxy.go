@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +21,7 @@ import (
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/version"
 )
 
 // LLMTarget 代表一个 LLM 后端（含 API Key）。
@@ -29,15 +32,18 @@ type LLMTarget struct {
 
 // SProxy s-proxy 核心处理器
 type SProxy struct {
-	logger       *zap.Logger
-	jwtMgr       *auth.Manager
-	writer       *db.UsageWriter
-	targets      []LLMTarget
-	idx          atomic.Uint32 // 轮询计数器（LLM 目标通常只有一个，简单轮询即可）
-	transport    http.RoundTripper
-	clusterMgr   *cluster.Manager  // 可选，nil 表示单节点模式（不注入路由头）
-	sourceNode   string            // 来源节点标识（用于 usage_logs）
-	quotaChecker *quota.Checker    // 可选，nil 表示不检查配额
+	logger         *zap.Logger
+	jwtMgr         *auth.Manager
+	writer         *db.UsageWriter
+	targets        []LLMTarget
+	idx            atomic.Uint32 // 轮询计数器（LLM 目标通常只有一个，简单轮询即可）
+	transport      http.RoundTripper
+	clusterMgr     *cluster.Manager // 可选，nil 表示单节点模式（不注入路由头）
+	sourceNode     string           // 来源节点标识（用于 usage_logs）
+	quotaChecker   *quota.Checker   // 可选，nil 表示不检查配额
+	startTime      time.Time        // 进程启动时间（供 /health 返回 uptime）
+	activeRequests atomic.Int64     // 当前正在处理的代理请求数
+	sqlDB          *sql.DB          // 可选，用于 /health 检查 DB 可达性
 }
 
 // NewSProxy 创建 SProxy。
@@ -82,6 +88,7 @@ func newSProxy(
 		transport:  http.DefaultTransport,
 		clusterMgr: clusterMgr,
 		sourceNode: sourceNode,
+		startTime:  time.Now(),
 	}
 	return sp, nil
 }
@@ -91,9 +98,20 @@ func (sp *SProxy) SetQuotaChecker(checker *quota.Checker) {
 	sp.quotaChecker = checker
 }
 
+// SetDB 设置数据库连接供健康检查使用（可选）。
+// 健康检查时会通过 PingContext 验证数据库可达性。
+func (sp *SProxy) SetDB(gormDB interface{ DB() (*sql.DB, error) }) {
+	if sqlDB, err := gormDB.DB(); err == nil {
+		sp.sqlDB = sqlDB
+		sp.logger.Debug("health check: database connection set for ping")
+	} else {
+		sp.logger.Warn("health check: failed to get underlying sql.DB", zap.Error(err))
+	}
+}
+
 // Handler 构建并返回完整的 s-proxy HTTP 处理链：
 //
-//	RecoveryMiddleware → RequestIDMiddleware → AuthMiddleware → [QuotaMiddleware] → SProxyHandler
+//	RecoveryMiddleware → RequestIDMiddleware → AuthMiddleware → [QuotaMiddleware] → ActiveRequestCounter → SProxyHandler
 func (sp *SProxy) Handler() http.Handler {
 	core := http.HandlerFunc(sp.serveProxy)
 
@@ -109,17 +127,92 @@ func (sp *SProxy) Handler() http.Handler {
 		afterAuth = quotaMW(core)
 	}
 
-	withAuth := AuthMiddleware(sp.logger, sp.jwtMgr, afterAuth)
+	// 活跃请求计数器：在配额检查之后、实际代理之前开始计数。
+	// 计数范围包含认证、配额检查和实际代理的全部时间（代表"正在处理的请求"）。
+	withCounter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sp.activeRequests.Add(1)
+		defer sp.activeRequests.Add(-1)
+		afterAuth.ServeHTTP(w, r)
+	})
+
+	withAuth := AuthMiddleware(sp.logger, sp.jwtMgr, withCounter)
 	withReqID := RequestIDMiddleware(sp.logger, withAuth)
 	return RecoveryMiddleware(sp.logger, withReqID)
 }
 
+// healthResponse /health 响应结构
+type healthResponse struct {
+	Status         string `json:"status"`            // "ok" | "degraded"
+	Version        string `json:"version"`           // 版本字符串
+	UptimeSeconds  int64  `json:"uptime_seconds"`    // 进程运行时长（秒）
+	ActiveRequests int64  `json:"active_requests"`   // 当前正在处理的代理请求数
+	QueueDepth     int    `json:"usage_queue_depth"` // 用量写入 channel 中的待处理记录数
+	DBReachable    bool   `json:"db_reachable"`      // 数据库是否可达
+}
+
 // HealthHandler 返回 s-proxy 健康检查处理器，供 /health 注册使用。
+//
+// 响应示例（全部正常）：
+//
+//	HTTP 200 {"status":"ok","version":"v1.5.0 (abc1234) ...","uptime_seconds":3600,
+//	           "active_requests":5,"usage_queue_depth":12,"db_reachable":true}
+//
+// 响应示例（DB 不可达）：
+//
+//	HTTP 503 {"status":"degraded","db_reachable":false,...}
 func (sp *SProxy) HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		uptime := int64(time.Since(sp.startTime).Seconds())
+		activeReqs := sp.activeRequests.Load()
+
+		queueDepth := 0
+		if sp.writer != nil {
+			queueDepth = sp.writer.QueueDepth()
+		}
+
+		dbReachable := true
+		if sp.sqlDB != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := sp.sqlDB.PingContext(ctx); err != nil {
+				dbReachable = false
+				sp.logger.Warn("health check: database ping failed",
+					zap.Error(err),
+				)
+			}
+		}
+
+		status := "ok"
+		httpStatus := http.StatusOK
+		if !dbReachable {
+			status = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+			sp.logger.Warn("health check: reporting degraded status",
+				zap.Int64("uptime_seconds", uptime),
+				zap.Bool("db_reachable", dbReachable),
+			)
+		}
+
+		resp := healthResponse{
+			Status:         status,
+			Version:        version.Short(),
+			UptimeSeconds:  uptime,
+			ActiveRequests: activeReqs,
+			QueueDepth:     queueDepth,
+			DBReachable:    dbReachable,
+		}
+
+		sp.logger.Debug("health check requested",
+			zap.String("status", status),
+			zap.Int64("uptime_seconds", uptime),
+			zap.Int64("active_requests", activeReqs),
+			zap.Int("queue_depth", queueDepth),
+			zap.Bool("db_reachable", dbReachable),
+		)
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok","service":"sproxy"}`)
+		w.WriteHeader(httpStatus)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
