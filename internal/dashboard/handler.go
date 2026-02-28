@@ -13,6 +13,7 @@ import (
 	"github.com/l17728/pairproxy/internal/api"
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/proxy"
 )
 
 //go:embed templates
@@ -28,6 +29,8 @@ type Handler struct {
 	auditRepo         *db.AuditRepo
 	adminPasswordHash string
 	tokenTTL          time.Duration
+	llmBindingRepo    *db.LLMBindingRepo             // 可选，LLM 绑定管理
+	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
 }
 
 // NewHandler 创建 Dashboard Handler
@@ -72,6 +75,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /dashboard/groups/{id}/quota", h.requireSession(http.HandlerFunc(h.handleSetQuota)))
 	mux.Handle("GET /dashboard/logs", h.requireSession(http.HandlerFunc(h.handleLogsPage)))
 	mux.Handle("GET /dashboard/audit", h.requireSession(http.HandlerFunc(h.handleAuditPage)))
+
+	// LLM 管理（可选，需设置 llmBindingRepo）
+	mux.Handle("GET /dashboard/llm", h.requireSession(http.HandlerFunc(h.handleLLMPage)))
+	mux.Handle("POST /dashboard/llm/bindings", h.requireSession(http.HandlerFunc(h.handleLLMCreateBinding)))
+	mux.Handle("POST /dashboard/llm/bindings/{id}/delete", h.requireSession(http.HandlerFunc(h.handleLLMDeleteBinding)))
+	mux.Handle("POST /dashboard/llm/distribute", h.requireSession(http.HandlerFunc(h.handleLLMDistribute)))
+}
+
+// SetLLMDeps 设置 LLM 绑定相关依赖（可选；不设置则 LLM 页面显示空状态）。
+func (h *Handler) SetLLMDeps(repo *db.LLMBindingRepo, healthFn func() []proxy.LLMTargetStatus) {
+	h.llmBindingRepo = repo
+	h.llmHealthFn = healthFn
 }
 
 // ---------------------------------------------------------------------------

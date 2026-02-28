@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/tap"
 	"github.com/l17728/pairproxy/internal/version"
@@ -32,6 +34,17 @@ type LLMTarget struct {
 	URL      string
 	APIKey   string
 	Provider string // "anthropic"（默认）| "openai" | "ollama"
+	Name     string // 可选显示名，空则用 URL
+	Weight   int    // 负载均衡权重（≥1）
+}
+
+// LLMTargetStatus 向 Admin/Dashboard 暴露的 LLM 目标运行时状态。
+type LLMTargetStatus struct {
+	URL      string
+	Name     string
+	Provider string
+	Weight   int
+	Healthy  bool
 }
 
 // SProxy s-proxy 核心处理器
@@ -40,7 +53,7 @@ type SProxy struct {
 	jwtMgr          *auth.Manager
 	writer          *db.UsageWriter
 	targets         []LLMTarget
-	idx             atomic.Uint32 // 轮询计数器（LLM 目标通常只有一个，简单轮询即可）
+	idx             atomic.Uint32 // 轮询计数器（无 LLM 均衡器时使用）
 	transport       http.RoundTripper
 	clusterMgr      *cluster.Manager // 可选，nil 表示单节点模式（不注入路由头）
 	sourceNode      string           // 来源节点标识（用于 usage_logs）
@@ -49,6 +62,12 @@ type SProxy struct {
 	activeRequests  atomic.Int64     // 当前正在处理的代理请求数
 	sqlDB           *sql.DB          // 可选，用于 /health 检查 DB 可达性
 	apiKeyResolver  func(userID string) (apiKey string, found bool) // 可选，动态 API Key 解析
+
+	// LLM 均衡 + 绑定（可选）
+	llmBalancer     *lb.WeightedRandomBalancer                       // 加权随机负载均衡
+	llmHC           *lb.HealthChecker                                // 健康检查（被动熔断 + 自动恢复）
+	bindingResolver func(userID, groupID string) (string, bool)      // 用户/分组 → target URL
+	maxRetries      int                                               // RetryTransport 最大重试次数
 }
 
 // NewSProxy 创建 SProxy。
@@ -94,6 +113,7 @@ func newSProxy(
 		clusterMgr: clusterMgr,
 		sourceNode: sourceNode,
 		startTime:  time.Now(),
+		maxRetries: 2,
 	}
 	return sp, nil
 }
@@ -118,6 +138,70 @@ func (sp *SProxy) SetDB(gormDB interface{ DB() (*sql.DB, error) }) {
 // fn 根据 userID 返回解密后的 API Key；found=false 时回退到配置文件中的静态 Key。
 func (sp *SProxy) SetAPIKeyResolver(fn func(userID string) (string, bool)) {
 	sp.apiKeyResolver = fn
+}
+
+// SetLLMHealthChecker 设置 LLM 负载均衡器和健康检查器（可选）。
+// 设置后启用基于健康状态的加权随机路由和被动熔断；不设置则退化为简单轮询。
+func (sp *SProxy) SetLLMHealthChecker(bal *lb.WeightedRandomBalancer, hc *lb.HealthChecker) {
+	sp.llmBalancer = bal
+	sp.llmHC = hc
+}
+
+// SetBindingResolver 设置用户/分组 LLM 绑定解析器（可选）。
+// fn 根据 userID + groupID 返回绑定的 target URL；未绑定时 found=false，回退到负载均衡。
+func (sp *SProxy) SetBindingResolver(fn func(userID, groupID string) (string, bool)) {
+	sp.bindingResolver = fn
+}
+
+// SetMaxRetries 设置 RetryTransport 的最大重试次数（默认 2）。
+func (sp *SProxy) SetMaxRetries(n int) {
+	sp.maxRetries = n
+}
+
+// SetTransport 设置底层 HTTP transport（测试用；默认 http.DefaultTransport）。
+func (sp *SProxy) SetTransport(t http.RoundTripper) {
+	sp.transport = t
+}
+
+// LLMTargetStatuses 返回当前所有 LLM 目标的运行时状态（含健康状态）。
+// 若未配置均衡器，则所有目标视为健康（无主动/被动检查）。
+func (sp *SProxy) LLMTargetStatuses() []LLMTargetStatus {
+	if sp.llmBalancer == nil {
+		result := make([]LLMTargetStatus, len(sp.targets))
+		for i, t := range sp.targets {
+			w := t.Weight
+			if w <= 0 {
+				w = 1
+			}
+			result[i] = LLMTargetStatus{
+				URL:      t.URL,
+				Name:     t.Name,
+				Provider: t.Provider,
+				Weight:   w,
+				Healthy:  true,
+			}
+		}
+		return result
+	}
+
+	lbTargets := sp.llmBalancer.Targets()
+	result := make([]LLMTargetStatus, 0, len(lbTargets))
+	for _, t := range lbTargets {
+		st := LLMTargetStatus{
+			URL:     t.ID,
+			Weight:  t.Weight,
+			Healthy: t.Healthy,
+		}
+		for _, lt := range sp.targets {
+			if lt.URL == t.ID {
+				st.Name = lt.Name
+				st.Provider = lt.Provider
+				break
+			}
+		}
+		result = append(result, st)
+	}
+	return result
 }
 
 // Handler 构建并返回完整的 s-proxy HTTP 处理链：
@@ -227,49 +311,201 @@ func (sp *SProxy) HealthHandler() http.HandlerFunc {
 	}
 }
 
-// pickTarget 按请求路径选出匹配 provider 的目标，再轮询选择。
-// 路由规则：
-//   - /v1/messages           → Anthropic（provider="" 或 "anthropic"）
-//   - /v1/chat/completions   → OpenAI / Ollama（provider="openai" 或 "ollama"）
-//   - 其他路径              → 不过滤，全部候选
+// pickLLMTarget 选择下一个 LLM target，支持用户/分组绑定和负载均衡。
 //
-// 如果过滤后候选为空（未配置对应 provider 的目标），回退到全量轮询。
-func (sp *SProxy) pickTarget(r *http.Request) LLMTarget {
-	path := r.URL.Path
-
-	// 按路径推断期望的 provider 类型
-	var preferredProviders map[string]bool
-	switch {
-	case strings.HasPrefix(path, "/v1/chat/completions"):
-		preferredProviders = map[string]bool{"openai": true, "ollama": true}
-	case strings.HasPrefix(path, "/v1/messages"):
-		preferredProviders = map[string]bool{"": true, "anthropic": true}
+// 选择优先级：
+//  1. 用户/分组绑定（bindingResolver）→ 若绑定 target 健康且未尝试过
+//  2. 加权随机负载均衡（llmBalancer）→ 过滤已尝试 + 不健康 + provider 不匹配
+//  3. 回退简单轮询（无均衡器时）
+func (sp *SProxy) pickLLMTarget(path, userID, groupID string, tried []string) (*lb.LLMTargetInfo, error) {
+	triedSet := make(map[string]bool, len(tried))
+	for _, u := range tried {
+		triedSet[u] = true
 	}
 
-	// 过滤候选目标
-	var candidates []LLMTarget
-	if preferredProviders != nil {
-		for _, t := range sp.targets {
-			if preferredProviders[t.Provider] {
-				candidates = append(candidates, t)
+	// 1. 用户/分组绑定优先
+	if sp.bindingResolver != nil {
+		boundURL, found := sp.bindingResolver(userID, groupID)
+		if found && !triedSet[boundURL] {
+			healthy := true
+			if sp.llmBalancer != nil {
+				healthy = false
+				for _, t := range sp.llmBalancer.Targets() {
+					if t.ID == boundURL {
+						healthy = t.Healthy
+						break
+					}
+				}
 			}
+			if healthy {
+				sp.logger.Debug("using bound LLM target",
+					zap.String("user_id", userID),
+					zap.String("group_id", groupID),
+					zap.String("url", boundURL),
+				)
+				return sp.llmTargetInfoForURL(boundURL), nil
+			}
+			sp.logger.Warn("bound LLM target unhealthy, falling back to load balancer",
+				zap.String("bound_url", boundURL),
+				zap.String("user_id", userID),
+			)
 		}
 	}
-	// 无过滤结果时回退到全量（向后兼容：所有目标均无 provider 字段时也能正常工作）
+
+	// 2. 加权随机均衡（支持 tried 过滤 + provider 过滤）
+	if sp.llmBalancer != nil {
+		return sp.weightedPickExcluding(path, triedSet)
+	}
+
+	// 3. 回退：简单轮询（未配置均衡器时）
+	candidates := sp.candidatesByPath(path)
 	if len(candidates) == 0 {
 		candidates = sp.targets
 	}
-
+	// 过滤已尝试目标
+	var available []LLMTarget
+	for _, t := range candidates {
+		if !triedSet[t.URL] {
+			available = append(available, t)
+		}
+	}
+	if len(available) == 0 {
+		return nil, lb.ErrNoHealthyTarget
+	}
 	n := sp.idx.Add(1)
-	t := candidates[int(n-1)%len(candidates)]
-	sp.logger.Debug("picked LLM target",
+	t := available[int(n-1)%len(available)]
+	sp.logger.Debug("picked LLM target (round-robin)",
 		zap.String("url", t.URL),
-		zap.String("provider", t.Provider),
 		zap.String("path", path),
-		zap.Int("candidates", len(candidates)),
-		zap.Int("total_targets", len(sp.targets)),
 	)
-	return t
+	return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey}, nil
+}
+
+// weightedPickExcluding 从 llmBalancer 中选取健康 target，排除 tried，并应用 provider 过滤。
+func (sp *SProxy) weightedPickExcluding(path string, tried map[string]bool) (*lb.LLMTargetInfo, error) {
+	all := sp.llmBalancer.Targets()
+	preferred := preferredProvidersByPath(path)
+
+	filter := func(targets []lb.Target, providerFilter map[string]bool) []lb.Target {
+		var out []lb.Target
+		for _, t := range targets {
+			if !t.Healthy || tried[t.ID] {
+				continue
+			}
+			if providerFilter != nil {
+				prov := sp.providerForURL(t.ID)
+				if !providerFilter[prov] {
+					continue
+				}
+			}
+			out = append(out, t)
+		}
+		return out
+	}
+
+	candidates := filter(all, preferred)
+	// 若 provider 过滤后无候选，回退到全量健康 target（保持兼容性）
+	if len(candidates) == 0 && preferred != nil {
+		candidates = filter(all, nil)
+	}
+	if len(candidates) == 0 {
+		return nil, lb.ErrNoHealthyTarget
+	}
+
+	// 加权随机选取
+	total := 0
+	for _, c := range candidates {
+		total += c.Weight
+	}
+	r := rand.IntN(total)
+	for i := range candidates {
+		r -= candidates[i].Weight
+		if r < 0 {
+			sp.logger.Debug("picked LLM target (weighted random)",
+				zap.String("url", candidates[i].ID),
+				zap.String("path", path),
+				zap.Int("candidates", len(candidates)),
+			)
+			return sp.llmTargetInfoForURL(candidates[i].ID), nil
+		}
+	}
+	// 理论上不会到达
+	return sp.llmTargetInfoForURL(candidates[0].ID), nil
+}
+
+// llmTargetInfoForURL 根据 URL 查找对应的 LLMTargetInfo（含 APIKey）。
+func (sp *SProxy) llmTargetInfoForURL(targetURL string) *lb.LLMTargetInfo {
+	for _, t := range sp.targets {
+		if t.URL == targetURL {
+			return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey}
+		}
+	}
+	return &lb.LLMTargetInfo{URL: targetURL}
+}
+
+// providerForURL 根据 URL 查找对应 target 的 Provider。
+func (sp *SProxy) providerForURL(targetURL string) string {
+	for _, t := range sp.targets {
+		if t.URL == targetURL {
+			return t.Provider
+		}
+	}
+	return ""
+}
+
+// candidatesByPath 按请求路径过滤匹配 provider 的 targets（legacy 路径使用）。
+func (sp *SProxy) candidatesByPath(path string) []LLMTarget {
+	preferred := preferredProvidersByPath(path)
+	if preferred == nil {
+		return nil
+	}
+	var out []LLMTarget
+	for _, t := range sp.targets {
+		if preferred[t.Provider] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// preferredProvidersByPath 根据 API 路径返回期望的 provider 集合。
+func preferredProvidersByPath(path string) map[string]bool {
+	switch {
+	case strings.HasPrefix(path, "/v1/chat/completions"):
+		return map[string]bool{"openai": true, "ollama": true}
+	case strings.HasPrefix(path, "/v1/messages"):
+		return map[string]bool{"": true, "anthropic": true}
+	}
+	return nil
+}
+
+// buildRetryTransport 构建 RetryTransport（当 llmBalancer 已配置时）。
+func (sp *SProxy) buildRetryTransport(userID, groupID string) http.RoundTripper {
+	if sp.llmBalancer == nil {
+		return sp.transport
+	}
+	maxRetries := sp.maxRetries
+	if maxRetries <= 0 {
+		maxRetries = 2
+	}
+	return &lb.RetryTransport{
+		Inner:      sp.transport,
+		MaxRetries: maxRetries,
+		PickNext: func(path string, tried []string) (*lb.LLMTargetInfo, error) {
+			return sp.pickLLMTarget(path, userID, groupID, tried)
+		},
+		OnSuccess: func(targetURL string) {
+			if sp.llmHC != nil {
+				sp.llmHC.RecordSuccess(targetURL)
+			}
+		},
+		OnFailure: func(targetURL string) {
+			if sp.llmHC != nil {
+				sp.llmHC.RecordFailure(targetURL)
+			}
+		},
+		Logger: sp.logger,
+	}
 }
 
 // serveProxy 核心代理逻辑：
@@ -337,23 +573,34 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
-	target := sp.pickTarget(r)
-	targetURL, err := url.Parse(target.URL)
+	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, nil)
+	if pickErr != nil {
+		sp.logger.Error("no LLM target available",
+			zap.String("request_id", reqID),
+			zap.String("user_id", claims.UserID),
+			zap.Error(pickErr),
+		)
+		span.SetStatus(codes.Error, "no upstream available")
+		writeJSONError(w, http.StatusBadGateway, "no_upstream", "no healthy LLM target available")
+		return
+	}
+	targetURL, err := url.Parse(firstInfo.URL)
 	if err != nil {
 		sp.logger.Error("invalid LLM target URL",
 			zap.String("request_id", reqID),
-			zap.String("url", target.URL),
+			zap.String("url", firstInfo.URL),
 			zap.Error(err),
 		)
 		span.SetStatus(codes.Error, "invalid upstream URL")
 		writeJSONError(w, http.StatusBadGateway, "bad_gateway", "invalid upstream URL")
 		return
 	}
+	targetProvider := sp.providerForURL(firstInfo.URL)
 
 	// 补充 span attributes（target 确定后）
 	span.SetAttributes(
-		attribute.String("provider", target.Provider),
-		attribute.String("upstream_url", target.URL),
+		attribute.String("provider", targetProvider),
+		attribute.String("upstream_url", firstInfo.URL),
 	)
 
 	startTime := time.Now()
@@ -363,7 +610,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		RequestID:   reqID,
 		UserID:      claims.UserID,
 		Model:       extractModel(r),
-		UpstreamURL: target.URL,
+		UpstreamURL: firstInfo.URL,
 		SourceNode:  sp.sourceNode,
 		CreatedAt:   time.Now(),
 	}
@@ -373,7 +620,10 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 用 TeeResponseWriter 包装（streaming + non-streaming 均适用）
 	// provider 决定解析器类型（Anthropic SSE / OpenAI SSE / Ollama SSE）
-	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, target.Provider)
+	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider)
+
+	// 构建 transport（配置均衡器时使用 RetryTransport；否则使用基础 transport）
+	transport := sp.buildRetryTransport(claims.UserID, claims.GroupID)
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -384,7 +634,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// 删除 c-proxy 注入的认证头，注入真实 API Key
 			// F-5: 优先使用 DB 中的动态 API Key，未找到则回退到配置文件中的静态 Key
 			req.Header.Del("X-PairProxy-Auth")
-			apiKey := target.APIKey
+			apiKey := firstInfo.APIKey
 			if sp.apiKeyResolver != nil {
 				if k, ok := sp.apiKeyResolver(claims.UserID); ok {
 					apiKey = k
@@ -399,7 +649,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			sp.logger.Debug("proxying request to LLM",
 				zap.String("request_id", reqID),
 				zap.String("user_id", claims.UserID),
-				zap.String("target", target.URL),
+				zap.String("target", firstInfo.URL),
 				zap.String("path", req.URL.Path),
 				zap.String("method", req.Method),
 			)
@@ -470,7 +720,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			sp.logger.Error("upstream request failed",
 				zap.String("request_id", reqID),
 				zap.String("user_id", claims.UserID),
-				zap.String("target", target.URL),
+				zap.String("target", firstInfo.URL),
 				zap.Int64("duration_ms", durationMs),
 				zap.Error(err),
 			)
@@ -484,7 +734,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		},
 		// FlushInterval=-1：立即刷新（SSE 流式响应必须）
 		FlushInterval: -1,
-		Transport:     sp.transport,
+		Transport:     transport,
 	}
 
 	proxy.ServeHTTP(tw, r)

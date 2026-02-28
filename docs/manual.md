@@ -1767,3 +1767,146 @@ log:
 ---
 
 *遇到问题或有功能建议？请访问 [GitHub Issues](https://github.com/l17728/pairproxy/issues) 提交反馈。*
+
+---
+
+## 15. LLM 目标管理（网络可靠性 + 绑定均分）
+
+### 15.1 概述
+
+从 v2.1.0 起，s-proxy 支持：
+
+- **多 LLM target 加权负载均衡**（加权随机）
+- **被动熔断**：连续 3 次请求失败 → 自动标记目标为不健康
+- **自动恢复（半开）**：经过 `recovery_delay` 后自动重置为健康
+- **主动健康检查**：为有 `health_check_path` 的目标定期 GET 检查
+- **带重试的代理**：首个目标失败时自动切换到下一个健康目标（最多 `max_retries` 次）
+- **用户/分组级 LLM 绑定**：为特定用户或分组绑定专用 LLM target
+- **一键均分**：将所有活跃用户按轮询方式均匀分配到所有 target
+
+### 15.2 配置说明
+
+在 `sproxy.yaml` 中：
+
+```yaml
+llm:
+  lb_strategy: weighted_random   # 目前仅支持 weighted_random
+  request_timeout: 120s
+  max_retries: 2                 # 首次尝试失败后的最大重试次数（默认 2）
+  recovery_delay: 60s            # 熔断后自动恢复延迟（默认 60s，0=禁用自动恢复）
+
+  targets:
+    - url: "https://api.anthropic.com"
+      api_key: "${ANTHROPIC_API_KEY}"
+      provider: "anthropic"
+      name: "Anthropic Claude"    # 可选显示名（Dashboard 展示）
+      weight: 70                  # 负载均衡权重（默认 1）
+      health_check_path: ""       # 留空=仅被动熔断；填写路径=启用主动 GET 检查
+
+    - url: "https://api.openai.com"
+      api_key: "${OPENAI_API_KEY}"
+      provider: "openai"
+      name: "OpenAI GPT"
+      weight: 30
+      health_check_path: ""       # 公共 LLM API 通常无 /health 端点，建议留空
+```
+
+**关键参数说明**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_retries` | 2 | 首次失败后最多重试几次换目标 |
+| `recovery_delay` | 60s | 熔断后多久自动重置为健康（0=不自动恢复） |
+| `weight` | 1 | 负载均衡权重；权重越高被选中概率越大 |
+| `health_check_path` | 空 | 主动健康检查路径；空=不主动检查，依赖被动熔断 |
+| `name` | 空（显示 URL） | Dashboard 中的显示名称 |
+
+### 15.3 被动熔断与自动恢复
+
+s-proxy 对每个 LLM target 维护连续失败计数：
+
+1. 每次请求成功 → 重置计数，若之前不健康则重新标记为健康
+2. 每次请求失败（连接错误或 5xx）→ 计数 +1，达到 3 次 → 标记为不健康
+3. 不健康后若 `recovery_delay > 0`：经过延迟后自动重置为健康（半开状态）
+4. 半开后若真实请求再次失败 → 重新进入不健康状态
+
+> **注意**：4xx 响应不触发熔断（客户端错误由客户端自身处理）。
+
+### 15.4 用户/分组 LLM 绑定
+
+#### 通过 Dashboard
+
+1. 打开 `/dashboard/llm`
+2. 在"添加绑定"表单中选择类型（用户/分组）、对象和目标 URL
+3. 点击"绑定"，或使用"一键均分所有活跃用户"将用户平均分配到所有 target
+
+#### 通过管理员 CLI
+
+```bash
+# 查看所有 target 及当前绑定数
+sproxy admin llm targets
+
+# 列出所有绑定关系
+sproxy admin llm list
+
+# 将用户 alice 绑定到指定 LLM
+sproxy admin llm bind alice --target https://api.anthropic.com
+
+# 将分组 premium 绑定到指定 LLM
+sproxy admin llm bind --group premium --target https://api.openai.com
+
+# 删除用户 alice 的 LLM 绑定（回退到负载均衡）
+sproxy admin llm unbind alice
+
+# 将所有活跃用户均分到配置文件中的所有 target
+sproxy admin llm distribute
+```
+
+#### 通过 REST API
+
+```bash
+# 查看目标健康状态
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/llm/targets
+
+# 列出绑定关系
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/llm/bindings
+
+# 创建用户绑定
+curl -XPOST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"target_url":"https://api.anthropic.com","user_id":"USER_ID"}' \
+  http://localhost:9000/api/admin/llm/bindings
+
+# 删除绑定（需要先从 list 获取 binding ID）
+curl -XDELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/llm/bindings/BINDING_ID
+
+# 一键均分
+curl -XPOST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/llm/distribute
+```
+
+### 15.5 路由优先级
+
+当请求到达时，路由目标按以下顺序决定：
+
+1. **用户级绑定**（最高优先级）：若该用户有专属绑定且目标健康
+2. **分组级绑定**：若用户所在分组有绑定且目标健康
+3. **负载均衡**：从健康目标中按权重随机选取
+4. **回退**：若均衡器无配置，简单轮询
+
+### 15.6 结构化日志
+
+所有 LLM 路由相关事件均有结构化 zap 日志：
+
+| 日志消息 | 级别 | 含义 |
+|----------|------|------|
+| `using bound LLM target` | DEBUG | 使用用户/分组绑定 |
+| `bound LLM target unhealthy, falling back to load balancer` | WARN | 绑定目标不健康，回退 LB |
+| `picked LLM target (weighted random)` | DEBUG | LB 选出目标 |
+| `llm request failed, retrying with next target` | WARN | 首次失败，切换重试 |
+| `target marked unhealthy` | WARN | 被动熔断触发 |
+| `target recovered` | INFO | 主动健康检查恢复 |
+| `target auto-recovered after delay` | INFO | 半开延迟恢复 |

@@ -12,6 +12,7 @@ import (
 
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/proxy"
 )
 
 // AdminCookieName 管理员 session cookie 名称（供 dashboard 包共享）
@@ -30,6 +31,8 @@ type AdminHandler struct {
 	auditRepo         *db.AuditRepo
 	apiKeyRepo        *db.APIKeyRepo                // 可选，F-5 多 API Key 管理
 	encryptFn         func(string) (string, error)  // 可选，加密 API Key 明文
+	llmBindingRepo    *db.LLMBindingRepo            // 可选，LLM 绑定管理
+	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
 	adminPasswordHash string
 	tokenTTL          time.Duration
 }

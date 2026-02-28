@@ -90,15 +90,19 @@ type CProxyAuth struct {
 type LLMConfig struct {
 	LBStrategy     string        `yaml:"lb_strategy"`     // "round_robin"
 	RequestTimeout time.Duration `yaml:"request_timeout"` // 默认 300s
+	MaxRetries     int           `yaml:"max_retries"`     // 上游失败时最大重试次数（不含首次），默认 2；0=不重试
+	RecoveryDelay  time.Duration `yaml:"recovery_delay"`  // 熔断后自动恢复延迟，默认 60s；0=禁用自动恢复
 	Targets        []LLMTarget   `yaml:"targets"`
 }
 
 // LLMTarget 单个 LLM 上游节点
 type LLMTarget struct {
-	URL      string `yaml:"url"`      // e.g. "https://api.anthropic.com"
-	APIKey   string `yaml:"api_key"`  // 支持 ${ENV_VAR} 替换
-	Weight   int    `yaml:"weight"`   // 默认 1
-	Provider string `yaml:"provider"` // "anthropic"（默认）| "openai" | "ollama"
+	URL             string `yaml:"url"`               // e.g. "https://api.anthropic.com"
+	APIKey          string `yaml:"api_key"`           // 支持 ${ENV_VAR} 替换
+	Weight          int    `yaml:"weight"`            // 默认 1
+	Provider        string `yaml:"provider"`          // "anthropic"（默认）| "openai" | "ollama"
+	Name            string `yaml:"name"`              // 可选显示名称（空则使用 URL）
+	HealthCheckPath string `yaml:"health_check_path"` // 主动健康检查路径，空=仅被动检查
 }
 
 // DatabaseConfig SQLite 数据库配置

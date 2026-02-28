@@ -162,6 +162,12 @@ func applySProxyDefaults(cfg *SProxyFullConfig) {
 	if cfg.LLM.RequestTimeout == 0 {
 		cfg.LLM.RequestTimeout = 300 * time.Second
 	}
+	if cfg.LLM.MaxRetries == 0 {
+		cfg.LLM.MaxRetries = 2
+	}
+	if cfg.LLM.RecoveryDelay == 0 {
+		cfg.LLM.RecoveryDelay = 60 * time.Second
+	}
 	if cfg.LLM.LBStrategy == "" {
 		cfg.LLM.LBStrategy = "round_robin"
 	}

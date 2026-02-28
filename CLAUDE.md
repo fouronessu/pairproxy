@@ -1,0 +1,124 @@
+# PairProxy Gateway — Claude 管理助手指南
+
+你是 PairProxy 网关的配置助手。通过 `sproxy` CLI 执行所有管理操作。
+
+## 环境信息
+
+- **配置文件**: `sproxy.yaml`（当前目录，或用 `--config` 指定）
+- **Go binary**: `C:/Program Files/Go/bin/go.exe`（如未编译则先 build）
+- **数据库**: SQLite，路径在 sproxy.yaml 的 `database.path` 字段
+- **sproxy 命令**: 已编译时用 `./sproxy`，未编译时用 `go run ./cmd/sproxy`
+
+## 命令速查
+
+### 用户管理
+```bash
+./sproxy admin user list                                   # 列出所有用户
+./sproxy admin user list --group <groupname>               # 按分组过滤
+./sproxy admin user add <username> --password <pw>         # 新建用户
+./sproxy admin user add <username> --password <pw> --group <group>
+./sproxy admin user disable <username>                     # 禁用用户
+./sproxy admin user enable <username>                      # 启用用户
+./sproxy admin user reset-password <username> --password <newpw>
+```
+
+### 分组与配额管理
+```bash
+./sproxy admin group list                                  # 列出所有分组（含配额）
+./sproxy admin group add <name>                            # 新建分组
+./sproxy admin group set-quota <name> \
+  --daily <tokens> \                                       # 日 token 上限（0=不限）
+  --monthly <tokens> \                                     # 月 token 上限（0=不限）
+  --rpm <n>                                                # 每分钟请求上限（0=不限）
+```
+
+### LLM 目标管理
+```bash
+./sproxy admin llm targets                                 # 查看所有 LLM target 及健康状态、绑定数
+./sproxy admin llm list                                    # 查看用户/分组绑定关系
+./sproxy admin llm bind <username> --target <url>          # 将用户绑定到指定 LLM
+./sproxy admin llm bind --group <name> --target <url>      # 将分组绑定到指定 LLM
+./sproxy admin llm unbind <username>                       # 解除用户绑定
+./sproxy admin llm distribute                              # 均分所有活跃用户到所有 target
+```
+
+### 统计与审计
+```bash
+./sproxy admin stats                                       # 全局统计（最近 7 天）
+./sproxy admin stats --user <username>                     # 指定用户统计
+./sproxy admin stats --days 30                             # 最近 30 天
+./sproxy admin token revoke <username>                     # 吊销用户的刷新 token
+```
+
+### API Key 管理（LLM 提供商密钥）
+```bash
+./sproxy admin apikey list                                 # 列出已配置的 API keys
+./sproxy admin apikey add <name> --key <value> --provider anthropic
+./sproxy admin apikey revoke <name>
+```
+
+## 常见场景处理
+
+### 新用户入职
+1. 创建用户: `./sproxy admin user add <name> --password <pw> --group <group>`
+2. 如需专属 LLM: `./sproxy admin llm bind <name> --target <url>`
+3. 验证: `./sproxy admin user list`
+
+### 用户超额/限速
+1. 查看用量: `./sproxy admin stats --user <name>`
+2. 查看分组配额: `./sproxy admin group list`
+3. 调整配额: `./sproxy admin group set-quota <group> --daily <n>`
+4. 或吊销 token 强制重新登录: `./sproxy admin token revoke <name>`
+
+### LLM 目标故障/切换
+1. 查看健康状态: `./sproxy admin llm targets`
+2. 重新均分用户: `./sproxy admin llm distribute`
+3. 验证分布: `./sproxy admin llm list`
+
+### 新增 LLM Target
+1. 编辑 `sproxy.yaml`，在 `llm.targets` 添加新条目（需重启 sproxy）
+2. 重启后均分: `./sproxy admin llm distribute`
+
+### 查询某用户路由到哪个 LLM
+1. `./sproxy admin llm list` → 找对应用户行
+2. 若无用户绑定，检查其分组绑定: `./sproxy admin llm list`（看 GROUP 行）
+3. 若无绑定，由负载均衡自动分配
+
+## 配置文件结构速查 (sproxy.yaml)
+
+```yaml
+server:
+  addr: ":9000"
+  jwt_secret: "..."
+
+database:
+  path: "./pairproxy.db"
+
+llm:
+  max_retries: 2              # 上游失败重试次数
+  recovery_delay: 60s         # 熔断后自动恢复时间
+  targets:
+    - url: "https://api.anthropic.com"
+      api_key: "sk-ant-..."
+      provider: "anthropic"
+      name: "主节点"
+      weight: 1
+      health_check_path: ""   # 空=被动检查
+
+dashboard:
+  enabled: true               # Web 管理界面
+  admin_password: "..."
+```
+
+## 注意事项
+
+- **所有命令需要在项目目录下运行**（有 sproxy.yaml 的目录）
+- **`--config` 可指定配置文件路径**，默认读 `./sproxy.yaml`
+- **配额单位是 token 数**（Anthropic API 的 input+output tokens 之和）
+- **LLM 绑定优先级**: 用户绑定 > 分组绑定 > 负载均衡自动选择
+- **均分操作会覆盖现有用户级绑定**，分组绑定不受影响
+
+## 详细文档
+
+- 完整手册: `docs/manual.md`
+- API 参考: sproxy 运行时访问 `/dashboard/` 查看 Web 界面

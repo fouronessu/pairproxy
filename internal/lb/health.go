@@ -24,6 +24,7 @@ const (
 // 主动检查：每隔 interval 对每个节点发 GET /health，200 视为健康。
 // 被动熔断：调用方通过 RecordSuccess/RecordFailure 上报结果，
 // 连续 failThreshold 次失败后将节点标记为不健康。
+// 自动恢复：recoveryDelay > 0 时，节点进入不健康状态后自动在 recoveryDelay 后恢复（半开状态）。
 type HealthChecker struct {
 	balancer      Balancer
 	client        *http.Client
@@ -33,6 +34,8 @@ type HealthChecker struct {
 	healthPath    string
 	failThreshold int
 	notifier      *alert.Notifier // 可选，nil 时不发告警
+	recoveryDelay time.Duration   // 0=禁用自动恢复；>0=熔断后自动恢复延迟
+	healthPaths   map[string]string // targetID → health check path（空=跳过主动检查）
 
 	mu       sync.Mutex
 	failures map[string]int // 连续失败计数
@@ -64,6 +67,25 @@ func WithHealthPath(p string) HealthCheckerOption {
 	return func(h *HealthChecker) { h.healthPath = p }
 }
 
+// WithRecoveryDelay 设置熔断后自动恢复延迟（默认 0=禁用）。
+// 当节点被标记为不健康后，经过 d 时长会自动重置为健康（半开状态）；
+// 若下次真实请求依然失败，节点会再次进入不健康状态。
+func WithRecoveryDelay(d time.Duration) HealthCheckerOption {
+	return func(h *HealthChecker) { h.recoveryDelay = d }
+}
+
+// WithHealthPaths 设置各 target 的主动健康检查路径（targetID → path）。
+// 无 path 或 path 为空的 target 在主动检查循环中跳过；仅使用被动熔断。
+// 此 option 优先级高于 WithHealthPath（对有显式 path 的 target）。
+func WithHealthPaths(paths map[string]string) HealthCheckerOption {
+	return func(h *HealthChecker) {
+		h.healthPaths = make(map[string]string, len(paths))
+		for k, v := range paths {
+			h.healthPaths[k] = v
+		}
+	}
+}
+
 // NewHealthChecker 创建并返回 HealthChecker。
 func NewHealthChecker(balancer Balancer, logger *zap.Logger, opts ...HealthCheckerOption) *HealthChecker {
 	hc := &HealthChecker{
@@ -75,6 +97,7 @@ func NewHealthChecker(balancer Balancer, logger *zap.Logger, opts ...HealthCheck
 		failThreshold: defaultFailThreshold,
 		failures:      make(map[string]int),
 		client:        &http.Client{Timeout: defaultCheckTimeout},
+		healthPaths:   make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(hc)
@@ -113,12 +136,25 @@ func (hc *HealthChecker) loop(ctx context.Context) {
 func (hc *HealthChecker) checkAll() {
 	targets := hc.balancer.Targets()
 	for _, t := range targets {
-		hc.checkOne(t)
+		// 若 healthPaths 非空，仅检查其中有路径的 target
+		if len(hc.healthPaths) > 0 {
+			path, ok := hc.healthPaths[t.ID]
+			if !ok || path == "" {
+				continue // 无主动检查路径，依赖被动熔断
+			}
+			hc.checkOneWithPath(t, path)
+		} else {
+			hc.checkOne(t)
+		}
 	}
 }
 
 func (hc *HealthChecker) checkOne(t Target) {
-	url := t.Addr + hc.healthPath
+	hc.checkOneWithPath(t, hc.healthPath)
+}
+
+func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string) {
+	url := t.Addr + healthPath
 	resp, err := hc.client.Get(url) //nolint:noctx
 	if err != nil {
 		hc.logger.Debug("health check failed",
@@ -192,6 +228,25 @@ func (hc *HealthChecker) recordFailure(id string) {
 					"failures": strconv.Itoa(count),
 				},
 			})
+		}
+		// 自动恢复（半开状态）：经过 recoveryDelay 后自动重置为健康
+		if hc.recoveryDelay > 0 {
+			go func() {
+				time.Sleep(hc.recoveryDelay)
+				hc.mu.Lock()
+				// 若失败计数已被 RecordSuccess 重置（表示已被另一路径恢复），跳过
+				if hc.failures[id] < hc.failThreshold {
+					hc.mu.Unlock()
+					return
+				}
+				hc.failures[id] = 0
+				hc.mu.Unlock()
+				hc.balancer.MarkHealthy(id)
+				hc.logger.Info("target auto-recovered after delay",
+					zap.String("target", id),
+					zap.Duration("recovery_delay", hc.recoveryDelay),
+				)
+			}()
 		}
 	} else {
 		hc.logger.Debug("target failure recorded",

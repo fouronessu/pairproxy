@@ -177,10 +177,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 			URL:      t.URL,
 			APIKey:   t.APIKey,
 			Provider: t.Provider,
+			Name:     t.Name,
+			Weight:   t.Weight,
 		})
 		logger.Info("LLM target configured",
 			zap.String("url", t.URL),
+			zap.String("name", t.Name),
 			zap.String("provider", t.Provider),
+			zap.Int("weight", t.Weight),
 		)
 	}
 
@@ -286,6 +290,56 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("create sproxy: %w", err)
+	}
+
+	// ---------------------------------------------------------------------------
+	// LLM 负载均衡 + 健康检查 + 绑定解析（可靠性特性）
+	// ---------------------------------------------------------------------------
+
+	{
+		// 构建 LLM lb.Target 列表（ID = URL，Weight 来自配置）
+		lbLLMTargets := make([]lb.Target, 0, len(cfg.LLM.Targets))
+		healthPaths := make(map[string]string, len(cfg.LLM.Targets))
+		for _, t := range cfg.LLM.Targets {
+			w := t.Weight
+			if w <= 0 {
+				w = 1
+			}
+			lbLLMTargets = append(lbLLMTargets, lb.Target{
+				ID:      t.URL,
+				Addr:    t.URL,
+				Weight:  w,
+				Healthy: true,
+			})
+			if t.HealthCheckPath != "" {
+				healthPaths[t.URL] = t.HealthCheckPath
+			}
+		}
+
+		llmBalancer := lb.NewWeightedRandom(lbLLMTargets)
+		hcOpts := []lb.HealthCheckerOption{
+			lb.WithFailThreshold(3),
+			lb.WithInterval(30 * time.Second),
+		}
+		if cfg.LLM.RecoveryDelay > 0 {
+			hcOpts = append(hcOpts, lb.WithRecoveryDelay(cfg.LLM.RecoveryDelay))
+		}
+		if len(healthPaths) > 0 {
+			hcOpts = append(hcOpts, lb.WithHealthPaths(healthPaths))
+		}
+
+		llmHC := lb.NewHealthChecker(llmBalancer, logger, hcOpts...)
+		llmHC.Start(ctx)
+
+		sp.SetLLMHealthChecker(llmBalancer, llmHC)
+		sp.SetMaxRetries(cfg.LLM.MaxRetries)
+
+		logger.Info("LLM balancer configured",
+			zap.Int("targets", len(lbLLMTargets)),
+			zap.Int("max_retries", cfg.LLM.MaxRetries),
+			zap.Duration("recovery_delay", cfg.LLM.RecoveryDelay),
+			zap.Int("health_check_paths", len(healthPaths)),
+		)
 	}
 
 	// ---------------------------------------------------------------------------
@@ -431,6 +485,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 		logger.Info("F-5: dynamic api key management enabled")
 	}
 
+	// LLM 绑定仓库 + 绑定解析器
+	llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+	sp.SetBindingResolver(func(userID, groupID string) (string, bool) {
+		targetURL, found, err := llmBindingRepo.FindForUser(userID, groupID)
+		if err != nil {
+			logger.Warn("llm binding lookup failed", zap.Error(err))
+			return "", false
+		}
+		return targetURL, found
+	})
+	adminHandler.SetLLMBindingRepo(llmBindingRepo)
+	adminHandler.SetLLMHealthFn(sp.LLMTargetStatuses)
+	logger.Info("LLM binding repo configured")
+
 	// ---------------------------------------------------------------------------
 	// 注册路由
 	// ---------------------------------------------------------------------------
@@ -445,6 +513,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// 管理 REST API
 	adminHandler.RegisterRoutes(mux)
+	adminHandler.RegisterLLMRoutes(mux)
 	logger.Info("admin API registered at /api/admin/")
 
 	// 集群内部 API（仅 primary）
@@ -466,6 +535,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			logger, jwtMgr, userRepo, groupRepo, usageRepo, auditRepo,
 			cfg.Admin.PasswordHash, adminTokenTTL,
 		)
+		dashHandler.SetLLMDeps(llmBindingRepo, sp.LLMTargetStatuses)
 		dashHandler.RegisterRoutes(mux)
 		logger.Info("dashboard registered at /dashboard/")
 	}
@@ -617,7 +687,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminExportCmd, adminApikeyCmd)
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
@@ -1715,4 +1785,248 @@ var adminApikeyRevokeCmd = &cobra.Command{
 
 func init() {
 	adminApikeyCmd.AddCommand(adminApikeyAddCmd, adminApikeyListCmd, adminApikeyAssignCmd, adminApikeyRevokeCmd)
+}
+
+// ---------------------------------------------------------------------------
+// admin llm — LLM binding 子命令
+// ---------------------------------------------------------------------------
+
+var adminLLMCmd = &cobra.Command{
+	Use:   "llm",
+	Short: "Manage LLM target bindings",
+}
+
+// --- llm targets ---
+
+var adminLLMTargetsCmd = &cobra.Command{
+	Use:   "targets",
+	Short: "List all configured LLM targets (reads from config; no live health info in CLI mode)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		_, _, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+		bindings, err := llmBindingRepo.List()
+		if err != nil {
+			return fmt.Errorf("list bindings: %w", err)
+		}
+		boundCount := map[string]int{}
+		for _, b := range bindings {
+			boundCount[b.TargetURL]++
+		}
+
+		fmt.Printf("%-50s %-10s %-8s %s\n", "TARGET URL", "PROVIDER", "WEIGHT", "BOUND_USERS")
+		for _, t := range cfg.LLM.Targets {
+			w := t.Weight
+			if w <= 0 {
+				w = 1
+			}
+			prov := t.Provider
+			if prov == "" {
+				prov = "anthropic"
+			}
+			fmt.Printf("%-50s %-10s %-8d %d\n", t.URL, prov, w, boundCount[t.URL])
+		}
+		return nil
+	},
+}
+
+// --- llm bind ---
+
+var (
+	llmBindTarget string
+	llmBindGroup  string
+)
+
+var adminLLMBindCmd = &cobra.Command{
+	Use:   "bind <username-or-user-id>",
+	Short: "Bind a user (or group) to a specific LLM target",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		userRepo, _, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		if llmBindTarget == "" {
+			return fmt.Errorf("--target is required")
+		}
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+
+		if llmBindGroup != "" {
+			// 分组绑定
+			groupRepo := db.NewGroupRepo(database, logger)
+			g, err := groupRepo.GetByName(llmBindGroup)
+			if err != nil || g == nil {
+				return fmt.Errorf("group %q not found", llmBindGroup)
+			}
+			if err := llmBindingRepo.Set(llmBindTarget, nil, &g.ID); err != nil {
+				return fmt.Errorf("bind group: %w", err)
+			}
+			fmt.Printf("Group %q bound to %s\n", llmBindGroup, llmBindTarget)
+			return nil
+		}
+
+		if len(args) == 0 {
+			return fmt.Errorf("username or --group is required")
+		}
+		// 用户绑定
+		u, err := userRepo.GetByUsername(args[0])
+		if err != nil || u == nil {
+			return fmt.Errorf("user %q not found", args[0])
+		}
+		if err := llmBindingRepo.Set(llmBindTarget, &u.ID, nil); err != nil {
+			return fmt.Errorf("bind user: %w", err)
+		}
+		fmt.Printf("User %q bound to %s\n", args[0], llmBindTarget)
+		return nil
+	},
+}
+
+func init() {
+	adminLLMBindCmd.Flags().StringVar(&llmBindTarget, "target", "", "LLM target URL to bind to")
+	adminLLMBindCmd.Flags().StringVar(&llmBindGroup, "group", "", "group name (instead of user)")
+}
+
+// --- llm unbind ---
+
+var adminLLMUnbindCmd = &cobra.Command{
+	Use:   "unbind <username>",
+	Short: "Remove user-level LLM binding",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		userRepo, _, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		u, err := userRepo.GetByUsername(args[0])
+		if err != nil || u == nil {
+			return fmt.Errorf("user %q not found", args[0])
+		}
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+		bindings, err := llmBindingRepo.List()
+		if err != nil {
+			return fmt.Errorf("list bindings: %w", err)
+		}
+		deleted := 0
+		for _, b := range bindings {
+			if b.UserID != nil && *b.UserID == u.ID {
+				if err := llmBindingRepo.Delete(b.ID); err != nil {
+					return fmt.Errorf("delete binding: %w", err)
+				}
+				deleted++
+			}
+		}
+		if deleted == 0 {
+			fmt.Printf("No binding found for user %q\n", args[0])
+		} else {
+			fmt.Printf("Removed %d binding(s) for user %q\n", deleted, args[0])
+		}
+		return nil
+	},
+}
+
+// --- llm distribute ---
+
+var adminLLMDistributeCmd = &cobra.Command{
+	Use:   "distribute",
+	Short: "Evenly distribute all active users across LLM targets (round-robin)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		userRepo, _, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		var targetURLs []string
+		for _, t := range cfg.LLM.Targets {
+			targetURLs = append(targetURLs, t.URL)
+		}
+		if len(targetURLs) == 0 {
+			return fmt.Errorf("no LLM targets configured in %s", cfgPath)
+		}
+
+		users, err := userRepo.ListByGroup("")
+		if err != nil {
+			return fmt.Errorf("list users: %w", err)
+		}
+		var userIDs []string
+		for _, u := range users {
+			if u.IsActive {
+				userIDs = append(userIDs, u.ID)
+			}
+		}
+
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+		if err := llmBindingRepo.EvenDistribute(userIDs, targetURLs); err != nil {
+			return fmt.Errorf("distribute: %w", err)
+		}
+		fmt.Printf("Distributed %d user(s) across %d target(s)\n", len(userIDs), len(targetURLs))
+		return nil
+	},
+}
+
+// --- llm list ---
+
+var adminLLMListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all LLM bindings",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		_, _, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+		bindings, err := llmBindingRepo.List()
+		if err != nil {
+			return fmt.Errorf("list: %w", err)
+		}
+		if len(bindings) == 0 {
+			fmt.Println("No LLM bindings configured.")
+			return nil
+		}
+		fmt.Printf("%-36s %-15s %-30s %s\n", "ID", "TYPE", "SUBJECT", "TARGET URL")
+		for _, b := range bindings {
+			bindType := "group"
+			subject := ""
+			if b.UserID != nil {
+				bindType = "user"
+				subject = *b.UserID
+			} else if b.GroupID != nil {
+				subject = *b.GroupID
+			}
+			fmt.Printf("%-36s %-15s %-30s %s\n", b.ID, bindType, subject, b.TargetURL)
+		}
+		return nil
+	},
+}
+
+func init() {
+	adminLLMCmd.AddCommand(adminLLMTargetsCmd, adminLLMBindCmd, adminLLMUnbindCmd, adminLLMDistributeCmd, adminLLMListCmd)
 }

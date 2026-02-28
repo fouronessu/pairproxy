@@ -92,6 +92,17 @@ type AuditLog struct {
 	CreatedAt time.Time `gorm:"index"`
 }
 
+// LLMBinding 用户或分组与特定 LLM target 的绑定关系。
+// 用于将请求路由到指定 LLM 上游，支持精细化流量分配。
+// 优先级：用户级绑定 > 分组级绑定 > 负载均衡。
+type LLMBinding struct {
+	ID        string     `gorm:"primarykey"`
+	TargetURL string     `gorm:"not null;index"` // LLM target URL（与 config.LLMTarget.URL 匹配）
+	UserID    *string    `gorm:"index"`          // 用户级绑定（优先，与 GroupID 互斥使用）
+	GroupID   *string    `gorm:"index"`          // 分组级绑定（兜底）
+	CreatedAt time.Time
+}
+
 // TableName 方法（可选，用于显式指定表名）
 func (Group) TableName() string           { return "groups" }
 func (User) TableName() string            { return "users" }
@@ -101,3 +112,4 @@ func (Peer) TableName() string            { return "peers" }
 func (AuditLog) TableName() string        { return "audit_logs" }
 func (APIKey) TableName() string          { return "api_keys" }
 func (APIKeyAssignment) TableName() string { return "api_key_assignments" }
+func (LLMBinding) TableName() string      { return "llm_bindings" }
