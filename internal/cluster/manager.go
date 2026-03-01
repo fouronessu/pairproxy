@@ -77,15 +77,36 @@ func (m *Manager) MarkUnhealthy(id string) {
 	m.rebuildFromBalancer()
 }
 
+// DrainNode 将指定节点设为排水模式（不接受新流量）。
+// 排水模式下，节点仍保持健康状态，但负载均衡器会跳过该节点。
+func (m *Manager) DrainNode(id string) {
+	m.balancer.SetDraining(id, true)
+	m.rebuildFromBalancer()
+	m.logger.Info("node entered drain mode", zap.String("node_id", id))
+}
+
+// UndrainNode 恢复节点正常模式（重新接受流量）。
+func (m *Manager) UndrainNode(id string) {
+	m.balancer.SetDraining(id, false)
+	m.rebuildFromBalancer()
+	m.logger.Info("node exited drain mode", zap.String("node_id", id))
+}
+
+// IsDraining 检查节点是否处于排水模式。
+func (m *Manager) IsDraining(id string) bool {
+	return m.balancer.IsDraining(id)
+}
+
 // applyTargets 将 lb.Target 列表同步到 RoutingTable，版本递增。
 func (m *Manager) applyTargets(targets []lb.Target) {
 	entries := make([]RoutingEntry, len(targets))
 	for i, t := range targets {
 		entries[i] = RoutingEntry{
-			ID:      t.ID,
-			Addr:    t.Addr,
-			Weight:  t.Weight,
-			Healthy: t.Healthy,
+			ID:       t.ID,
+			Addr:     t.Addr,
+			Weight:   t.Weight,
+			Healthy:  t.Healthy,
+			Draining: t.Draining,
 		}
 	}
 
@@ -103,10 +124,11 @@ func (m *Manager) rebuildFromBalancer() {
 	entries := make([]RoutingEntry, len(targets))
 	for i, t := range targets {
 		entries[i] = RoutingEntry{
-			ID:      t.ID,
-			Addr:    t.Addr,
-			Weight:  t.Weight,
-			Healthy: t.Healthy,
+			ID:       t.ID,
+			Addr:     t.Addr,
+			Weight:   t.Weight,
+			Healthy:  t.Healthy,
+			Draining: t.Draining,
 		}
 	}
 

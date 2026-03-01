@@ -32,6 +32,9 @@ type Handler struct {
 	tokenTTL          time.Duration
 	llmBindingRepo    *db.LLMBindingRepo             // 可选，LLM 绑定管理
 	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
+	drainFn           func() error                   // 可选，进入排水模式
+	undrainFn         func() error                   // 可选，退出排水模式
+	drainStatusFn     func() proxy.DrainStatus       // 可选，查询排水状态
 }
 
 // SetTokenRepo 设置 RefreshTokenRepo（用于 token 吊销操作）
@@ -88,12 +91,27 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /dashboard/llm/bindings", h.requireSession(http.HandlerFunc(h.handleLLMCreateBinding)))
 	mux.Handle("POST /dashboard/llm/bindings/{id}/delete", h.requireSession(http.HandlerFunc(h.handleLLMDeleteBinding)))
 	mux.Handle("POST /dashboard/llm/distribute", h.requireSession(http.HandlerFunc(h.handleLLMDistribute)))
+
+	// 排水控制（可选，需设置 drainFn）
+	mux.Handle("POST /dashboard/drain/enter", h.requireSession(http.HandlerFunc(h.handleDrainEnter)))
+	mux.Handle("POST /dashboard/drain/exit", h.requireSession(http.HandlerFunc(h.handleDrainExit)))
 }
 
 // SetLLMDeps 设置 LLM 绑定相关依赖（可选；不设置则 LLM 页面显示空状态）。
 func (h *Handler) SetLLMDeps(repo *db.LLMBindingRepo, healthFn func() []proxy.LLMTargetStatus) {
 	h.llmBindingRepo = repo
 	h.llmHealthFn = healthFn
+}
+
+// SetDrainFunctions 设置排水控制函数（可选；不设置则 drain 按钮不显示）。
+func (h *Handler) SetDrainFunctions(
+	drainFn func() error,
+	undrainFn func() error,
+	drainStatusFn func() proxy.DrainStatus,
+) {
+	h.drainFn = drainFn
+	h.undrainFn = undrainFn
+	h.drainStatusFn = drainStatusFn
 }
 
 // ---------------------------------------------------------------------------

@@ -245,3 +245,106 @@ systemctl start sproxy
 sqlite3 pairproxy.db ".tables"
 # 应包含: audit_logs groups peers refresh_tokens usage_logs users
 ```
+
+---
+
+## 滚动升级（零停机）
+
+多节点集群支持通过排水（Drain）机制实现零停机滚动升级。
+
+### 滚动升级原理
+
+排水模式允许节点优雅下线：
+1. 节点进入排水模式后，不再接受新请求
+2. 正在处理的请求继续完成
+3. 当活跃请求数归零后，可安全停止节点
+4. 升级完成后恢复正常模式
+
+### 单节点升级流程
+
+```bash
+# 1. 备份数据库
+cp pairproxy.db pairproxy.db.bak
+
+# 2. 进入排水模式
+./sproxy admin drain enter
+
+# 3. 等待活跃请求归零
+./sproxy admin drain wait --timeout 60s
+
+# 4. 停止服务
+systemctl stop sproxy
+
+# 5. 替换二进制
+cp sproxy-new /usr/local/bin/sproxy
+
+# 6. 启动服务
+systemctl start sproxy
+
+# 7. 验证
+curl http://localhost:9000/health
+```
+
+### 多节点集群升级流程
+
+假设有 primary (sp-1) 和多个 worker (sp-2, sp-3)：
+
+```bash
+# ===== 升级 worker 节点（逐个进行）=====
+
+# 在 sp-2 上执行：
+./sproxy admin drain enter
+./sproxy admin drain wait --timeout 120s
+systemctl stop sproxy
+cp sproxy-new /usr/local/bin/sproxy
+systemctl start sproxy
+curl http://localhost:9000/health
+
+# 在 sp-3 上重复相同步骤...
+
+# ===== 升级 primary 节点 =====
+
+# 在 sp-1 上执行：
+./sproxy admin drain enter
+./sproxy admin drain wait --timeout 120s
+systemctl stop sproxy
+cp sproxy-new /usr/local/bin/sproxy
+systemctl start sproxy
+curl http://localhost:9000/health
+```
+
+### 排水命令详解
+
+| 命令 | 说明 |
+|------|------|
+| `sproxy admin drain enter` | 进入排水模式 |
+| `sproxy admin drain exit` | 退出排水模式 |
+| `sproxy admin drain status` | 查看排水状态和活跃请求数 |
+| `sproxy admin drain wait --timeout 60s` | 等待活跃请求归零 |
+
+### 通过 REST API 操作
+
+```bash
+# 进入排水模式
+curl -X POST http://localhost:9000/api/admin/drain \
+  -H "Authorization: Bearer <admin-token>"
+
+# 查看状态
+curl http://localhost:9000/api/admin/drain/status \
+  -H "Authorization: Bearer <admin-token>"
+
+# 退出排水模式
+curl -X POST http://localhost:9000/api/admin/undrain \
+  -H "Authorization: Bearer <admin-token>"
+```
+
+### 通过 Dashboard 操作
+
+访问 `/dashboard/` → LLM 管理 → 节点列表 → 点击 "Drain" 按钮
+
+### 注意事项
+
+1. **确保至少有一个健康节点**：排水期间其他节点应能承接流量
+2. **设置合理的超时**：`drain wait --timeout` 避免无限等待
+3. **长连接请求**：SSE 流式请求可能需要较长时间完成
+4. **自动恢复**：节点重启后自动退出排水模式

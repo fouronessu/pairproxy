@@ -480,7 +480,70 @@ Natural language: "validate config", "check config", "test configuration", "is c
 
 ---
 
-## 12. Other Top-level Commands
+## 12. Drain Mode Management (Rolling Upgrades)
+
+Drain mode allows graceful shutdown of a node for zero-downtime rolling upgrades.
+When a node is in drain mode, it stops accepting new requests but continues
+processing existing requests.
+
+### 12.1 Enter drain mode
+
+` + bq + `sproxy admin drain enter` + bq + `
+
+Puts the local node into drain mode. The node will:
+- Stop accepting new requests from the load balancer
+- Continue processing existing requests
+- Update the cluster routing table to notify other nodes
+
+Natural language: "enter drain mode", "drain node", "stop accepting traffic", "prepare for shutdown"
+
+---
+
+### 12.2 Exit drain mode (undrain)
+
+` + bq + `sproxy admin drain exit` + bq + `
+
+Returns the node to normal operation, accepting new traffic.
+
+Natural language: "exit drain mode", "undrain", "resume traffic", "accept requests again"
+
+---
+
+### 12.3 Check drain status
+
+` + bq + `sproxy admin drain status` + bq + `
+
+Shows current drain state and active request count.
+
+Output example:
+  Status: DRAINING
+  Active requests: 5
+  Drain started: 2026-03-01T18:00:00Z
+
+Natural language: "drain status", "check drain", "is node draining", "how many active requests"
+
+---
+
+### 12.4 Wait for drain completion
+
+` + bq + `sproxy admin drain wait [--timeout <duration>]` + bq + `
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| ` + bq + `--timeout` + bq + ` | 0 (no limit) | Maximum time to wait (e.g., 60s, 5m) |
+
+Blocks until active requests reach zero, then returns.
+Useful for scripting rolling upgrades.
+
+Examples:
+  sproxy admin drain wait --timeout 120s
+  sproxy admin drain wait --timeout 5m
+
+Natural language: "wait for drain", "wait until no requests", "block until drained"
+
+---
+
+## 13. Other Top-level Commands
 
 ### hash-password
 
@@ -545,5 +608,9 @@ Natural language: "start server", "start sproxy", "run the proxy"
 | Backup database | sproxy admin backup --output backup.db |
 | Restore database from file | sproxy admin restore backup.db |
 | Validate configuration file | sproxy admin validate |
+| Enter drain mode | sproxy admin drain enter |
+| Exit drain mode | sproxy admin drain exit |
+| Check drain status | sproxy admin drain status |
+| Wait for drain completion | sproxy admin drain wait --timeout 60s |
 | Hash a new admin password | sproxy hash-password |
 `

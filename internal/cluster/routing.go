@@ -13,10 +13,11 @@ const routingCacheFile = "routing-cache.json"
 
 // RoutingEntry 单个 s-proxy 节点的路由信息。
 type RoutingEntry struct {
-	ID      string `json:"id"`
-	Addr    string `json:"addr"`
-	Weight  int    `json:"weight"`
-	Healthy bool   `json:"healthy"`
+	ID       string `json:"id"`
+	Addr     string `json:"addr"`
+	Weight   int    `json:"weight"`
+	Healthy  bool   `json:"healthy"`
+	Draining bool   `json:"draining"` // 是否处于排水模式（不接受新流量）
 }
 
 // RoutingTable 路由表（版本化）。

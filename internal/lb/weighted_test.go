@@ -163,3 +163,138 @@ func TestTargetsSnapshot(t *testing.T) {
 	}
 	_ = got
 }
+
+// ---------------------------------------------------------------------------
+// Drain tests
+// ---------------------------------------------------------------------------
+
+func TestSetDraining(t *testing.T) {
+	b := NewWeightedRandom([]Target{
+		{ID: "a", Addr: "http://a", Weight: 1, Healthy: true},
+		{ID: "b", Addr: "http://b", Weight: 1, Healthy: true},
+	})
+
+	// 初始状态：两个节点都可用
+	for i := 0; i < 10; i++ {
+		got, err := b.Pick()
+		if err != nil {
+			t.Fatalf("Pick: %v", err)
+		}
+		if got.ID != "a" && got.ID != "b" {
+			t.Errorf("got unexpected ID %q", got.ID)
+		}
+	}
+
+	// 设置 a 为排水模式
+	b.SetDraining("a", true)
+	if !b.IsDraining("a") {
+		t.Error("IsDraining('a') = false, want true")
+	}
+	if b.IsDraining("b") {
+		t.Error("IsDraining('b') = true, want false")
+	}
+
+	// 现在 a 应该被跳过
+	for i := 0; i < 10; i++ {
+		got, err := b.Pick()
+		if err != nil {
+			t.Fatalf("Pick after drain: %v", err)
+		}
+		if got.ID != "b" {
+			t.Errorf("got %q, want 'b' (drained node 'a' should be skipped)", got.ID)
+		}
+	}
+
+	// 恢复 a
+	b.SetDraining("a", false)
+	if b.IsDraining("a") {
+		t.Error("IsDraining('a') = true, want false after undrain")
+	}
+
+	// a 应该重新参与负载均衡
+	sawA := false
+	for i := 0; i < 50; i++ {
+		got, _ := b.Pick()
+		if got.ID == "a" {
+			sawA = true
+			break
+		}
+	}
+	if !sawA {
+		t.Error("expected 'a' to be picked after undrain, but never selected in 50 tries")
+	}
+}
+
+func TestAllDraining(t *testing.T) {
+	b := NewWeightedRandom([]Target{
+		{ID: "a", Addr: "http://a", Weight: 1, Healthy: true},
+		{ID: "b", Addr: "http://b", Weight: 1, Healthy: true},
+	})
+
+	// 所有节点都进入排水模式
+	b.SetDraining("a", true)
+	b.SetDraining("b", true)
+
+	_, err := b.Pick()
+	if err != ErrNoHealthyTarget {
+		t.Errorf("Pick() error = %v, want ErrNoHealthyTarget when all targets draining", err)
+	}
+}
+
+func TestDrainingAndUnhealthy(t *testing.T) {
+	b := NewWeightedRandom([]Target{
+		{ID: "a", Addr: "http://a", Weight: 1, Healthy: true, Draining: true},
+		{ID: "b", Addr: "http://b", Weight: 1, Healthy: false},
+		{ID: "c", Addr: "http://c", Weight: 1, Healthy: true},
+	})
+
+	// a 排水，b 不健康，只有 c 可用
+	for i := 0; i < 10; i++ {
+		got, err := b.Pick()
+		if err != nil {
+			t.Fatalf("Pick: %v", err)
+		}
+		if got.ID != "c" {
+			t.Errorf("got %q, want 'c'", got.ID)
+		}
+	}
+}
+
+func TestDrainingNonExistentTarget(t *testing.T) {
+	b := NewWeightedRandom([]Target{
+		{ID: "a", Addr: "http://a", Weight: 1, Healthy: true},
+	})
+
+	// 设置不存在的节点为排水模式（应该是 no-op）
+	b.SetDraining("nonexistent", true)
+
+	// a 仍然可用
+	got, err := b.Pick()
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	if got.ID != "a" {
+		t.Errorf("got %q, want 'a'", got.ID)
+	}
+
+	// 检查不存在的节点
+	if b.IsDraining("nonexistent") {
+		t.Error("IsDraining('nonexistent') = true, want false for unknown target")
+	}
+}
+
+func TestTargetsSnapshotIncludesDraining(t *testing.T) {
+	b := NewWeightedRandom([]Target{
+		{ID: "a", Addr: "http://a", Weight: 1, Healthy: true},
+	})
+
+	b.SetDraining("a", true)
+
+	snap := b.Targets()
+	if len(snap) != 1 {
+		t.Fatalf("Targets() returned %d targets, want 1", len(snap))
+	}
+	if !snap[0].Draining {
+		t.Error("snapshot should show Draining=true for target 'a'")
+	}
+}

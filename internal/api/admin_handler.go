@@ -34,6 +34,9 @@ type AdminHandler struct {
 	encryptFn         func(string) (string, error)  // 可选，加密 API Key 明文
 	llmBindingRepo    *db.LLMBindingRepo            // 可选，LLM 绑定管理
 	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
+	drainFn           func() error                   // 可选，进入排水模式
+	undrainFn         func() error                   // 可选，退出排水模式
+	drainStatusFn     func() proxy.DrainStatus       // 可选，查询排水状态
 	adminPasswordHash string
 	tokenTTL          time.Duration
 }
@@ -68,6 +71,17 @@ func NewAdminHandler(
 func (h *AdminHandler) SetAPIKeyRepo(repo *db.APIKeyRepo, encryptFn func(string) (string, error)) {
 	h.apiKeyRepo = repo
 	h.encryptFn = encryptFn
+}
+
+// SetDrainFunctions 设置排水控制函数（可选；不设置则 drain 端点返回 501）。
+func (h *AdminHandler) SetDrainFunctions(
+	drainFn func() error,
+	undrainFn func() error,
+	drainStatusFn func() proxy.DrainStatus,
+) {
+	h.drainFn = drainFn
+	h.undrainFn = undrainFn
+	h.drainStatusFn = drainStatusFn
 }
 
 // RegisterRoutes 注册管理员路由到 mux
@@ -105,6 +119,11 @@ func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
 
 	// 数据导出（F-2）
 	mux.Handle("GET /api/admin/export", h.RequireAdmin(http.HandlerFunc(h.handleExport)))
+
+	// 排水控制
+	mux.Handle("POST /api/admin/drain", h.RequireAdmin(http.HandlerFunc(h.handleDrain)))
+	mux.Handle("POST /api/admin/undrain", h.RequireAdmin(http.HandlerFunc(h.handleUndrain)))
+	mux.Handle("GET /api/admin/drain/status", h.RequireAdmin(http.HandlerFunc(h.handleDrainStatus)))
 
 	// API Key 管理（F-5）
 	mux.Handle("GET /api/admin/api-keys", h.RequireAdmin(http.HandlerFunc(h.handleListAPIKeys)))
@@ -1168,4 +1187,62 @@ func (h *AdminHandler) handlePurgeLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/drain
+// ---------------------------------------------------------------------------
+
+// POST /api/admin/drain - 进入排水模式
+func (h *AdminHandler) handleDrain(w http.ResponseWriter, r *http.Request) {
+	if h.drainFn == nil {
+		writeJSONError(w, http.StatusNotImplemented, "not_implemented", "drain not configured on this node")
+		return
+	}
+	if err := h.drainFn(); err != nil {
+		h.logger.Error("drain failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to enter drain mode")
+		return
+	}
+	h.logger.Info("admin requested drain mode")
+	if aerr := h.auditRepo.Create("admin", "drain.enter", "local", ""); aerr != nil {
+		h.logger.Warn("audit write failed", zap.Error(aerr))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "draining"})
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/undrain
+// ---------------------------------------------------------------------------
+
+// POST /api/admin/undrain - 退出排水模式
+func (h *AdminHandler) handleUndrain(w http.ResponseWriter, r *http.Request) {
+	if h.undrainFn == nil {
+		writeJSONError(w, http.StatusNotImplemented, "not_implemented", "drain not configured on this node")
+		return
+	}
+	if err := h.undrainFn(); err != nil {
+		h.logger.Error("undrain failed", zap.Error(err))
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to exit drain mode")
+		return
+	}
+	h.logger.Info("admin requested undrain mode")
+	if aerr := h.auditRepo.Create("admin", "drain.exit", "local", ""); aerr != nil {
+		h.logger.Warn("audit write failed", zap.Error(aerr))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "normal"})
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/drain/status
+// ---------------------------------------------------------------------------
+
+// GET /api/admin/drain/status - 查询排水状态
+func (h *AdminHandler) handleDrainStatus(w http.ResponseWriter, r *http.Request) {
+	if h.drainStatusFn == nil {
+		writeJSONError(w, http.StatusNotImplemented, "not_implemented", "drain not configured on this node")
+		return
+	}
+	status := h.drainStatusFn()
+	writeJSON(w, http.StatusOK, status)
 }

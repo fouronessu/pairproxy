@@ -1917,3 +1917,67 @@ curl -XPOST -H "Authorization: Bearer $ADMIN_TOKEN" \
 | `target marked unhealthy` | WARN | 被动熔断触发 |
 | `target recovered` | INFO | 主动健康检查恢复 |
 | `target auto-recovered after delay` | INFO | 半开延迟恢复 |
+
+### 15.7 滚动升级（Drain/Undrain）
+
+多节点集群支持通过排水（Drain）机制实现零停机滚动升级。
+
+#### 概念说明
+
+- **Drain（排水）**：节点进入排水模式后，不再接受新请求，但继续处理现有请求
+- **Undrain（恢复）**：节点恢复正常模式，重新接受流量
+- **Wait（等待）**：阻塞直到活跃请求数归零
+
+#### 通过管理员 CLI
+
+```bash
+# 进入排水模式
+sproxy admin drain enter
+
+# 查看排水状态和活跃请求数
+sproxy admin drain status
+
+# 等待活跃请求归零（最多等 60 秒）
+sproxy admin drain wait --timeout 60s
+
+# 退出排水模式（恢复正常）
+sproxy admin drain exit
+```
+
+#### 通过 REST API
+
+```bash
+# 进入排水模式
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/drain
+
+# 查看状态
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/drain/status
+
+# 退出排水模式
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:9000/api/admin/undrain
+```
+
+#### 滚动升级流程示例
+
+```bash
+# 1. 进入排水模式
+./sproxy admin drain enter
+
+# 2. 等待请求排空
+./sproxy admin drain wait --timeout 120s
+
+# 3. 停止服务
+systemctl stop sproxy
+
+# 4. 替换二进制并启动
+cp sproxy-new /usr/local/bin/sproxy
+systemctl start sproxy
+
+# 5. 验证
+curl http://localhost:9000/health
+```
+
+详细的滚动升级指南请参见 `docs/UPGRADE.md`。

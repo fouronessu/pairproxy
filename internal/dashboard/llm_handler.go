@@ -13,11 +13,12 @@ import (
 // llmPageData LLM 管理页数据
 type llmPageData struct {
 	baseData
-	Targets    []proxy.LLMTargetStatus
-	Bindings   []db.LLMBinding
-	BoundCount map[string]int // target URL → 绑定数量
-	Users      []db.User
-	Groups     []db.Group
+	Targets     []proxy.LLMTargetStatus
+	Bindings    []db.LLMBinding
+	BoundCount  map[string]int // target URL → 绑定数量
+	Users       []db.User
+	Groups      []db.Group
+	DrainStatus proxy.DrainStatus // 排水状态
 }
 
 // handleLLMPage GET /dashboard/llm
@@ -53,6 +54,11 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 	if h.groupRepo != nil {
 		groups, _ := h.groupRepo.List()
 		data.Groups = groups
+	}
+
+	// 获取排水状态
+	if h.drainStatusFn != nil {
+		data.DrainStatus = h.drainStatusFn()
 	}
 
 	h.renderPage(w, "llm.html", data)
@@ -184,4 +190,38 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf)
+}
+
+// ---------------------------------------------------------------------------
+// 排水控制
+// ---------------------------------------------------------------------------
+
+// handleDrainEnter POST /dashboard/drain/enter
+func (h *Handler) handleDrainEnter(w http.ResponseWriter, r *http.Request) {
+	if h.drainFn == nil {
+		http.Redirect(w, r, "/dashboard/llm?error=排水功能未配置", http.StatusSeeOther)
+		return
+	}
+	if err := h.drainFn(); err != nil {
+		h.logger.Error("drain enter failed", zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+	h.logger.Info("drain mode entered via dashboard")
+	http.Redirect(w, r, "/dashboard/llm?flash=已进入排水模式", http.StatusSeeOther)
+}
+
+// handleDrainExit POST /dashboard/drain/exit
+func (h *Handler) handleDrainExit(w http.ResponseWriter, r *http.Request) {
+	if h.undrainFn == nil {
+		http.Redirect(w, r, "/dashboard/llm?error=排水功能未配置", http.StatusSeeOther)
+		return
+	}
+	if err := h.undrainFn(); err != nil {
+		h.logger.Error("drain exit failed", zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+	h.logger.Info("drain mode exited via dashboard")
+	http.Redirect(w, r, "/dashboard/llm?flash=已退出排水模式", http.StatusSeeOther)
 }

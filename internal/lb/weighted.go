@@ -19,14 +19,15 @@ func NewWeightedRandom(targets []Target) *WeightedRandomBalancer {
 }
 
 // Pick 按权重随机选取一个健康节点。
+// 跳过 Draining=true 的节点（排水模式不接受新流量）。
 func (b *WeightedRandomBalancer) Pick() (*Target, error) {
 	b.tl.mu.RLock()
 	defer b.tl.mu.RUnlock()
 
-	// 计算健康节点总权重
+	// 计算健康且非排水节点的总权重
 	total := 0
 	for i := range b.tl.targets {
-		if b.tl.targets[i].Healthy {
+		if b.tl.targets[i].Healthy && !b.tl.targets[i].Draining {
 			total += b.tl.targets[i].Weight
 		}
 	}
@@ -38,7 +39,7 @@ func (b *WeightedRandomBalancer) Pick() (*Target, error) {
 	r := rand.IntN(total)
 	for i := range b.tl.targets {
 		t := &b.tl.targets[i]
-		if !t.Healthy {
+		if !t.Healthy || t.Draining {
 			continue
 		}
 		r -= t.Weight
@@ -51,7 +52,7 @@ func (b *WeightedRandomBalancer) Pick() (*Target, error) {
 
 	// 理论上不应到达（浮点/整数边界保护）
 	for i := range b.tl.targets {
-		if b.tl.targets[i].Healthy {
+		if b.tl.targets[i].Healthy && !b.tl.targets[i].Draining {
 			cp := b.tl.targets[i]
 			return &cp, nil
 		}
@@ -77,6 +78,17 @@ func (b *WeightedRandomBalancer) MarkUnhealthy(id string) {
 // Targets 返回当前目标列表的快照。
 func (b *WeightedRandomBalancer) Targets() []Target {
 	return b.tl.snapshot()
+}
+
+// SetDraining 设置节点的排水状态。
+// draining=true 时，节点不接受新流量（Pick 会跳过该节点）。
+func (b *WeightedRandomBalancer) SetDraining(id string, draining bool) {
+	b.tl.setDraining(id, draining)
+}
+
+// IsDraining 检查节点是否处于排水模式。
+func (b *WeightedRandomBalancer) IsDraining(id string) bool {
+	return b.tl.isDraining(id)
 }
 
 // normalizeWeights 将 Weight ≤ 0 的节点权重修正为 1。

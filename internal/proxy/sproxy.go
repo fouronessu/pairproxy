@@ -46,6 +46,7 @@ type LLMTargetStatus struct {
 	Provider string
 	Weight   int
 	Healthy  bool
+	Draining bool // 是否处于排水模式
 }
 
 // SProxy s-proxy 核心处理器
@@ -63,6 +64,11 @@ type SProxy struct {
 	activeRequests  atomic.Int64     // 当前正在处理的代理请求数
 	sqlDB           *sql.DB          // 可选，用于 /health 检查 DB 可达性
 	apiKeyResolver  func(userID string) (apiKey string, found bool) // 可选，动态 API Key 解析
+
+	// 排水模式控制
+	draining     atomic.Bool   // 排水模式标志
+	drainReason  string        // 排水原因（用于日志和状态查询）
+	drainStarted time.Time     // 排水开始时间
 
 	// LLM 均衡 + 绑定（可选）
 	llmBalancer     *lb.WeightedRandomBalancer                       // 加权随机负载均衡
@@ -164,6 +170,76 @@ func (sp *SProxy) SetTransport(t http.RoundTripper) {
 	sp.transport = t
 }
 
+// Drain 进入排水模式。
+// 排水模式下，节点仍可处理现有请求，但不再接受新流量（通过集群路由表通知其他节点）。
+func (sp *SProxy) Drain() error {
+	if sp.draining.Load() {
+		return nil // 已经在排水模式
+	}
+	sp.draining.Store(true)
+	sp.drainStarted = time.Now()
+	sp.drainReason = "admin requested"
+
+	sp.logger.Info("node entering drain mode",
+		zap.Int64("active_requests", sp.activeRequests.Load()),
+	)
+
+	// 如果有集群管理器，通知其他节点
+	if sp.clusterMgr != nil && sp.sourceNode != "" {
+		sp.clusterMgr.DrainNode(sp.sourceNode)
+	}
+
+	return nil
+}
+
+// Undrain 退出排水模式，恢复正常流量接收。
+func (sp *SProxy) Undrain() error {
+	if !sp.draining.Load() {
+		return nil // 不在排水模式
+	}
+	sp.draining.Store(false)
+	sp.drainReason = ""
+
+	sp.logger.Info("node exited drain mode",
+		zap.Int64("active_requests", sp.activeRequests.Load()),
+	)
+
+	// 如果有集群管理器，通知其他节点
+	if sp.clusterMgr != nil && sp.sourceNode != "" {
+		sp.clusterMgr.UndrainNode(sp.sourceNode)
+	}
+
+	return nil
+}
+
+// IsDraining 返回当前是否处于排水模式。
+func (sp *SProxy) IsDraining() bool {
+	return sp.draining.Load()
+}
+
+// DrainStatus 返回排水模式的详细状态。
+type DrainStatus struct {
+	Draining       bool      `json:"draining"`
+	ActiveRequests int64     `json:"active_requests"`
+	DrainStarted   time.Time `json:"drain_started,omitempty"`
+	DrainReason    string    `json:"drain_reason,omitempty"`
+}
+
+// GetDrainStatus 返回排水模式的详细状态。
+func (sp *SProxy) GetDrainStatus() DrainStatus {
+	return DrainStatus{
+		Draining:       sp.draining.Load(),
+		ActiveRequests: sp.activeRequests.Load(),
+		DrainStarted:   sp.drainStarted,
+		DrainReason:    sp.drainReason,
+	}
+}
+
+// ActiveRequests 返回当前活跃请求数。
+func (sp *SProxy) ActiveRequests() int64 {
+	return sp.activeRequests.Load()
+}
+
 // LLMTargetStatuses 返回当前所有 LLM 目标的运行时状态（含健康状态）。
 // 若未配置均衡器，则所有目标视为健康（无主动/被动检查）。
 func (sp *SProxy) LLMTargetStatuses() []LLMTargetStatus {
@@ -180,6 +256,7 @@ func (sp *SProxy) LLMTargetStatuses() []LLMTargetStatus {
 				Provider: t.Provider,
 				Weight:   w,
 				Healthy:  true,
+				Draining: false,
 			}
 		}
 		return result
@@ -189,9 +266,10 @@ func (sp *SProxy) LLMTargetStatuses() []LLMTargetStatus {
 	result := make([]LLMTargetStatus, 0, len(lbTargets))
 	for _, t := range lbTargets {
 		st := LLMTargetStatus{
-			URL:     t.ID,
-			Weight:  t.Weight,
-			Healthy: t.Healthy,
+			URL:      t.ID,
+			Weight:   t.Weight,
+			Healthy:  t.Healthy,
+			Draining: t.Draining,
 		}
 		for _, lt := range sp.targets {
 			if lt.URL == t.ID {

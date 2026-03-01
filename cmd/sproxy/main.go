@@ -500,6 +500,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	adminHandler.SetTokenRepo(tokenRepo)
 	logger.Info("LLM binding repo configured")
 
+	// 排水控制函数
+	adminHandler.SetDrainFunctions(sp.Drain, sp.Undrain, sp.GetDrainStatus)
+	logger.Info("drain control functions configured")
+
 	// ---------------------------------------------------------------------------
 	// 注册路由
 	// ---------------------------------------------------------------------------
@@ -538,6 +542,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		)
 		dashHandler.SetLLMDeps(llmBindingRepo, sp.LLMTargetStatuses)
 		dashHandler.SetTokenRepo(tokenRepo)
+		dashHandler.SetDrainFunctions(sp.Drain, sp.Undrain, sp.GetDrainStatus)
 		dashHandler.RegisterRoutes(mux)
 		logger.Info("dashboard registered at /dashboard/")
 	}
@@ -689,7 +694,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd)
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
@@ -2566,4 +2571,293 @@ var adminLLMListCmd = &cobra.Command{
 
 func init() {
 	adminLLMCmd.AddCommand(adminLLMTargetsCmd, adminLLMBindCmd, adminLLMUnbindCmd, adminLLMDistributeCmd, adminLLMListCmd)
+}
+
+// ---------------------------------------------------------------------------
+// admin drain — 排水控制子命令
+// ---------------------------------------------------------------------------
+
+var adminDrainCmd = &cobra.Command{
+	Use:   "drain",
+	Short: "Manage drain mode for graceful rolling upgrades",
+	Long: `Drain mode allows graceful shutdown of a node for rolling upgrades.
+
+When a node is in drain mode:
+- It stops accepting new requests from the load balancer
+- Existing requests continue to be processed
+- The node can be safely stopped once active requests reach zero
+
+This enables zero-downtime rolling upgrades in multi-node clusters.`,
+}
+
+// --- drain (enter drain mode) ---
+
+var adminDrainEnterCmd = &cobra.Command{
+	Use:   "enter",
+	Short: "Enter drain mode (stop accepting new traffic)",
+	Long: `Put the local node into drain mode.
+
+The node will:
+1. Stop accepting new requests from the load balancer
+2. Continue processing existing requests
+3. Update the cluster routing table to notify other nodes
+
+Use "sproxy admin drain status" to monitor active requests.
+Use "sproxy admin drain wait" to block until all requests complete.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		// 调用本地 drain API
+		addr := cfg.Listen.Addr()
+		url := fmt.Sprintf("http://%s/api/admin/drain", addr)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		// 使用 admin JWT 认证
+		token, err := createAdminToken(cfg)
+		if err != nil {
+			return fmt.Errorf("create admin token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("drain request failed: %w (is sproxy running?)", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("drain failed: %s", string(body))
+		}
+
+		fmt.Println("Node entered drain mode.")
+		fmt.Println("Use 'sproxy admin drain status' to monitor active requests.")
+		return nil
+	},
+}
+
+// --- drain exit (undrain) ---
+
+var adminDrainExitCmd = &cobra.Command{
+	Use:   "exit",
+	Short: "Exit drain mode (resume accepting traffic)",
+	Long: `Return the local node to normal operation.
+
+The node will resume accepting new requests from the load balancer.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		addr := cfg.Listen.Addr()
+		url := fmt.Sprintf("http://%s/api/admin/undrain", addr)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		token, err := createAdminToken(cfg)
+		if err != nil {
+			return fmt.Errorf("create admin token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("undrain request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("undrain failed: %s", string(body))
+		}
+
+		fmt.Println("Node exited drain mode and is now accepting traffic.")
+		return nil
+	},
+}
+
+// --- drain status ---
+
+var adminDrainStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show drain status and active request count",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		addr := cfg.Listen.Addr()
+		url := fmt.Sprintf("http://%s/api/admin/drain/status", addr)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		token, err := createAdminToken(cfg)
+		if err != nil {
+			return fmt.Errorf("create admin token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("status request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("status failed: %s", string(body))
+		}
+
+		var status struct {
+			Draining       bool   `json:"draining"`
+			ActiveRequests int64  `json:"active_requests"`
+			DrainStarted   string `json:"drain_started,omitempty"`
+			DrainReason    string `json:"drain_reason,omitempty"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+
+		if status.Draining {
+			fmt.Printf("Status: DRAINING\n")
+			fmt.Printf("Active requests: %d\n", status.ActiveRequests)
+			if status.DrainStarted != "" {
+				fmt.Printf("Drain started: %s\n", status.DrainStarted)
+			}
+			if status.DrainReason != "" {
+				fmt.Printf("Reason: %s\n", status.DrainReason)
+			}
+		} else {
+			fmt.Printf("Status: NORMAL\n")
+			fmt.Printf("Active requests: %d\n", status.ActiveRequests)
+		}
+		return nil
+	},
+}
+
+// --- drain wait ---
+
+var drainWaitTimeout time.Duration
+
+var adminDrainWaitCmd = &cobra.Command{
+	Use:   "wait",
+	Short: "Wait until all active requests complete",
+	Long: `Block until the number of active requests reaches zero.
+
+This is useful for rolling upgrades:
+1. Enter drain mode: sproxy admin drain enter
+2. Wait for drain: sproxy admin drain wait --timeout 60s
+3. Stop the node: systemctl stop sproxy
+4. Upgrade and restart`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := adminConfigFlag
+		if cfgPath == "" {
+			cfgPath = "sproxy.yaml"
+		}
+		cfg, _, err := config.LoadSProxyConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		addr := cfg.Listen.Addr()
+		baseURL := fmt.Sprintf("http://%s/api/admin/drain", addr)
+
+		ctx := context.Background()
+		if drainWaitTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, drainWaitTimeout)
+			defer cancel()
+		}
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		fmt.Println("Waiting for active requests to reach zero...")
+		start := time.Now()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("timeout waiting for drain (waited %v)", time.Since(start))
+			case <-ticker.C:
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/status", nil)
+				if err != nil {
+					return fmt.Errorf("create request: %w", err)
+				}
+
+				token, err := createAdminToken(cfg)
+				if err != nil {
+					return fmt.Errorf("create admin token: %w", err)
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					fmt.Printf("Warning: status check failed: %v\n", err)
+					continue
+				}
+
+				var status struct {
+					ActiveRequests int64 `json:"active_requests"`
+				}
+				json.NewDecoder(resp.Body).Decode(&status)
+				resp.Body.Close()
+
+				if status.ActiveRequests == 0 {
+					fmt.Printf("Drain complete! All requests finished (waited %v)\n", time.Since(start))
+					return nil
+				}
+				fmt.Printf("\rActive requests: %d (waiting...)", status.ActiveRequests)
+			}
+		}
+	},
+}
+
+func init() {
+	adminDrainWaitCmd.Flags().DurationVar(&drainWaitTimeout, "timeout", 0, "maximum time to wait (0 = no limit)")
+	adminDrainCmd.AddCommand(adminDrainEnterCmd, adminDrainExitCmd, adminDrainStatusCmd, adminDrainWaitCmd)
+}
+
+// createAdminToken creates a short-lived admin JWT for CLI-to-API authentication.
+func createAdminToken(cfg *config.SProxyFullConfig) (string, error) {
+	jwtMgr, err := auth.NewManager(zap.NewNop(), cfg.Auth.JWTSecret)
+	if err != nil {
+		return "", fmt.Errorf("create JWT manager: %w", err)
+	}
+	token, err := jwtMgr.Sign(auth.JWTClaims{
+		UserID:   "__admin__",
+		Username: "admin",
+		Role:     "admin",
+	}, 5*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("sign token: %w", err)
+	}
+	return token, nil
 }
