@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -135,23 +136,77 @@ func TestLoginLimiter_Purge(t *testing.T) {
 	}
 }
 
-func TestRealIP_ForwardedFor(t *testing.T) {
+func TestRealIP_TrustedProxy_UsesXFF(t *testing.T) {
+	_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+	proxies := []net.IPNet{*cidr}
+
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	req.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.1")
-	req.RemoteAddr = "10.0.0.2:12345"
+	req.RemoteAddr = "10.0.0.2:12345" // trusted proxy
 
-	ip := realIP(req)
+	ip := realIP(req, proxies)
 	if ip != "203.0.113.1" {
-		t.Errorf("realIP = %q, want %q", ip, "203.0.113.1")
+		t.Errorf("realIP = %q, want %q (should use XFF from trusted proxy)", ip, "203.0.113.1")
 	}
 }
 
-func TestRealIP_RemoteAddr(t *testing.T) {
+func TestRealIP_UntrustedProxy_IgnoresXFF(t *testing.T) {
+	_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+	proxies := []net.IPNet{*cidr}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.Header.Set("X-Forwarded-For", "1.2.3.4") // attacker's forged XFF
+	req.RemoteAddr = "203.0.113.99:12345"          // NOT a trusted proxy
+
+	ip := realIP(req, proxies)
+	if ip != "203.0.113.99" {
+		t.Errorf("realIP = %q, want %q (should ignore XFF from untrusted proxy)", ip, "203.0.113.99")
+	}
+}
+
+func TestRealIP_EmptyTrustedProxies_AlwaysRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.RemoteAddr = "5.6.7.8:12345"
+
+	ip := realIP(req, nil) // empty: never trust XFF
+	if ip != "5.6.7.8" {
+		t.Errorf("realIP = %q, want %q (empty proxies should always use RemoteAddr)", ip, "5.6.7.8")
+	}
+}
+
+func TestRealIP_RemoteAddr_NoHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	req.RemoteAddr = "172.16.0.5:54321"
 
-	ip := realIP(req)
+	ip := realIP(req, nil)
 	if ip != "172.16.0.5" {
 		t.Errorf("realIP = %q, want %q", ip, "172.16.0.5")
+	}
+}
+
+// TestRateLimiter_SpoofedXFF_BlocksRealIP verifies that after the fix,
+// an attacker cycling through spoofed XFF headers cannot bypass rate limiting
+// because realIP() always returns RemoteAddr when no trusted proxy is configured.
+func TestRateLimiter_SpoofedXFF_BlocksRealIP(t *testing.T) {
+	l := NewLoginLimiter(3, time.Minute, 5*time.Minute)
+	var proxies []net.IPNet // no trusted proxies → XFF always ignored
+
+	attackerRealIP := "1.2.3.4"
+
+	spoofHeaders := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+	for _, xff := range spoofHeaders {
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+		req.Header.Set("X-Forwarded-For", xff)
+		req.RemoteAddr = attackerRealIP + ":12345"
+
+		ip := realIP(req, proxies)
+		l.RecordFailure(ip)
+	}
+
+	// After 3 failures all from the real IP, the real IP must be locked
+	allowed, _ := l.Check(attackerRealIP)
+	if allowed {
+		t.Error("real IP should be locked after 3 failures regardless of spoofed XFF headers")
 	}
 }
