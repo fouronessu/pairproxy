@@ -699,7 +699,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 用 TeeResponseWriter 包装（streaming + non-streaming 均适用）
 	// provider 决定解析器类型（Anthropic SSE / OpenAI SSE / Ollama SSE）
-	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider)
+	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider, startTime, nil)
 
 	// 构建 transport（配置均衡器时使用 RetryTransport；否则使用基础 transport）
 	transport := sp.buildRetryTransport(claims.UserID, claims.GroupID)

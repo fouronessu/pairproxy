@@ -3,6 +3,7 @@ package tap
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -25,18 +26,27 @@ type TeeResponseWriter struct {
 	record      db.UsageRecord // 预填充的 UsageRecord 模板（requestID、userID 等）
 	statusCode  int
 	isStreaming bool
+
+	// debug 支持
+	startTime     time.Time  // 请求开始时间，用于计算 TTFB
+	firstByteAt   time.Time  // 第一个字节到达时间
+	firstByteOnce sync.Once
+	onChunk       func(p []byte) // debug 回调：每个 streaming chunk 调用，nil = 不调试
 }
 
 // NewTeeResponseWriter 创建 TeeResponseWriter。
 // record 应预填充 RequestID、UserID、Model、UpstreamURL、SourceNode 等字段；
 // InputTokens/OutputTokens/StatusCode/DurationMs 将由 Tee 在流结束时填写。
 // provider 指定 LLM provider（"anthropic"、"openai"、"ollama"），空字符串默认 Anthropic。
+// startTime 为请求开始时间，用于计算 TTFB；onChunk 为 debug chunk 回调（nil = 不启用）。
 func NewTeeResponseWriter(
 	w http.ResponseWriter,
 	logger *zap.Logger,
 	usageWriter *db.UsageWriter,
 	record db.UsageRecord,
 	provider string,
+	startTime time.Time,
+	onChunk func([]byte),
 ) *TeeResponseWriter {
 	tw := &TeeResponseWriter{
 		ResponseWriter: w,
@@ -44,6 +54,8 @@ func NewTeeResponseWriter(
 		writer:         usageWriter,
 		record:         record,
 		statusCode:     http.StatusOK,
+		startTime:      startTime,
+		onChunk:        onChunk,
 	}
 
 	// 按 provider 创建解析器，注册 SSE 解析完成回调
@@ -78,6 +90,9 @@ func (tw *TeeResponseWriter) WriteHeader(statusCode int) {
 // Write 同时写入原始 writer 并 Feed 给 SSE 解析器。
 // 实现 http.ResponseWriter.Write。
 func (tw *TeeResponseWriter) Write(p []byte) (int, error) {
+	// 记录第一个字节到达时间（TTFB）
+	tw.firstByteOnce.Do(func() { tw.firstByteAt = time.Now() })
+
 	// 先写给客户端（不阻塞流传输）
 	n, err := tw.ResponseWriter.Write(p)
 	if err != nil {
@@ -98,6 +113,10 @@ func (tw *TeeResponseWriter) Write(p []byte) (int, error) {
 	// 只有 streaming 响应才 Feed 给 SSE 解析器
 	if tw.isStreaming && n > 0 {
 		tw.parser.Feed(p[:n])
+		// debug 回调：每条 SSE chunk 实时通知
+		if tw.onChunk != nil {
+			tw.onChunk(p[:n])
+		}
 	}
 
 	return n, err
@@ -134,6 +153,14 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 		r.CreatedAt = time.Now()
 	}
 	tw.writer.Record(r)
+}
+
+// TTFBMs 返回首字节时延（毫秒）。在 Write() 被调用后有效，否则返回 0。
+func (tw *TeeResponseWriter) TTFBMs() int64 {
+	if tw.firstByteAt.IsZero() || tw.startTime.IsZero() {
+		return 0
+	}
+	return tw.firstByteAt.Sub(tw.startTime).Milliseconds()
 }
 
 // StatusCode 返回记录的 HTTP 状态码（WriteHeader 调用后有效）。

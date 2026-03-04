@@ -166,7 +166,8 @@ type DashboardConfig struct {
 
 // LogConfig 日志配置
 type LogConfig struct {
-	Level string `yaml:"level"` // "debug" | "info" | "warn" | "error"，默认 "info"
+	Level    string `yaml:"level"`      // "debug" | "info" | "warn" | "error"，默认 "info"
+	DebugFile string `yaml:"debug_file"` // debug 日志文件路径，默认 "debug.log"
 }
 
 // Addr 返回监听地址字符串，如 "127.0.0.1:8080"
