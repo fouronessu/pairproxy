@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/term"
 
 	"github.com/l17728/pairproxy/internal/auth"
@@ -251,6 +252,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 	cp, err := proxy.NewCProxy(logger, tokenStore, tokenDir, balancer, cacheDir)
 	if err != nil {
 		return fmt.Errorf("create cproxy: %w", err)
+	}
+
+	// 可选：debug 文件日志（记录双向转发内容）
+	if cfg.Log.DebugFile != "" {
+		debugLogger, dbgErr := buildDebugFileLogger(cfg.Log.DebugFile)
+		if dbgErr != nil {
+			logger.Warn("failed to init debug file logger",
+				zap.String("path", cfg.Log.DebugFile), zap.Error(dbgErr))
+		} else {
+			cp.SetDebugLogger(debugLogger)
+			logger.Info("debug file logging enabled", zap.String("path", cfg.Log.DebugFile))
+		}
 	}
 
 	// 启动健康检查（在独立 goroutine 中运行）
@@ -559,6 +572,18 @@ func init() {
 	configCmd.AddCommand(configValidateCmd)
 	configValidateCmd.Flags().StringVar(&configValidateConfigFlag, "config", "",
 		"path to cproxy.yaml (default: "+config.DefaultCProxyConfigPath()+")")
+}
+
+// buildDebugFileLogger 构建写入独立文件的 debug 日志器，
+// 用于记录 c-proxy 的双向转发内容（请求体、响应体、streaming chunks）。
+func buildDebugFileLogger(path string) (*zap.Logger, error) {
+	cfg := zap.NewProductionConfig()
+	cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	cfg.OutputPaths = []string{path}
+	cfg.ErrorOutputPaths = []string{path}
+	cfg.EncoderConfig.TimeKey = "ts"
+	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	return cfg.Build()
 }
 
 func runConfigValidate(cmd *cobra.Command, args []string) error {

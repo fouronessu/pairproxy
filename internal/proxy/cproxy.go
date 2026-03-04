@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -33,6 +34,14 @@ type CProxy struct {
 	cacheDir       string       // 路由表缓存目录（空串=不持久化）
 
 	refreshMu sync.Mutex // 防止并发刷新（P2-4）
+
+	debugLogger *zap.Logger // 可选，非 nil 时将转发内容写入独立 debug 文件
+}
+
+// SetDebugLogger 设置 debug 文件日志器。
+// 非 nil 时，每个请求的转发内容（请求体、响应体、streaming chunks）均会写入该 logger。
+func (cp *CProxy) SetDebugLogger(l *zap.Logger) {
+	cp.debugLogger = l
 }
 
 // NewCProxy 创建 CProxy。
@@ -125,6 +134,19 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// debug 日志：← client request（Claude Code 发来的原始请求）
+	if cp.debugLogger != nil && r.Body != nil {
+		debugBody, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(debugBody))
+		cp.debugLogger.Debug("← client request",
+			zap.String("request_id", reqID),
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			sanitizeHeaders(r.Header),
+			zap.ByteString("body", truncate(debugBody, debugBodyMaxBytes)),
+		)
+	}
+
 	target, err := cp.balancer.Pick()
 	if err != nil {
 		cp.logger.Error("no healthy s-proxy available",
@@ -167,9 +189,24 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.String("path", req.URL.Path),
 				zap.String("method", req.Method),
 			)
+			if cp.debugLogger != nil {
+				cp.debugLogger.Debug("→ s-proxy request",
+					zap.String("request_id", reqID),
+					zap.String("method", req.Method),
+					zap.String("target", target.Addr+req.URL.Path),
+					sanitizeHeaders(req.Header),
+				)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			cp.processRoutingHeaders(resp, reqID)
+			if cp.debugLogger != nil {
+				cp.debugLogger.Debug("← s-proxy response",
+					zap.String("request_id", reqID),
+					zap.Int("status", resp.StatusCode),
+					sanitizeHeaders(resp.Header),
+				)
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -185,7 +222,12 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		Transport:     cp.transport,
 	}
 
-	proxy.ServeHTTP(w, r)
+	// 包装 ResponseWriter：streaming 响应时逐 chunk 记录到 debug 日志
+	rw := http.ResponseWriter(w)
+	if cp.debugLogger != nil {
+		rw = &debugResponseWriter{ResponseWriter: w, logger: cp.debugLogger, reqID: reqID}
+	}
+	proxy.ServeHTTP(rw, r)
 }
 
 // tryRefresh 使用 refresh_token 向 s-proxy 换取新的 access_token。

@@ -76,6 +76,8 @@ type SProxy struct {
 	llmHC           *lb.HealthChecker                                // 健康检查（被动熔断 + 自动恢复）
 	bindingResolver func(userID, groupID string) (string, bool)      // 用户/分组 → target URL
 	maxRetries      int                                               // RetryTransport 最大重试次数
+
+	debugLogger *zap.Logger // 可选，非 nil 时将转发内容写入独立 debug 文件
 }
 
 // NewSProxy 创建 SProxy。
@@ -169,6 +171,12 @@ func (sp *SProxy) SetMaxRetries(n int) {
 // SetTransport 设置底层 HTTP transport（测试用；默认 http.DefaultTransport）。
 func (sp *SProxy) SetTransport(t http.RoundTripper) {
 	sp.transport = t
+}
+
+// SetDebugLogger 设置 debug 文件日志器。
+// 非 nil 时，每个请求的转发内容（请求体、响应体、SSE chunks）均会写入该 logger。
+func (sp *SProxy) SetDebugLogger(l *zap.Logger) {
+	sp.debugLogger = l
 }
 
 // Drain 进入排水模式。
@@ -615,6 +623,9 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 移除路由版本头，不转发给 LLM
 	r.Header.Del("X-Routing-Version")
 
+	// debug 日志：记录客户端发来的原始请求（body 可能在下面被读取）
+	var debugReqBody []byte
+
 	// F-3: 单次请求大小限制 + 并发请求限制
 	if sp.quotaChecker != nil {
 		// 1. 单次请求 max_tokens 检查：读取请求 body 中的 max_tokens 字段，还原 body
@@ -623,6 +634,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			if readErr == nil {
+				debugReqBody = bodyBytes
 				var reqBody struct {
 					MaxTokens int64 `json:"max_tokens"`
 				}
@@ -651,6 +663,22 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer release()
+	}
+
+	// debug 日志：← client request（body 未被 quotaChecker 读取时，在此补读）
+	if sp.debugLogger != nil {
+		if debugReqBody == nil && r.Body != nil {
+			debugReqBody, _ = io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(debugReqBody))
+		}
+		sp.debugLogger.Debug("← client request",
+			zap.String("request_id", reqID),
+			zap.String("user_id", claims.UserID),
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			sanitizeHeaders(r.Header),
+			zap.ByteString("body", truncate(debugReqBody, debugBodyMaxBytes)),
+		)
 	}
 
 	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, nil)
@@ -700,7 +728,17 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 用 TeeResponseWriter 包装（streaming + non-streaming 均适用）
 	// provider 决定解析器类型（Anthropic SSE / OpenAI SSE / Ollama SSE）
-	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider, startTime, nil)
+	var onChunk func([]byte)
+	if sp.debugLogger != nil {
+		dl, id := sp.debugLogger, reqID
+		onChunk = func(chunk []byte) {
+			dl.Debug("← LLM stream chunk",
+				zap.String("request_id", id),
+				zap.ByteString("data", truncate(chunk, debugBodyMaxBytes)),
+			)
+		}
+	}
+	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider, startTime, onChunk)
 
 	// 构建 transport（配置均衡器时使用 RetryTransport；否则使用基础 transport）
 	transport := sp.buildRetryTransport(claims.UserID, claims.GroupID)
@@ -733,6 +771,14 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.String("path", req.URL.Path),
 				zap.String("method", req.Method),
 			)
+			if sp.debugLogger != nil {
+				sp.debugLogger.Debug("→ LLM request",
+					zap.String("request_id", reqID),
+					zap.String("method", req.Method),
+					zap.String("target", firstInfo.URL+req.URL.Path),
+					sanitizeHeaders(req.Header),
+				)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			durationMs := time.Since(startTime).Milliseconds()
@@ -753,6 +799,15 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.Int64("duration_ms", durationMs),
 			)
 
+			if sp.debugLogger != nil {
+				sp.debugLogger.Debug("← LLM response",
+					zap.String("request_id", reqID),
+					zap.Int("status", resp.StatusCode),
+					zap.Bool("streaming", isStreaming),
+					sanitizeHeaders(resp.Header),
+				)
+			}
+
 			if !isStreaming {
 				// 非 streaming：读取完整 body，解析 token，然后重新放回（ReverseProxy 需要）
 				body, readErr := io.ReadAll(resp.Body)
@@ -763,6 +818,13 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					sp.logger.Warn("failed to read non-streaming body",
 						zap.String("request_id", reqID),
 						zap.Error(readErr),
+					)
+				}
+
+				if sp.debugLogger != nil {
+					sp.debugLogger.Debug("← LLM response body",
+						zap.String("request_id", reqID),
+						zap.ByteString("body", truncate(body, debugBodyMaxBytes)),
 					)
 				}
 
@@ -786,7 +848,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				tw.RecordNonStreaming(body, resp.StatusCode, durationMs)
 			}
 			// streaming 情况：TeeResponseWriter.Write() 会自动 Feed SSE 解析器，
-			// 在 message_stop 事件时异步记录
+			// 在 message_stop 事件时异步记录；onChunk 回调已记录每条 chunk
 
 			// sp-1 模式：向 c-proxy 注入路由表更新
 			if sp.clusterMgr != nil {

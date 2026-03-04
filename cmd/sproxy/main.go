@@ -517,6 +517,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 	adminHandler.SetDrainFunctions(sp.Drain, sp.Undrain, sp.GetDrainStatus)
 	logger.Info("drain control functions configured")
 
+	// debug 文件日志：转发内容双向记录（log.debug_file 配置时启用）
+	if cfg.Log.DebugFile != "" {
+		debugLogger, dbgErr := buildDebugFileLogger(cfg.Log.DebugFile)
+		if dbgErr != nil {
+			logger.Warn("failed to init debug file logger, debug logging disabled",
+				zap.String("path", cfg.Log.DebugFile),
+				zap.Error(dbgErr),
+			)
+		} else {
+			sp.SetDebugLogger(debugLogger)
+			logger.Info("debug file logging enabled", zap.String("path", cfg.Log.DebugFile))
+		}
+	}
+
 	// ---------------------------------------------------------------------------
 	// 注册路由
 	// ---------------------------------------------------------------------------
@@ -2036,6 +2050,18 @@ func buildLogger(atom zap.AtomicLevel) *zap.Logger {
 		atom,
 	)
 	return zap.New(core, zap.AddCaller())
+}
+
+// buildDebugFileLogger 创建写入独立文件的 DEBUG 级日志器，用于转发内容记录。
+// 使用 JSON 格式，DEBUG 级别（不受主日志 level 限制），适合高频写入。
+func buildDebugFileLogger(path string) (*zap.Logger, error) {
+	cfg := zap.NewProductionConfig()
+	cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	cfg.OutputPaths = []string{path}
+	cfg.ErrorOutputPaths = []string{path}
+	cfg.EncoderConfig.TimeKey = "ts"
+	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	return cfg.Build()
 }
 
 // parseZapLevel 将配置文件中的 log.level 字符串转换为 zapcore.Level。
