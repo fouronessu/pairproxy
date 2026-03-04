@@ -1,0 +1,17 @@
+# 本地链路测试配置 — cproxy
+# mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
+
+listen:
+  host: "127.0.0.1"
+  port: 8080
+
+sproxy:
+  primary: "http://127.0.0.1:9000"
+  health_check_interval: 10s
+  request_timeout: 30s
+
+auth:
+  refresh_threshold: 30m
+
+log:
+  level: "info"

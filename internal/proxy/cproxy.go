@@ -68,7 +68,10 @@ func NewCProxy(
 	if cacheDir != "" {
 		if cached, err := cluster.LoadFromDir(cacheDir); err == nil && cached != nil {
 			cp.routingVersion.Store(cached.Version)
-			cp.applyRoutingTable(cached)
+			if len(cached.Entries) > 0 {
+				// 仅在缓存有实际条目时才覆盖 balancer，避免空缓存抹除配置初始目标
+				cp.applyRoutingTable(cached)
+			}
 			logger.Named("cproxy").Info("routing table restored from cache",
 				zap.Int64("version", cached.Version),
 				zap.Int("entries", len(cached.Entries)),
