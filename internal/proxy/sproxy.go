@@ -77,7 +77,7 @@ type SProxy struct {
 	bindingResolver func(userID, groupID string) (string, bool)      // 用户/分组 → target URL
 	maxRetries      int                                               // RetryTransport 最大重试次数
 
-	debugLogger *zap.Logger // 可选，非 nil 时将转发内容写入独立 debug 文件
+	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
 }
 
 // NewSProxy 创建 SProxy。
@@ -176,7 +176,16 @@ func (sp *SProxy) SetTransport(t http.RoundTripper) {
 // SetDebugLogger 设置 debug 文件日志器。
 // 非 nil 时，每个请求的转发内容（请求体、响应体、SSE chunks）均会写入该 logger。
 func (sp *SProxy) SetDebugLogger(l *zap.Logger) {
-	sp.debugLogger = l
+	sp.debugLogger.Store(l)
+}
+
+// SyncAndSetDebugLogger 先 Sync 旧 logger（flush 缓冲区），再原子切换为新 logger。
+// 供 SIGHUP 热重载时调用；传入 nil 表示关闭 debug 日志。
+func (sp *SProxy) SyncAndSetDebugLogger(l *zap.Logger) {
+	if old := sp.debugLogger.Load(); old != nil {
+		_ = old.Sync()
+	}
+	sp.debugLogger.Store(l)
 }
 
 // Drain 进入排水模式。
@@ -665,13 +674,16 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
+	// 每次请求捕获一次 debug logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
+	dl := sp.debugLogger.Load()
+
 	// debug 日志：← client request（body 未被 quotaChecker 读取时，在此补读）
-	if sp.debugLogger != nil {
+	if dl != nil {
 		if debugReqBody == nil && r.Body != nil {
 			debugReqBody, _ = io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(debugReqBody))
 		}
-		sp.debugLogger.Debug("← client request",
+		dl.Debug("← client request",
 			zap.String("request_id", reqID),
 			zap.String("user_id", claims.UserID),
 			zap.String("method", r.Method),
@@ -729,11 +741,10 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 用 TeeResponseWriter 包装（streaming + non-streaming 均适用）
 	// provider 决定解析器类型（Anthropic SSE / OpenAI SSE / Ollama SSE）
 	var onChunk func([]byte)
-	if sp.debugLogger != nil {
-		dl, id := sp.debugLogger, reqID
+	if dl != nil {
 		onChunk = func(chunk []byte) {
 			dl.Debug("← LLM stream chunk",
-				zap.String("request_id", id),
+				zap.String("request_id", reqID),
 				zap.ByteString("data", truncate(chunk, debugBodyMaxBytes)),
 			)
 		}
@@ -771,8 +782,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.String("path", req.URL.Path),
 				zap.String("method", req.Method),
 			)
-			if sp.debugLogger != nil {
-				sp.debugLogger.Debug("→ LLM request",
+			if dl != nil {
+				dl.Debug("→ LLM request",
 					zap.String("request_id", reqID),
 					zap.String("method", req.Method),
 					zap.String("target", firstInfo.URL+req.URL.Path),
@@ -799,8 +810,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.Int64("duration_ms", durationMs),
 			)
 
-			if sp.debugLogger != nil {
-				sp.debugLogger.Debug("← LLM response",
+			if dl != nil {
+				dl.Debug("← LLM response",
 					zap.String("request_id", reqID),
 					zap.Int("status", resp.StatusCode),
 					zap.Bool("streaming", isStreaming),
@@ -821,8 +832,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					)
 				}
 
-				if sp.debugLogger != nil {
-					sp.debugLogger.Debug("← LLM response body",
+				if dl != nil {
+					dl.Debug("← LLM response body",
 						zap.String("request_id", reqID),
 						zap.ByteString("body", truncate(body, debugBodyMaxBytes)),
 					)

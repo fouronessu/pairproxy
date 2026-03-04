@@ -35,13 +35,13 @@ type CProxy struct {
 
 	refreshMu sync.Mutex // 防止并发刷新（P2-4）
 
-	debugLogger *zap.Logger // 可选，非 nil 时将转发内容写入独立 debug 文件
+	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
 }
 
 // SetDebugLogger 设置 debug 文件日志器。
 // 非 nil 时，每个请求的转发内容（请求体、响应体、streaming chunks）均会写入该 logger。
 func (cp *CProxy) SetDebugLogger(l *zap.Logger) {
-	cp.debugLogger = l
+	cp.debugLogger.Store(l)
 }
 
 // NewCProxy 创建 CProxy。
@@ -134,11 +134,14 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 每次请求捕获一次 debug logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
+	dl := cp.debugLogger.Load()
+
 	// debug 日志：← client request（Claude Code 发来的原始请求）
-	if cp.debugLogger != nil && r.Body != nil {
+	if dl != nil && r.Body != nil {
 		debugBody, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(debugBody))
-		cp.debugLogger.Debug("← client request",
+		dl.Debug("← client request",
 			zap.String("request_id", reqID),
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
@@ -189,8 +192,8 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.String("path", req.URL.Path),
 				zap.String("method", req.Method),
 			)
-			if cp.debugLogger != nil {
-				cp.debugLogger.Debug("→ s-proxy request",
+			if dl != nil {
+				dl.Debug("→ s-proxy request",
 					zap.String("request_id", reqID),
 					zap.String("method", req.Method),
 					zap.String("target", target.Addr+req.URL.Path),
@@ -200,8 +203,8 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			cp.processRoutingHeaders(resp, reqID)
-			if cp.debugLogger != nil {
-				cp.debugLogger.Debug("← s-proxy response",
+			if dl != nil {
+				dl.Debug("← s-proxy response",
 					zap.String("request_id", reqID),
 					zap.Int("status", resp.StatusCode),
 					sanitizeHeaders(resp.Header),
@@ -224,8 +227,8 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 包装 ResponseWriter：streaming 响应时逐 chunk 记录到 debug 日志
 	rw := http.ResponseWriter(w)
-	if cp.debugLogger != nil {
-		rw = &debugResponseWriter{ResponseWriter: w, logger: cp.debugLogger, reqID: reqID}
+	if dl != nil {
+		rw = &debugResponseWriter{ResponseWriter: w, logger: dl, reqID: reqID}
 	}
 	proxy.ServeHTTP(rw, r)
 }

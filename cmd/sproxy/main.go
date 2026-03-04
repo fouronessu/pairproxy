@@ -602,7 +602,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// SIGHUP 热重载（Unix/Linux only；Windows 上为 no-op）
-	// 重新加载：log.level 动态切换；其他字段（端口、DB 路径）需重启生效。
+	// 重新加载：log.level 动态切换；debug_file 开关切换；其他字段（端口、DB 路径）需重启生效。
+	currentDebugFile := cfg.Log.DebugFile // 仅在 SIGHUP goroutine 中读写，无需加锁
 	sighupCh := make(chan os.Signal, 1)
 	notifySIGHUP(sighupCh)
 	go func() {
@@ -622,13 +623,35 @@ func runStart(cmd *cobra.Command, args []string) error {
 			// 动态更新日志级别（立即生效，无需重启）
 			newLevel := parseZapLevel(newCfg.Log.Level)
 			oldLevel := atom.Level()
-			if newLevel != oldLevel {
+			levelChanged := newLevel != oldLevel
+			if levelChanged {
 				atom.SetLevel(newLevel)
 				logger.Info("log level changed via SIGHUP",
 					zap.String("old", oldLevel.String()),
 					zap.String("new", newLevel.String()),
 				)
-			} else {
+			}
+			// 动态切换 debug 文件日志（log.debug_file 变更时立即生效）
+			newDebugFile := newCfg.Log.DebugFile
+			debugFileChanged := newDebugFile != currentDebugFile
+			if debugFileChanged {
+				if newDebugFile != "" {
+					newDL, dlErr := buildDebugFileLogger(newDebugFile)
+					if dlErr != nil {
+						logger.Warn("failed to init debug file logger via SIGHUP",
+							zap.String("path", newDebugFile), zap.Error(dlErr))
+					} else {
+						sp.SyncAndSetDebugLogger(newDL) // flush 旧 logger，原子切换为新 logger
+						logger.Info("debug file logging enabled via SIGHUP",
+							zap.String("path", newDebugFile))
+					}
+				} else {
+					sp.SyncAndSetDebugLogger(nil) // flush 旧 logger，关闭 debug 日志
+					logger.Info("debug file logging disabled via SIGHUP")
+				}
+				currentDebugFile = newDebugFile
+			}
+			if !levelChanged && !debugFileChanged {
 				logger.Info("config reloaded (no changes requiring restart)",
 					zap.String("log_level", newLevel.String()),
 				)
