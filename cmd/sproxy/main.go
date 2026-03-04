@@ -878,11 +878,11 @@ var adminUserListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List users",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		userRepo, groupRepo, _, _, _, database, err := openAdminDB()
+		userRepo, groupRepo, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		filterGroupID := ""
 		if userListGroup != "" {
@@ -949,7 +949,7 @@ func setUserActive(username string, active bool) error {
 	if err != nil {
 		return err
 	}
-	defer closeGormDB(zap.NewNop(), database)
+	defer closeGormDB(logger, database)
 	user, err := userRepo.GetByUsername(username)
 	if err != nil {
 		return fmt.Errorf("lookup user: %w", err)
@@ -1121,11 +1121,11 @@ var adminGroupAddCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, groupRepo, _, _, _, database, err := openAdminDB()
+		_, groupRepo, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		g := &db.Group{Name: name}
 		if cmd.Flags().Changed("daily-limit") {
@@ -1166,11 +1166,11 @@ var adminGroupListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List groups",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, groupRepo, _, _, _, database, err := openAdminDB()
+		_, groupRepo, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 		groups, err := groupRepo.List()
 		if err != nil {
 			return fmt.Errorf("list groups: %w", err)
@@ -1220,11 +1220,11 @@ var adminGroupSetQuotaCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, groupRepo, _, _, _, database, err := openAdminDB()
+		_, groupRepo, _, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 		grp, err := groupRepo.GetByName(name)
 		if err != nil {
 			return fmt.Errorf("lookup group: %w", err)
@@ -1330,11 +1330,11 @@ var adminStatsCmd = &cobra.Command{
 			return fmt.Errorf("invalid format %q: must be text, json, or csv", statsFormat)
 		}
 
-		userRepo, _, usageRepo, _, _, database, err := openAdminDB()
+		userRepo, _, usageRepo, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		now := time.Now()
 		from := now.AddDate(0, 0, -statsDays+1).Truncate(24 * time.Hour)
@@ -1492,11 +1492,11 @@ var adminTokenRevokeCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		username := args[0]
-		userRepo, _, _, tokenRepo, _, database, err := openAdminDB()
+		userRepo, _, _, tokenRepo, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 		user, err := userRepo.GetByUsername(username)
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)
@@ -1540,11 +1540,11 @@ Examples:
 		if quotaStatusUser == "" && quotaStatusGroup == "" {
 			return fmt.Errorf("provide --user <username> or --group <name>")
 		}
-		userRepo, groupRepo, usageRepo, _, _, database, err := openAdminDB()
+		userRepo, groupRepo, usageRepo, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		now := time.Now()
 		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -1764,11 +1764,26 @@ Example:
 		// 创建当前 DB 的安全备份
 		safeBak := dst + ".pre-restore"
 		if _, err := os.Stat(dst); err == nil {
-			in, _ := os.Open(dst)
-			out, _ := os.Create(safeBak)
-			io.Copy(out, in) //nolint:errcheck
+			in, err := os.Open(dst)
+			if err != nil {
+				return fmt.Errorf("open current database for backup: %w", err)
+			}
+			out, err := os.Create(safeBak)
+			if err != nil {
+				in.Close()
+				return fmt.Errorf("create pre-restore backup file: %w", err)
+			}
+			if _, err := io.Copy(out, in); err != nil {
+				out.Close()
+				in.Close()
+				os.Remove(safeBak)
+				return fmt.Errorf("copy database to backup: %w", err)
+			}
+			if err := out.Close(); err != nil {
+				in.Close()
+				return fmt.Errorf("close backup file: %w", err)
+			}
 			in.Close()
-			out.Close()
 			logger.Info("pre-restore backup saved", zap.String("path", safeBak))
 		}
 
@@ -1782,10 +1797,13 @@ Example:
 		if err != nil {
 			return fmt.Errorf("overwrite database: %w", err)
 		}
-		defer out.Close()
 
 		if _, err := io.Copy(out, in); err != nil {
+			out.Close()
 			return fmt.Errorf("copy backup to database: %w", err)
+		}
+		if err := out.Close(); err != nil {
+			return fmt.Errorf("flush restored database: %w", err)
 		}
 		fmt.Printf("Database restored from: %s\n", src)
 		fmt.Printf("(Previous database saved to: %s)\n", safeBak)
@@ -1814,11 +1832,11 @@ Examples:
   sproxy admin logs purge --before 2025-01-01
   sproxy admin logs purge --days 90`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _, usageRepo, _, _, database, err := openAdminDB()
+		_, _, usageRepo, _, logger, database, err := openAdminDB()
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		var before time.Time
 		if logsPurgeBefore != "" {
@@ -1878,7 +1896,7 @@ Examples:
 		if err != nil {
 			return err
 		}
-		defer closeGormDB(zap.NewNop(), database)
+		defer closeGormDB(logger, database)
 
 		now := time.Now().UTC()
 		from := now.AddDate(0, 0, -30).Truncate(24 * time.Hour)
@@ -2144,7 +2162,6 @@ Examples:
 }
 
 func init() {
-	adminAuditCmd.AddCommand() // 顶层命令，直接执行
 	adminAuditCmd.Flags().IntVar(&adminAuditLimit, "limit", 100, "max number of records to show")
 }
 
@@ -2839,7 +2856,11 @@ This is useful for rolling upgrades:
 				var status struct {
 					ActiveRequests int64 `json:"active_requests"`
 				}
-				json.NewDecoder(resp.Body).Decode(&status)
+				if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+					resp.Body.Close()
+					fmt.Printf("Warning: failed to decode drain status response: %v\n", err)
+					continue
+				}
 				resp.Body.Close()
 
 				if status.ActiveRequests == 0 {
