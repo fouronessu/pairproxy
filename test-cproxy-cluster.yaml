@@ -1,0 +1,22 @@
+# 集群负载均衡测试配置 — cproxy
+# 链路: mockagent → cproxy(:8080) → sp-1(:9000) ⟺ sp-2(:9001) → mockllm(:11434)
+
+listen:
+  host: "127.0.0.1"
+  port: 8080
+
+sproxy:
+  # primary: 种子节点（主节点）
+  primary: "http://127.0.0.1:9000"
+  # targets: 静态 worker 列表，cproxy 启动时就同时知晓两个节点，
+  # 无需等待路由表推送即可立即负载均衡
+  targets:
+    - "http://127.0.0.1:9001"
+  health_check_interval: 5s
+  request_timeout: 30s
+
+auth:
+  refresh_threshold: 30m
+
+log:
+  level: "info"

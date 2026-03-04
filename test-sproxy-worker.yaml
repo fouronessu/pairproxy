@@ -1,0 +1,41 @@
+# 集群负载均衡测试配置 — sproxy worker (sp-2)
+# 链路: mockagent → cproxy(:8080) → sp-1(:9000) ⟺ sp-2(:9001) → mockllm(:11434)
+
+listen:
+  host: "127.0.0.1"
+  port: 9001
+
+llm:
+  request_timeout: 30s
+  targets:
+    - url: "http://127.0.0.1:11434"
+      api_key: "mock-key"
+      provider: "anthropic"
+
+database:
+  path: "./test-cluster-worker.db"   # 独立数据库，用量由 reporter 上报至 primary
+  write_buffer_size: 10
+  flush_interval: 1s
+
+auth:
+  jwt_secret: "test-cluster-jwt-secret-shared-abcdef123"   # 必须与 primary 一致
+  access_token_ttl: 1h
+  refresh_token_ttl: 24h
+
+admin:
+  # password: testpass123
+  password_hash: "$2a$12$EcRnmKwWiE4sDfBS7.T7e.qYAzoqFTE6r/oN4061UaYadMTlQKzce"
+
+cluster:
+  role: "worker"
+  primary: "http://127.0.0.1:9000"   # sp-1 注册地址
+  self_addr: "http://127.0.0.1:9001"
+  self_weight: 50
+  shared_secret: "test-cluster-hmac-secret-xyz789"   # 必须与 primary 一致
+  report_interval: 3s                # 加快心跳，便于测试中快速完成注册
+
+dashboard:
+  enabled: false
+
+log:
+  level: "debug"
