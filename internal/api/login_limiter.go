@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -118,22 +119,46 @@ func (l *LoginLimiter) Purge() {
 	}
 }
 
-// realIP 从请求中提取真实客户端 IP（支持 X-Forwarded-For / X-Real-IP 透传）。
-// 若均无法获取则回退到 RemoteAddr（去掉端口）。
-func realIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For 可能包含多个 IP，第一个为原始客户端
-		parts := strings.SplitN(xff, ",", 2)
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
+// realIP 从请求中提取真实客户端 IP。
+// 当且仅当请求来自 trustedProxies 中的某个 CIDR 时，才信任 X-Forwarded-For / X-Real-IP。
+// trustedProxies 为空时永不信任代理头（最安全的默认行为）。
+func realIP(r *http.Request, trustedProxies []net.IPNet) string {
+	remote := extractRemoteHost(r.RemoteAddr)
+	if len(trustedProxies) > 0 {
+		if ip := net.ParseIP(remote); ip != nil && inTrustedProxies(ip, trustedProxies) {
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				parts := strings.SplitN(xff, ",", 2)
+				if client := strings.TrimSpace(parts[0]); client != "" {
+					if net.ParseIP(client) != nil {
+						return client
+					}
+				}
+			}
+			if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+				if net.ParseIP(xri) != nil {
+					return xri
+				}
+			}
 		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+	return remote
+}
+
+// extractRemoteHost 从 "IP:port" 形式的地址中提取 IP 部分。
+func extractRemoteHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr // addr has no port (e.g. bare IP passed directly)
 	}
-	// RemoteAddr 格式为 "IP:port"
-	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx >= 0 {
-		return r.RemoteAddr[:idx]
+	return host
+}
+
+// inTrustedProxies 检查 ip 是否属于任意一个 CIDR。
+func inTrustedProxies(ip net.IP, proxies []net.IPNet) bool {
+	for i := range proxies {
+		if proxies[i].Contains(ip) {
+			return true
+		}
 	}
-	return r.RemoteAddr
+	return false
 }

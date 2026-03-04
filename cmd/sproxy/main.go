@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -412,9 +413,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// ---------------------------------------------------------------------------
 
 	tokenRepo := db.NewRefreshTokenRepo(database, logger)
+	var trustedProxies []net.IPNet
+	for _, cidr := range cfg.Auth.TrustedProxies {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			logger.Warn("invalid trusted_proxy CIDR, skipping",
+				zap.String("cidr", cidr), zap.Error(err))
+			continue
+		}
+		trustedProxies = append(trustedProxies, *ipNet)
+	}
 	authCfg := api.AuthConfig{
 		AccessTokenTTL:  cfg.Auth.AccessTokenTTL,
 		RefreshTokenTTL: cfg.Auth.RefreshTokenTTL,
+		TrustedProxies:  trustedProxies,
 	}
 	authHandler := api.NewAuthHandler(logger, jwtMgr, userRepo, tokenRepo, authCfg)
 

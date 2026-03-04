@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 type AuthConfig struct {
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	TrustedProxies  []net.IPNet // pre-parsed from config.SProxyAuth.TrustedProxies
 }
 
 // DefaultAuthConfig 默认 TTL 配置
@@ -105,7 +107,7 @@ type logoutRequest struct {
 // ---------------------------------------------------------------------------
 
 func (h *AuthHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	clientIP := realIP(r)
+	clientIP := realIP(r, h.cfg.TrustedProxies)
 
 	// 速率限制检查：IP 是否被锁定
 	if allowed, retryAfter := h.loginLimiter.Check(clientIP); !allowed {
