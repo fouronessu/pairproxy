@@ -26,9 +26,10 @@ type PeerInfo struct {
 // PeerRegistry 管理已注册的 sp-2 节点。
 // sp-1 持有此 Registry；sp-2 通过 POST /api/internal/register 心跳注册。
 type PeerRegistry struct {
-	logger  *zap.Logger
-	manager *Manager // 同步到负载均衡器
-	ttl     time.Duration
+	logger     *zap.Logger
+	manager    *Manager // 同步到负载均衡器
+	ttl        time.Duration
+	selfTarget *lb.Target // primary 自身的路由条目，始终包含在路由表中
 
 	mu    sync.RWMutex
 	peers map[string]*PeerInfo // key: peer.ID
@@ -42,6 +43,12 @@ func NewPeerRegistry(logger *zap.Logger, manager *Manager) *PeerRegistry {
 		ttl:     defaultHeartbeatTTL,
 		peers:   make(map[string]*PeerInfo),
 	}
+}
+
+// SetSelfTarget 设置 primary 自身的负载均衡条目。
+// 每次 syncToManager 都会将此条目预置在路由表首位，确保 primary 永远不会被 worker 心跳从路由表中抹去。
+func (pr *PeerRegistry) SetSelfTarget(t lb.Target) {
+	pr.selfTarget = &t
 }
 
 // Register 注册或更新一个 peer（心跳调用）。
@@ -128,13 +135,17 @@ func (pr *PeerRegistry) EvictStale() {
 }
 
 // syncToManager 将当前 peer 列表同步到 ClusterManager（触发路由表版本递增）。
+// 若设置了 selfTarget，则始终将其置于路由表首位，确保 primary 不会被 worker 心跳覆盖。
 func (pr *PeerRegistry) syncToManager() {
 	if pr.manager == nil {
 		return
 	}
 
 	pr.mu.RLock()
-	targets := make([]lb.Target, 0, len(pr.peers))
+	targets := make([]lb.Target, 0, 1+len(pr.peers))
+	if pr.selfTarget != nil {
+		targets = append(targets, *pr.selfTarget)
+	}
 	for _, p := range pr.peers {
 		targets = append(targets, lb.Target{
 			ID:      p.ID,

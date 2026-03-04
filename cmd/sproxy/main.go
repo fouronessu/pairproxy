@@ -230,6 +230,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 		clusterMgr = cluster.NewManager(logger, peerBalancer, initialLBTargets, cacheDir)
 		peerRegistry = cluster.NewPeerRegistry(logger, clusterMgr)
+		// 确保 primary 自身始终包含在路由表中，不被 worker 心跳覆盖
+		if cfg.Cluster.SelfAddr != "" {
+			peerRegistry.SetSelfTarget(lb.Target{
+				ID:      cfg.Cluster.SelfAddr,
+				Addr:    cfg.Cluster.SelfAddr,
+				Weight:  selfWeight,
+				Healthy: true,
+			})
+		}
 
 		logger.Info("cluster: running as primary (sp-1)",
 			zap.String("self_addr", cfg.Cluster.SelfAddr),
