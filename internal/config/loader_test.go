@@ -71,7 +71,7 @@ llm:
 database:
   path: "./test.db"
 auth:
-  jwt_secret: "my-secret"
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
   access_token_ttl: 24h
 cluster:
   role: primary
@@ -113,7 +113,7 @@ llm:
 database:
   path: "./test.db"
 auth:
-  jwt_secret: "secret"
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
 cluster:
   role: primary
 `
@@ -142,7 +142,7 @@ llm:
 database:
   path: "./test.db"
 auth:
-  jwt_secret: "secret"
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
 cluster:
   role: primary
 `
@@ -241,7 +241,7 @@ func TestApplyDefaultsSProxy(t *testing.T) {
 	// 提供 Validate() 要求的必填字段，其余字段验证默认值
 	minimalYAML := `
 auth:
-  jwt_secret: "test-secret"
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
 database:
   path: "./test.db"
 llm:
@@ -299,7 +299,7 @@ llm:
 database:
   path: "./test.db"
 auth:
-  jwt_secret: "secret"
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
 cluster:
   role: primary
 `

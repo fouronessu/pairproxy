@@ -223,7 +223,7 @@ func TestValidateCProxy_MultipleErrors(t *testing.T) {
 func TestValidate_WorkerRequiresSharedSecret(t *testing.T) {
 	cfg := &SProxyFullConfig{}
 	cfg.Listen.Port = 9000
-	cfg.Auth.JWTSecret = "secret"
+	cfg.Auth.JWTSecret = "test-jwt-secret-1234567890abcdef"
 	cfg.Database.Path = "/tmp/test.db"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://llm", APIKey: "key"}}
 	cfg.Cluster.Role = "worker"
@@ -242,7 +242,7 @@ func TestValidate_WorkerRequiresSharedSecret(t *testing.T) {
 func TestValidate_WorkerWithSharedSecret_OK(t *testing.T) {
 	cfg := &SProxyFullConfig{}
 	cfg.Listen.Port = 9000
-	cfg.Auth.JWTSecret = "secret"
+	cfg.Auth.JWTSecret = "test-jwt-secret-1234567890abcdef"
 	cfg.Database.Path = "/tmp/test.db"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://llm", APIKey: "key"}}
 	cfg.Cluster.Role = "worker"
@@ -261,7 +261,7 @@ func TestValidate_WorkerWithSharedSecret_OK(t *testing.T) {
 func validSProxyCfg() *SProxyFullConfig {
 	return &SProxyFullConfig{
 		Listen: ListenConfig{Host: "0.0.0.0", Port: 9000},
-		Auth:   SProxyAuth{JWTSecret: "test-secret"},
+		Auth:   SProxyAuth{JWTSecret: "test-jwt-secret-1234567890abcdef"},
 		Database: DatabaseConfig{
 			Path:            "/tmp/test.db",
 			WriteBufferSize: 200,

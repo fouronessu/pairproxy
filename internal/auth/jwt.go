@@ -156,9 +156,10 @@ type blacklistEntry struct {
 
 // Blacklist 线程安全的 JTI 黑名单，TTL 后自动清理
 type Blacklist struct {
-	mu      sync.RWMutex
-	entries map[string]blacklistEntry
-	logger  *zap.Logger
+	mu         sync.RWMutex
+	entries    map[string]blacklistEntry
+	logger     *zap.Logger
+	cleanupOne sync.Once // 保证 StartCleanup goroutine 只启动一次
 }
 
 // NewBlacklist 创建新的 Blacklist
@@ -214,20 +215,23 @@ func (b *Blacklist) cleanup() {
 	}
 }
 
-// StartCleanup 启动后台清理 goroutine，每 5 分钟运行一次
+// StartCleanup 启动后台清理 goroutine，每 5 分钟运行一次。
+// 多次调用是安全的：goroutine 只会启动一次。
 func (b *Blacklist) StartCleanup(ctx interface{ Done() <-chan struct{} }) {
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		b.logger.Debug("blacklist cleanup goroutine started")
-		for {
-			select {
-			case <-ticker.C:
-				b.cleanup()
-			case <-ctx.Done():
-				b.logger.Debug("blacklist cleanup goroutine stopped")
-				return
+	b.cleanupOne.Do(func() {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			b.logger.Debug("blacklist cleanup goroutine started")
+			for {
+				select {
+				case <-ticker.C:
+					b.cleanup()
+				case <-ctx.Done():
+					b.logger.Debug("blacklist cleanup goroutine stopped")
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 }

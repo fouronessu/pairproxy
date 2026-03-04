@@ -29,16 +29,17 @@ type AdminHandler struct {
 	groupRepo         *db.GroupRepo
 	usageRepo         *db.UsageRepo
 	auditRepo         *db.AuditRepo
-	tokenRepo         *db.RefreshTokenRepo          // 可选，token 吊销
-	apiKeyRepo        *db.APIKeyRepo                // 可选，F-5 多 API Key 管理
-	encryptFn         func(string) (string, error)  // 可选，加密 API Key 明文
-	llmBindingRepo    *db.LLMBindingRepo            // 可选，LLM 绑定管理
+	tokenRepo         *db.RefreshTokenRepo           // 可选，token 吊销
+	apiKeyRepo        *db.APIKeyRepo                 // 可选，F-5 多 API Key 管理
+	encryptFn         func(string) (string, error)   // 可选，加密 API Key 明文
+	llmBindingRepo    *db.LLMBindingRepo             // 可选，LLM 绑定管理
 	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
 	drainFn           func() error                   // 可选，进入排水模式
 	undrainFn         func() error                   // 可选，退出排水模式
 	drainStatusFn     func() proxy.DrainStatus       // 可选，查询排水状态
 	adminPasswordHash string
 	tokenTTL          time.Duration
+	limiter           *LoginLimiter // 管理员登录失败速率限制
 }
 
 // SetTokenRepo 注入 RefreshTokenRepo（用于 token 吊销端点）
@@ -64,6 +65,7 @@ func NewAdminHandler(
 		auditRepo:         auditRepo,
 		adminPasswordHash: adminPasswordHash,
 		tokenTTL:          tokenTTL,
+		limiter:           NewLoginLimiter(5, time.Minute, 5*time.Minute),
 	}
 }
 
@@ -172,6 +174,20 @@ type adminLoginResponse struct {
 }
 
 func (h *AdminHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	clientIP := extractRemoteHost(r.RemoteAddr)
+
+	// 速率限制检查：IP 是否被锁定
+	if allowed, retryAfter := h.limiter.Check(clientIP); !allowed {
+		h.logger.Warn("admin login blocked: too many failures",
+			zap.String("remote_ip", clientIP),
+			zap.Duration("retry_after", retryAfter),
+		)
+		w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter.Seconds()))
+		writeJSONError(w, http.StatusTooManyRequests, "too_many_attempts",
+			fmt.Sprintf("too many failed login attempts; try again in %.0f seconds", retryAfter.Seconds()))
+		return
+	}
+
 	var req adminLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -182,10 +198,12 @@ func (h *AdminHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.adminPasswordHash == "" || !auth.VerifyPassword(h.logger, h.adminPasswordHash, req.Password) {
-		h.logger.Warn("admin login: invalid password")
+		h.logger.Warn("admin login: invalid password", zap.String("remote_ip", clientIP))
+		h.limiter.RecordFailure(clientIP)
 		writeJSONError(w, http.StatusUnauthorized, "invalid_credentials", "incorrect password")
 		return
 	}
+	h.limiter.RecordSuccess(clientIP)
 
 	token, err := h.jwtMgr.Sign(auth.JWTClaims{
 		UserID:   adminUserID,

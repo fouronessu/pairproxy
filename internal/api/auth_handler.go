@@ -20,6 +20,7 @@ type AuthConfig struct {
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 	TrustedProxies  []net.IPNet // pre-parsed from config.SProxyAuth.TrustedProxies
+	DefaultGroup    string      // JIT 用户首次登录时自动分配的分组名（空=不分配）
 }
 
 // DefaultAuthConfig 默认 TTL 配置
@@ -169,12 +170,18 @@ func (h *AuthHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 				zap.String("auth_provider", providerUser.AuthProvider),
 				zap.String("external_id", providerUser.ExternalID),
 			)
+			var defaultGroupID *string
+			if h.cfg.DefaultGroup != "" {
+				g := h.cfg.DefaultGroup
+				defaultGroupID = &g
+			}
 			newUser := &db.User{
 				Username:     req.Username,
 				PasswordHash: "", // Provider 认证不使用本地密码
 				AuthProvider: providerUser.AuthProvider,
 				ExternalID:   providerUser.ExternalID,
 				IsActive:     true,
+				GroupID:      defaultGroupID,
 			}
 			if createErr := h.userRepo.Create(newUser); createErr != nil {
 				h.logger.Error("login: JIT create user failed",
@@ -357,7 +364,10 @@ func (h *AuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	// 撤销 refresh token（如果提供）
 	var req logoutRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("logout: could not parse request body, skipping refresh token revocation",
+			zap.Error(err))
+	}
 	if req.RefreshToken != "" {
 		if err := h.tokenRepo.Revoke(req.RefreshToken); err != nil {
 			h.logger.Error("logout: failed to revoke refresh token",

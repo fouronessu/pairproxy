@@ -132,6 +132,10 @@ func (h *AdminHandler) handleCreateLLMBinding(w http.ResponseWriter, r *http.Req
 		writeJSONError(w, http.StatusBadRequest, "missing_field", "user_id or group_id is required")
 		return
 	}
+	if req.UserID != nil && req.GroupID != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "user_id and group_id are mutually exclusive")
+		return
+	}
 	if err := h.llmBindingRepo.Set(req.TargetURL, req.UserID, req.GroupID); err != nil {
 		h.logger.Error("create LLM binding failed", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")

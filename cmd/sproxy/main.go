@@ -427,6 +427,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		AccessTokenTTL:  cfg.Auth.AccessTokenTTL,
 		RefreshTokenTTL: cfg.Auth.RefreshTokenTTL,
 		TrustedProxies:  trustedProxies,
+		DefaultGroup:    cfg.Auth.DefaultGroup,
 	}
 	authHandler := api.NewAuthHandler(logger, jwtMgr, userRepo, tokenRepo, authCfg)
 

@@ -127,9 +127,10 @@ type SProxyAuth struct {
 	JWTSecret       string        `yaml:"jwt_secret"`        // 支持 ${ENV_VAR}
 	AccessTokenTTL  time.Duration `yaml:"access_token_ttl"`  // 默认 24h
 	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl"` // 默认 168h (7d)
-	Provider        string        `yaml:"provider"`           // "local"（默认）| "ldap"
+	Provider        string        `yaml:"provider"`          // "local"（默认）| "ldap"
 	LDAP            LDAPConfig    `yaml:"ldap"`              // LDAP 配置（provider="ldap" 时生效）
 	TrustedProxies  []string      `yaml:"trusted_proxies"`   // CIDR 列表，仅来自这些代理的请求才信任 XFF；空=不信任任何代理
+	DefaultGroup    string        `yaml:"default_group"`     // JIT 用户首次登录时自动分配的分组名（空=不分配）
 }
 
 // AdminConfig s-proxy 管理员配置
@@ -194,6 +195,8 @@ func (c *SProxyFullConfig) Validate() error {
 
 	if c.Auth.JWTSecret == "" {
 		errs = append(errs, "auth.jwt_secret is required (set ${JWT_SECRET} or provide the value directly)")
+	} else if len(c.Auth.JWTSecret) < 32 {
+		errs = append(errs, "auth.jwt_secret should be at least 32 characters for security (current length is too short)")
 	}
 	if c.Database.Path == "" {
 		errs = append(errs, "database.path is required")

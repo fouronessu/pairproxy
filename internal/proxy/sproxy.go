@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -620,7 +621,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil && r.ContentLength != 0 {
 			bodyBytes, readErr := io.ReadAll(r.Body)
 			r.Body.Close()
-			r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			if readErr == nil {
 				var reqBody struct {
 					MaxTokens int64 `json:"max_tokens"`
@@ -756,7 +757,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				// 非 streaming：读取完整 body，解析 token，然后重新放回（ReverseProxy 需要）
 				body, readErr := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				resp.Body = io.NopCloser(strings.NewReader(string(body)))
+				resp.Body = io.NopCloser(bytes.NewReader(body))
 
 				if readErr != nil {
 					sp.logger.Warn("failed to read non-streaming body",
@@ -815,7 +816,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			errRecord.DurationMs = durationMs
 			sp.writer.Record(errRecord)
 
-			writeJSONError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			writeJSONError(w, http.StatusBadGateway, "upstream_error", "upstream request failed")
 		},
 		// FlushInterval=-1：立即刷新（SSE 流式响应必须）
 		FlushInterval: -1,
