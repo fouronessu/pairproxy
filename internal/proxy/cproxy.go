@@ -362,10 +362,11 @@ func (cp *CProxy) applyRoutingTable(rt *cluster.RoutingTable) {
 	targets := make([]lb.Target, len(rt.Entries))
 	for i, e := range rt.Entries {
 		targets[i] = lb.Target{
-			ID:      e.ID,
-			Addr:    e.Addr,
-			Weight:  e.Weight,
-			Healthy: e.Healthy,
+			ID:       e.ID,
+			Addr:     e.Addr,
+			Weight:   e.Weight,
+			Healthy:  e.Healthy,
+			Draining: e.Draining,
 		}
 	}
 	cp.balancer.UpdateTargets(targets)
