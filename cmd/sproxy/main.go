@@ -607,7 +607,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		Handler:      mux,
 		ReadTimeout:  5 * time.Minute,  // SSE 流可能很长
 		WriteTimeout: 10 * time.Minute, // 同上
-		IdleTimeout:  2 * time.Minute,
+		IdleTimeout:  5 * time.Minute,  // SSE 长连接：LLM 推理期间可能静默 >2min
 	}
 
 	// SIGHUP 热重载（Unix/Linux only；Windows 上为 no-op）

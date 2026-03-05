@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -60,7 +61,18 @@ func NewCProxy(
 		tokenStore: tokenStore,
 		tokenDir:   tokenDir,
 		balancer:   balancer,
-		transport:  http.DefaultTransport,
+		transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second, // TCP 握手超时
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ResponseHeaderTimeout: 30 * time.Second, // sproxy 首包超时（防悬挂）
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			ForceAttemptHTTP2:     false, // s-proxy 不需要 HTTP/2
+		},
 		cacheDir:   cacheDir,
 	}
 
