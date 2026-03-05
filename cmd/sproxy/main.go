@@ -380,6 +380,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// Phase 6: 告警通知器（支持多 webhook 目标 + 事件过滤 + 自定义模板）
+	var notifier *alert.Notifier
 	{
 		var targets []alert.WebhookTargetConfig
 		for _, wt := range cfg.Cluster.AlertWebhooks {
@@ -389,7 +390,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				Template: wt.Template,
 			})
 		}
-		notifier := alert.NewNotifierMulti(logger, targets, cfg.Cluster.AlertWebhook)
+		notifier = alert.NewNotifierMulti(logger, targets, cfg.Cluster.AlertWebhook)
 		quotaChecker.SetNotifier(notifier)
 		totalTargets := len(targets)
 		if cfg.Cluster.AlertWebhook != "" {
@@ -401,6 +402,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 				zap.String("legacy_webhook", cfg.Cluster.AlertWebhook),
 			)
 		}
+	}
+
+	// 活跃请求数阈值监控：alert_threshold > 0 时启用
+	sp.SetNotifier(notifier)
+	if cfg.Cluster.AlertThreshold > 0 {
+		proxy.StartActiveRequestsMonitor(ctx, sp, int64(cfg.Cluster.AlertThreshold), notifier, sourceNode, logger)
 	}
 
 	// Phase 6: 速率限制器定期清理（每分钟清理过期窗口）

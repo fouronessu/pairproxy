@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 
+	"github.com/l17728/pairproxy/internal/alert"
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/db"
@@ -78,6 +79,7 @@ type SProxy struct {
 	maxRetries      int                                               // RetryTransport 最大重试次数
 
 	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
+	notifier    *alert.Notifier             // 可选，非 nil 时发送 high_load/load_recovered 告警
 }
 
 // NewSProxy 创建 SProxy。
@@ -256,6 +258,87 @@ func (sp *SProxy) GetDrainStatus() DrainStatus {
 // ActiveRequests 返回当前活跃请求数。
 func (sp *SProxy) ActiveRequests() int64 {
 	return sp.activeRequests.Load()
+}
+
+// SetNotifier 设置告警通知器（可选）。
+// 设置后，StartActiveRequestsMonitor 会在活跃请求数越过/恢复阈值时触发 webhook 告警。
+func (sp *SProxy) SetNotifier(n *alert.Notifier) {
+	sp.notifier = n
+}
+
+// StartActiveRequestsMonitor 启动活跃请求数阈值监控。
+// threshold=0 或 notifier=nil 时为 no-op（不启动 goroutine）。
+// 内部每 10 秒采样一次；越过阈值时触发 EventHighLoad，恢复后触发 EventLoadRecovered。
+// 边沿触发：持续超载只触发一次告警，不产生告警风暴。
+func StartActiveRequestsMonitor(
+	ctx context.Context,
+	sp *SProxy,
+	threshold int64,
+	notifier *alert.Notifier,
+	sourceNode string,
+	logger *zap.Logger,
+) {
+	startActiveRequestsMonitor(ctx, sp, threshold, notifier, sourceNode, logger, 10*time.Second)
+}
+
+// startActiveRequestsMonitor 是可测试的内部实现，interval 可由测试注入短周期。
+func startActiveRequestsMonitor(
+	ctx context.Context,
+	sp *SProxy,
+	threshold int64,
+	notifier *alert.Notifier,
+	sourceNode string,
+	logger *zap.Logger,
+	interval time.Duration,
+) {
+	if threshold <= 0 || notifier == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var overThreshold bool
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				current := sp.activeRequests.Load()
+				if !overThreshold && current >= threshold {
+					overThreshold = true
+					logger.Warn("active_requests exceeded alert threshold",
+						zap.Int64("active_requests", current),
+						zap.Int64("threshold", threshold),
+					)
+					notifier.Notify(alert.Event{
+						Kind:    alert.EventHighLoad,
+						Message: fmt.Sprintf("active requests %d exceeded threshold %d", current, threshold),
+						Labels: map[string]string{
+							"node":      sourceNode,
+							"current":   strconv.FormatInt(current, 10),
+							"threshold": strconv.FormatInt(threshold, 10),
+						},
+					})
+				} else if overThreshold && current < threshold {
+					overThreshold = false
+					logger.Info("active_requests recovered below alert threshold",
+						zap.Int64("active_requests", current),
+						zap.Int64("threshold", threshold),
+					)
+					notifier.Notify(alert.Event{
+						Kind:    alert.EventLoadRecovered,
+						Message: fmt.Sprintf("active requests %d recovered below threshold %d", current, threshold),
+						Labels: map[string]string{
+							"node":      sourceNode,
+							"current":   strconv.FormatInt(current, 10),
+							"threshold": strconv.FormatInt(threshold, 10),
+						},
+					})
+				}
+			}
+		}
+	}()
+	logger.Info("active requests monitor started", zap.Int64("threshold", threshold))
 }
 
 // LLMTargetStatuses 返回当前所有 LLM 目标的运行时状态（含健康状态）。
