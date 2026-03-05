@@ -89,19 +89,12 @@ func newReliabilityTestSProxy(t *testing.T, targets []LLMTarget, transport http.
 // ---------------------------------------------------------------------------
 
 func TestSProxy_RetryOnUpstreamFailure(t *testing.T) {
+	r1 := makeTestResp(500, `{"error":"internal"}`)
+	r2 := makeTestResp(200, `{"id":"msg_1","content":[],"usage":{"input_tokens":10,"output_tokens":5}}`)
+	t.Cleanup(func() { r1.Body.Close(); r2.Body.Close() })
 	mt := &mockTransport{
-		responses: []*http.Response{
-			makeTestResp(500, `{"error":"internal"}`),
-			makeTestResp(200, `{"id":"msg_1","content":[],"usage":{"input_tokens":10,"output_tokens":5}}`),
-		},
+		responses: []*http.Response{r1, r2},
 	}
-	t.Cleanup(func() {
-		for _, r := range mt.responses {
-			if r != nil && r.Body != nil {
-				r.Body.Close()
-			}
-		}
-	})
 
 	targets := []LLMTarget{
 		{URL: "http://llm1.local", APIKey: "key1"},

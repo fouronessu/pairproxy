@@ -69,10 +69,11 @@ func closeResponses(resps []*http.Response) {
 // ---------------------------------------------------------------------------
 
 func TestRetryTransport_SuccessFirstAttempt(t *testing.T) {
+	r1 := makeResp(200, `{"ok":true}`)
+	t.Cleanup(func() { r1.Body.Close() })
 	inner := &mockRoundTripper{
-		responses: []*http.Response{makeResp(200, `{"ok":true}`)},
+		responses: []*http.Response{r1},
 	}
-	t.Cleanup(func() { closeResponses(inner.responses) })
 	successCalled := 0
 	rt := &RetryTransport{
 		Inner:      inner,
@@ -104,11 +105,12 @@ func TestRetryTransport_SuccessFirstAttempt(t *testing.T) {
 
 func TestRetryTransport_RetryOnConnectionError(t *testing.T) {
 	connErr := errors.New("connection refused")
+	r1 := makeResp(200, `{"ok":true}`)
+	t.Cleanup(func() { r1.Body.Close() })
 	inner := &mockRoundTripper{
 		errors:    []error{connErr, nil},
-		responses: []*http.Response{nil, makeResp(200, `{"ok":true}`)},
+		responses: []*http.Response{nil, r1},
 	}
-	t.Cleanup(func() { closeResponses(inner.responses) })
 
 	pickCalls := 0
 	rt := &RetryTransport{
@@ -142,13 +144,12 @@ func TestRetryTransport_RetryOnConnectionError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRetryTransport_RetryOn5xx(t *testing.T) {
+	r1 := makeResp(500, `{"error":"internal"}`)
+	r2 := makeResp(200, `{"ok":true}`)
+	t.Cleanup(func() { r1.Body.Close(); r2.Body.Close() })
 	inner := &mockRoundTripper{
-		responses: []*http.Response{
-			makeResp(500, `{"error":"internal"}`),
-			makeResp(200, `{"ok":true}`),
-		},
+		responses: []*http.Response{r1, r2},
 	}
-	t.Cleanup(func() { closeResponses(inner.responses) })
 
 	rt := &RetryTransport{
 		Inner:      inner,
@@ -180,12 +181,11 @@ func TestRetryTransport_RetryOn5xx(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRetryTransport_NoRetryOn4xx(t *testing.T) {
+	r1 := makeResp(429, `{"error":"rate_limit"}`)
+	t.Cleanup(func() { r1.Body.Close() })
 	inner := &mockRoundTripper{
-		responses: []*http.Response{
-			makeResp(429, `{"error":"rate_limit"}`),
-		},
+		responses: []*http.Response{r1},
 	}
-	t.Cleanup(func() { closeResponses(inner.responses) })
 	pickCalls := 0
 	rt := &RetryTransport{
 		Inner:      inner,
@@ -288,14 +288,12 @@ func TestRetryTransport_MaxRetriesExhausted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRetryTransport_BodyRestoredOnRetry(t *testing.T) {
+	r1 := makeResp(200, `{"ok":true}`)
+	t.Cleanup(func() { r1.Body.Close() })
 	inner := &mockRoundTripper{
-		errors: []error{errors.New("conn refused"), nil},
-		responses: []*http.Response{
-			nil,
-			makeResp(200, `{"ok":true}`),
-		},
+		errors:    []error{errors.New("conn refused"), nil},
+		responses: []*http.Response{nil, r1},
 	}
-	t.Cleanup(func() { closeResponses(inner.responses) })
 
 	const requestBody = `{"model":"claude","messages":[]}`
 	rt := &RetryTransport{
