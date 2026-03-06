@@ -140,7 +140,9 @@ func (h *UserHandler) handleQuotaStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.logger.Error("failed to encode quota status response", zap.Error(err))
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -180,5 +182,7 @@ func (h *UserHandler) handleUsageHistory(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(usageHistoryResponse{History: history})
+	if err := json.NewEncoder(w).Encode(usageHistoryResponse{History: history}); err != nil {
+		h.logger.Error("failed to encode usage history response", zap.Error(err))
+	}
 }

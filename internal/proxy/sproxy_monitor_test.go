@@ -22,12 +22,6 @@ func newMonitorTestSProxy(t *testing.T) *SProxy {
 	return &SProxy{}
 }
 
-type collectedEvents struct {
-	count atomic.Int32
-	kinds []string
-	mu    atomic.Pointer[[]string]
-}
-
 func newEventCollector(t *testing.T) (*alert.Notifier, *httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var received atomic.Int32
