@@ -381,6 +381,140 @@ Paginated request log entries.
 
 ---
 
+## Dashboard API (`/api/dashboard/*`)
+
+Dashboard 数据接口，用于概览页面的趋势图表。需要 admin 认证。
+
+**Authentication**: Bearer token (admin JWT) 或 `pairproxy_admin` cookie。
+
+---
+
+#### `GET /api/dashboard/trends`
+
+返回趋势数据，用于 Dashboard 概览页的图表展示。
+
+**Query parameters**
+
+| Name | Default | Description |
+|------|---------|-------------|
+| `days` | `7` | 时间范围（天），最大 365 |
+
+**Response 200**
+```json
+{
+  "daily_tokens": [
+    {
+      "date": "2025-03-01",
+      "input_tokens": 123456,
+      "output_tokens": 34567,
+      "total_tokens": 158023,
+      "request_count": 42
+    }
+  ],
+  "daily_cost": [
+    {
+      "date": "2025-03-01",
+      "cost_usd": 1.23
+    }
+  ],
+  "top_users": [
+    {
+      "user_id": "uuid",
+      "total_input": 50000,
+      "total_output": 15000,
+      "request_count": 20
+    }
+  ]
+}
+```
+
+- `daily_tokens`: 按日期聚合的 token 用量
+- `daily_cost`: 按日期聚合的费用（USD）
+- `top_users`: Top 5 用户按 token 总量排序
+
+---
+
+## User API (`/api/user/*`)
+
+用户自助服务接口，普通用户可访问（无需 admin 角色）。需要有效的用户 JWT。
+
+**Authentication**: `Authorization: Bearer <user_jwt>`
+
+---
+
+#### `GET /api/user/quota-status`
+
+返回当前用户的配额状态（已用 / 限额）。
+
+**Response 200**
+```json
+{
+  "daily_limit": 50000,
+  "daily_used": 12345,
+  "monthly_limit": 1000000,
+  "monthly_used": 234567,
+  "rpm_limit": 10
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `daily_limit` | 日配额上限，`0` 表示无限制 |
+| `daily_used` | 今日已用 token |
+| `monthly_limit` | 月配额上限，`0` 表示无限制 |
+| `monthly_used` | 本月已用 token |
+| `rpm_limit` | 每分钟请求限制，`0` 表示无限制 |
+
+**Error responses**
+
+| Status | `error` code | Reason |
+|--------|-------------|--------|
+| 401 | `unauthorized` | 缺少或无效的 JWT |
+| 404 | `not_found` | 用户不存在 |
+
+---
+
+#### `GET /api/user/usage-history`
+
+返回当前用户的每日 token 用量历史。
+
+**Query parameters**
+
+| Name | Default | Description |
+|------|---------|-------------|
+| `days` | `30` | 回溯天数（最大 365） |
+
+**Response 200**
+```json
+{
+  "history": [
+    {
+      "date": "2025-03-01",
+      "input_tokens": 12345,
+      "output_tokens": 3456,
+      "total_tokens": 15801,
+      "request_count": 12
+    },
+    {
+      "date": "2025-03-02",
+      "input_tokens": 23456,
+      "output_tokens": 5678,
+      "total_tokens": 29134,
+      "request_count": 18
+    }
+  ]
+}
+```
+
+**Error responses**
+
+| Status | `error` code | Reason |
+|--------|-------------|--------|
+| 401 | `unauthorized` | 缺少或无效的 JWT |
+| 500 | `internal_error` | 数据库查询失败 |
+
+---
+
 ## Internal Cluster API (`/api/internal/*`)
 
 Used by worker `s-proxy` nodes to communicate with the primary node. Requests must carry the shared secret:
