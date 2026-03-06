@@ -61,7 +61,7 @@ func TestFullChainWithMockProcesses(t *testing.T) {
 	userRepo.Create(&db.User{ID: "test-user", Username: "testuser", IsActive: true})
 
 	// Generate JWT token
-	jwtMgr, err := auth.NewManager(logger, "test-secret")
+	jwtMgr, err := auth.NewManager(logger, "test-secret-for-integration-testing-32chars")
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -76,14 +76,26 @@ func TestFullChainWithMockProcesses(t *testing.T) {
 
 	// Start mockllm process
 	mockllmCmd := startMockLLM(t, mockllmPort)
-	defer mockllmCmd.Process.Kill()
+	defer func() {
+		mockllmCmd.Process.Kill()
+		mockllmCmd.Wait()
+	}()
 
 	// Wait for mockllm to be ready
 	waitForPort(t, mockllmPort, 5*time.Second)
 
 	// Start sproxy process
 	sproxyCmd := startSProxy(t, sproxyPort, mockllmPort, dbPath, token)
-	defer sproxyCmd.Process.Kill()
+	defer func() {
+		sproxyCmd.Process.Kill()
+		sproxyCmd.Wait()
+		// Close database connection before cleanup
+		sqlDB, _ := gormDB.DB()
+		if sqlDB != nil {
+			sqlDB.Close()
+		}
+		time.Sleep(100 * time.Millisecond) // Give OS time to release file handles
+	}()
 
 	// Wait for sproxy to be ready
 	waitForPort(t, sproxyPort, 5*time.Second)
@@ -184,10 +196,17 @@ func waitForPort(t *testing.T, port int, timeout time.Duration) {
 func startMockLLM(t *testing.T, port int) *exec.Cmd {
 	t.Helper()
 
+	// Find project root (where go.mod is)
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("failed to find project root: %v", err)
+	}
+
 	// Build mockllm if not exists
-	mockllmPath := filepath.Join(".", "mockllm.exe")
+	mockllmPath := filepath.Join(projectRoot, "mockllm.exe")
 	if _, err := os.Stat(mockllmPath); os.IsNotExist(err) {
 		buildCmd := exec.Command("go", "build", "-o", mockllmPath, "./cmd/mockllm")
+		buildCmd.Dir = projectRoot
 		if output, err := buildCmd.CombinedOutput(); err != nil {
 			t.Fatalf("failed to build mockllm: %v\n%s", err, output)
 		}
@@ -209,39 +228,60 @@ func startMockLLM(t *testing.T, port int) *exec.Cmd {
 func startSProxy(t *testing.T, sproxyPort, mockllmPort int, dbPath, token string) *exec.Cmd {
 	t.Helper()
 
+	// Find project root
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("failed to find project root: %v", err)
+	}
+
 	// Create temporary config file
 	configPath := filepath.Join(t.TempDir(), "sproxy.yaml")
+	// Convert Windows path to forward slashes for YAML
+	dbPathForYAML := strings.ReplaceAll(dbPath, "\\", "/")
 	config := fmt.Sprintf(`
-server:
-  addr: ":%d"
-
-db:
-  path: "%s"
-
-jwt:
-  secret: "test-secret"
+listen:
+  host: "127.0.0.1"
+  port: %d
 
 llm:
+  request_timeout: 30s
   targets:
     - url: "http://127.0.0.1:%d"
       api_key: "mock-key"
       provider: "anthropic"
-`, sproxyPort, dbPath, mockllmPort)
+
+database:
+  path: "%s"
+  write_buffer_size: 10
+  flush_interval: 1s
+
+auth:
+  jwt_secret: "test-secret-for-integration-testing-32chars"
+  access_token_ttl: 1h
+  refresh_token_ttl: 24h
+
+admin:
+  password_hash: "$2a$12$EcRnmKwWiE4sDfBS7.T7e.qYAzoqFTE6r/oN4061UaYadMTlQKzce"
+
+log:
+  level: "info"
+`, sproxyPort, mockllmPort, dbPathForYAML)
 
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
 
 	// Build sproxy if not exists
-	sproxyPath := filepath.Join(".", "sproxy.exe")
+	sproxyPath := filepath.Join(projectRoot, "sproxy.exe")
 	if _, err := os.Stat(sproxyPath); os.IsNotExist(err) {
 		buildCmd := exec.Command("go", "build", "-o", sproxyPath, "./cmd/sproxy")
+		buildCmd.Dir = projectRoot
 		if output, err := buildCmd.CombinedOutput(); err != nil {
 			t.Fatalf("failed to build sproxy: %v\n%s", err, output)
 		}
 	}
 
-	cmd := exec.Command(sproxyPath, "--config", configPath)
+	cmd := exec.Command(sproxyPath, "start", "--config", configPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -251,6 +291,26 @@ llm:
 
 	t.Logf("Started sproxy on port %d (PID: %d)", sproxyPort, cmd.Process.Pid)
 	return cmd
+}
+
+// findProjectRoot finds the project root directory (where go.mod is)
+func findProjectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.mod not found")
+		}
+		dir = parent
+	}
 }
 
 // sendRequest sends a request to sproxy and returns the response content
