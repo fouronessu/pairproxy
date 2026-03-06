@@ -67,6 +67,41 @@
 ./sproxy admin quota status --group <name>                 # 查看分组今日/本月总用量 vs 配额
 ```
 
+### 用户自助查询（F-10）
+普通用户可通过 Dashboard 或 REST API 查询自己的配额和用量：
+
+**Web 界面**：登录 Dashboard 后点击「我的用量」，或访问 `/dashboard/my-usage`
+
+**REST API**（需用户 JWT 认证）：
+```bash
+# 查询配额状态
+curl -H "Authorization: Bearer <user-jwt>" \
+  http://localhost:9000/api/user/quota-status
+
+# 查询用量历史（默认 30 天）
+curl -H "Authorization: Bearer <user-jwt>" \
+  "http://localhost:9000/api/user/usage-history?days=30"
+```
+
+**响应示例**：
+```json
+// GET /api/user/quota-status
+{
+  "daily_limit": 50000,
+  "daily_used": 12345,
+  "monthly_limit": 1000000,
+  "monthly_used": 234567,
+  "rpm_limit": 10
+}
+
+// GET /api/user/usage-history
+{
+  "history": [
+    {"date": "2025-03-01", "input_tokens": 12345, "output_tokens": 3456, "total_tokens": 15801, "request_count": 12}
+  ]
+}
+```
+
 ### LLM 目标管理
 ```bash
 ./sproxy admin llm targets                                 # 查看所有 LLM target 及健康状态、绑定数

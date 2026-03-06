@@ -42,6 +42,8 @@
 | **登录频率限制** | 每 IP 5 次失败后锁定 5 分钟，防暴力破解 |
 | **管理审计日志** | 所有用户/分组增删改操作记录到 audit_logs，可在 Dashboard 查看 |
 | **Token 自动刷新** | cproxy 自动检测 token 过期，5s 内向 sproxy 换取新 token |
+| **趋势图表（F-10）** | Dashboard 概览页显示 Token 用量趋势、费用趋势、Top 5 用户图表，支持 7/30/90 天切换 |
+| **用户自助页面（F-10）** | 普通用户可查看自己的配额状态、用量历史，访问 `/dashboard/my-usage` 或调用 `/api/user/*` API |
 
 ---
 
