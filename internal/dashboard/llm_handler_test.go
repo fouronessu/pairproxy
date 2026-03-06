@@ -517,3 +517,114 @@ func TestHandleDrainExit(t *testing.T) {
 		}
 	})
 }
+
+// TestHandleLLMDistribute tests the LLM distribution handler
+func TestHandleLLMDistribute(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	userRepo := db.NewUserRepo(gormDB, logger)
+	groupRepo := db.NewGroupRepo(gormDB, logger)
+	usageRepo := db.NewUsageRepo(gormDB, logger)
+	auditRepo := db.NewAuditRepo(logger, gormDB)
+	llmBindingRepo := db.NewLLMBindingRepo(gormDB, logger)
+
+	jwtMgr, err := auth.NewManager(logger, "test-secret")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("test-pass"), bcrypt.MinCost)
+
+	// Create test users
+	userRepo.Create(&db.User{ID: "user1", Username: "user1", IsActive: true})
+	userRepo.Create(&db.User{ID: "user2", Username: "user2", IsActive: true})
+	userRepo.Create(&db.User{ID: "user3", Username: "user3", IsActive: false})
+
+	h := dashboard.NewHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo, auditRepo, string(hash), time.Hour)
+
+	// Set LLM dependencies
+	h.SetLLMDeps(llmBindingRepo, func() []proxy.LLMTargetStatus {
+		return []proxy.LLMTargetStatus{
+			{URL: "http://llm1.example.com", Healthy: true},
+			{URL: "http://llm2.example.com", Healthy: true},
+		}
+	})
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	token, _ := jwtMgr.Sign(auth.JWTClaims{
+		UserID:   "__admin__",
+		Username: "admin",
+		Role:     "admin",
+	}, time.Hour)
+
+	t.Run("distribute_success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/dashboard/llm/distribute", nil)
+		req.AddCookie(&http.Cookie{Name: api.AdminCookieName, Value: token})
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusFound && rr.Code != http.StatusSeeOther {
+			t.Errorf("status = %d, want 302 or 303", rr.Code)
+		}
+
+		loc := rr.Header().Get("Location")
+		if !strings.Contains(loc, "flash=") {
+			t.Errorf("expected flash message in redirect, got %q", loc)
+		}
+	})
+
+	t.Run("no_llm_targets", func(t *testing.T) {
+		h2 := dashboard.NewHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo, auditRepo, string(hash), time.Hour)
+		h2.SetLLMDeps(llmBindingRepo, func() []proxy.LLMTargetStatus {
+			return []proxy.LLMTargetStatus{}
+		})
+
+		mux2 := http.NewServeMux()
+		h2.RegisterRoutes(mux2)
+
+		req := httptest.NewRequest(http.MethodPost, "/dashboard/llm/distribute", nil)
+		req.AddCookie(&http.Cookie{Name: api.AdminCookieName, Value: token})
+		rr := httptest.NewRecorder()
+		mux2.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusFound && rr.Code != http.StatusSeeOther {
+			t.Errorf("status = %d, want 302 or 303", rr.Code)
+		}
+
+		loc := rr.Header().Get("Location")
+		if !strings.Contains(loc, "error=") {
+			t.Errorf("expected error in redirect, got %q", loc)
+		}
+	})
+
+	t.Run("llm_binding_not_configured", func(t *testing.T) {
+		h3 := dashboard.NewHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo, auditRepo, string(hash), time.Hour)
+
+		mux3 := http.NewServeMux()
+		h3.RegisterRoutes(mux3)
+
+		req := httptest.NewRequest(http.MethodPost, "/dashboard/llm/distribute", nil)
+		req.AddCookie(&http.Cookie{Name: api.AdminCookieName, Value: token})
+		rr := httptest.NewRecorder()
+		mux3.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusFound && rr.Code != http.StatusSeeOther {
+			t.Errorf("status = %d, want 302 or 303", rr.Code)
+		}
+
+		loc := rr.Header().Get("Location")
+		if !strings.Contains(loc, "error=") {
+			t.Errorf("expected error in redirect, got %q", loc)
+		}
+	})
+}
