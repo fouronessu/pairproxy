@@ -240,9 +240,9 @@ func TestNotifier_Notify_NoTargets_by_kimi2_5(t *testing.T) {
 
 // TestNotifier_Notify_SuccessfulDelivery tests successful webhook delivery
 func TestNotifier_Notify_SuccessfulDelivery_by_kimi2_5(t *testing.T) {
-	var received bool
+	var received atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = true
+		received.Store(true)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -258,7 +258,7 @@ func TestNotifier_Notify_SuccessfulDelivery_by_kimi2_5(t *testing.T) {
 	// Give some time for the goroutine to execute
 	time.Sleep(100 * time.Millisecond)
 
-	if !received {
+	if !received.Load() {
 		t.Error("expected webhook to be received")
 	}
 }
