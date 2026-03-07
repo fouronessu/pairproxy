@@ -590,6 +590,89 @@ type DailyCostRow struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
+// UserAllTimeStat 用户历史累计统计（跨所有时间段）
+type UserAllTimeStat struct {
+	UserID      string `gorm:"column:user_id"`
+	TotalInput  int64  `gorm:"column:total_input"`
+	TotalOutput int64  `gorm:"column:total_output"`
+	TotalTokens int64  `gorm:"column:total_tokens"`
+	// SQLite 聚合函数（MIN/MAX）返回文本，用 string 接收，
+	// 由 GetUserAllTimeStats 负责解析为 time.Time。
+	FirstUsedAtRaw string `gorm:"column:first_used_at"`
+	LastUsedAtRaw  string `gorm:"column:last_used_at"`
+	DaysActive     int    `gorm:"column:days_active"`   // COUNT(DISTINCT DATE(created_at))：实际有记录的天数
+	MonthsActive   int    `gorm:"column:months_active"` // (julianday(now) - julianday(first_used_at)) / 30，向下取整
+
+	// 解析后的时间字段，由 GetUserAllTimeStats 填充
+	FirstUsedAt time.Time `gorm:"-"`
+	LastUsedAt  time.Time `gorm:"-"`
+}
+
+// GetUserAllTimeStats 获取所有用户的历史累计用量统计（按 user_id 聚合全量记录）。
+// 适用于 Dashboard 用户管理页面的统计列展示。
+// 返回结果按 total_tokens DESC 排序，方便前端直接使用。
+func (r *UsageRepo) GetUserAllTimeStats() ([]UserAllTimeStat, error) {
+	var stats []UserAllTimeStat
+	err := r.db.Model(&UsageLog{}).
+		Select(`user_id,
+			COALESCE(SUM(input_tokens), 0)                                      AS total_input,
+			COALESCE(SUM(output_tokens), 0)                                     AS total_output,
+			COALESCE(SUM(input_tokens + output_tokens), 0)                      AS total_tokens,
+			MIN(created_at)                                                     AS first_used_at,
+			MAX(created_at)                                                     AS last_used_at,
+			COUNT(DISTINCT DATE(created_at))                                    AS days_active,
+			CAST((julianday('now') - julianday(MIN(created_at))) / 30 AS INTEGER) AS months_active`).
+		Group("user_id").
+		Order("total_tokens DESC").
+		Scan(&stats).Error
+	if err != nil {
+		r.logger.Error("failed to get user all-time stats", zap.Error(err))
+		return nil, fmt.Errorf("get user all-time stats: %w", err)
+	}
+
+	// 解析 SQLite 返回的时间字符串（格式可能为 RFC3339 或 "2006-01-02 15:04:05.999999999+07:00"）
+	for i := range stats {
+		if raw := stats[i].FirstUsedAtRaw; raw != "" {
+			if t, err := parseFlexTime(raw); err == nil {
+				stats[i].FirstUsedAt = t
+			} else {
+				r.logger.Warn("failed to parse first_used_at", zap.String("raw", raw), zap.Error(err))
+			}
+		}
+		if raw := stats[i].LastUsedAtRaw; raw != "" {
+			if t, err := parseFlexTime(raw); err == nil {
+				stats[i].LastUsedAt = t
+			} else {
+				r.logger.Warn("failed to parse last_used_at", zap.String("raw", raw), zap.Error(err))
+			}
+		}
+	}
+
+	r.logger.Debug("user all-time stats queried", zap.Int("count", len(stats)))
+	return stats, nil
+}
+
+// parseFlexTime 尝试多种 SQLite 时间格式解析。
+// GORM/mattn-go-sqlite3 以 RFC3339Nano、RFC3339 或 "2006-01-02 15:04:05" 等格式存储。
+func parseFlexTime(s string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q with any known layout", s)
+}
+
 // DailyCost 返回指定时间段内按天聚合的费用（全局或指定用户）
 func (r *UsageRepo) DailyCost(from, to time.Time, userID string) ([]DailyCostRow, error) {
 	query := r.db.Model(&UsageLog{}).

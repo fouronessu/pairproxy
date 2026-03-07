@@ -155,6 +155,8 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 		cols  string
 	}{
 		{"usage_logs", "idx_usage_user_date", "(user_id, created_at)"},
+		// idx_usage_user_id 支持 GetUserAllTimeStats 按 user_id GROUP BY 的快速聚合
+		{"usage_logs", "idx_usage_user_id", "(user_id)"},
 	}
 	for _, idx := range extraIndexes {
 		sql := fmt.Sprintf(

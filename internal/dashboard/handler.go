@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -35,6 +36,11 @@ type Handler struct {
 	drainFn           func() error                   // 可选，进入排水模式
 	undrainFn         func() error                   // 可选，退出排水模式
 	drainStatusFn     func() proxy.DrainStatus       // 可选，查询排水状态
+
+	// 用户统计缓存（5 分钟 TTL，PRD NFR-缓存要求）
+	userStatsCacheMu  sync.Mutex
+	userStatsCacheVal []userStatsResponse
+	userStatsCacheExp time.Time
 }
 
 // SetTokenRepo 设置 RefreshTokenRepo（用于 token 吊销操作）
@@ -99,6 +105,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Trends API（F-10 WebUI 增强）
 	mux.Handle("GET /api/dashboard/trends", h.requireSession(http.HandlerFunc(h.handleTrendsAPI)))
+
+	// 用户统计 API（dashboard-user-token-stats）
+	mux.Handle("GET /dashboard/api/user-stats", h.requireSession(http.HandlerFunc(h.handleUserStats)))
 }
 
 // SetLLMDeps 设置 LLM 绑定相关依赖（可选；不设置则 LLM 页面显示空状态）。
@@ -786,4 +795,135 @@ func (h *Handler) handleMyUsagePage(w http.ResponseWriter, r *http.Request) {
 		Flash: r.URL.Query().Get("flash"),
 		Error: r.URL.Query().Get("error"),
 	})
+}
+
+// ---------------------------------------------------------------------------
+// 用户 Token 用量统计 API（dashboard-user-token-stats PRD）
+// GET /dashboard/api/user-stats
+// ---------------------------------------------------------------------------
+
+// userStatsResponse 单个用户的用量统计响应体
+type userStatsResponse struct {
+	UserID       string `json:"user_id"`
+	Username     string `json:"username"`
+	GroupName    string `json:"group_name"`
+	TotalInput   int64  `json:"total_input"`
+	TotalOutput  int64  `json:"total_output"`
+	TotalTokens  int64  `json:"total_tokens"`
+	AvgDaily     int64  `json:"avg_daily"`    // 总 Tokens / 实际使用天数
+	AvgMonthly   int64  `json:"avg_monthly"`  // 总 Tokens / 使用月数
+	DaysActive   int    `json:"days_active"`
+	MonthsActive int    `json:"months_active"`
+	FirstUsedAt  string `json:"first_used_at"` // YYYY-MM-DD；无记录时为空字符串
+	LastUsedAt   string `json:"last_used_at"`  // YYYY-MM-DD；无记录时为空字符串
+	IsActive     bool   `json:"is_active"`
+}
+
+const userStatsCacheTTL = 5 * time.Minute
+
+// handleUserStats 返回所有用户的历史累计 Token 用量统计（JSON）。
+// 结果缓存 5 分钟，减少重复的全表聚合查询。
+// 携带 ?_=<任意值> 时强制穿透缓存（对应前端"刷新统计"按钮）。
+func (h *Handler) handleUserStats(w http.ResponseWriter, r *http.Request) {
+	forceRefresh := r.URL.Query().Has("_")
+
+	// 尝试缓存命中（强制刷新时跳过）
+	if !forceRefresh {
+		h.userStatsCacheMu.Lock()
+		if h.userStatsCacheVal != nil && time.Now().Before(h.userStatsCacheExp) {
+			cached := h.userStatsCacheVal
+			h.userStatsCacheMu.Unlock()
+			h.logger.Debug("user stats cache hit")
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(cached); err != nil {
+				h.logger.Error("failed to encode user stats (cached)", zap.Error(err))
+			}
+			return
+		}
+		h.userStatsCacheMu.Unlock()
+	}
+
+	// 查询 DB
+	usageStats, err := h.usageRepo.GetUserAllTimeStats()
+	if err != nil {
+		h.logger.Error("failed to get user all-time stats", zap.Error(err))
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 获取全量用户信息（含 Group 预加载）
+	users, err := h.userRepo.ListByGroup("")
+	if err != nil {
+		h.logger.Error("failed to list users", zap.Error(err))
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 构建 user_id → User 映射
+	userMap := make(map[string]*db.User, len(users))
+	for i := range users {
+		userMap[users[i].ID] = &users[i]
+	}
+
+	// 构建 user_id → stat 映射（db 返回的是有用量记录的用户）
+	statMap := make(map[string]db.UserAllTimeStat, len(usageStats))
+	for _, s := range usageStats {
+		statMap[s.UserID] = s
+	}
+
+	// 合并：遍历所有用户，无用量记录的用零值填充
+	resp := make([]userStatsResponse, 0, len(users))
+	for _, u := range users {
+		stat := statMap[u.ID] // 零值安全
+
+		var avgDaily, avgMonthly int64
+		if stat.DaysActive > 0 {
+			avgDaily = stat.TotalTokens / int64(stat.DaysActive)
+		}
+		if stat.MonthsActive > 0 {
+			avgMonthly = stat.TotalTokens / int64(stat.MonthsActive)
+		}
+
+		var firstUsed, lastUsed string
+		if !stat.FirstUsedAt.IsZero() {
+			firstUsed = stat.FirstUsedAt.Format("2006-01-02")
+		}
+		if !stat.LastUsedAt.IsZero() {
+			lastUsed = stat.LastUsedAt.Format("2006-01-02")
+		}
+
+		groupName := ""
+		if u.GroupID != nil && u.Group.Name != "" {
+			groupName = u.Group.Name
+		}
+
+		resp = append(resp, userStatsResponse{
+			UserID:       u.ID,
+			Username:     u.Username,
+			GroupName:    groupName,
+			TotalInput:   stat.TotalInput,
+			TotalOutput:  stat.TotalOutput,
+			TotalTokens:  stat.TotalTokens,
+			AvgDaily:     avgDaily,
+			AvgMonthly:   avgMonthly,
+			DaysActive:   stat.DaysActive,
+			MonthsActive: stat.MonthsActive,
+			FirstUsedAt:  firstUsed,
+			LastUsedAt:   lastUsed,
+			IsActive:     u.IsActive,
+		})
+	}
+
+	// 写入缓存
+	h.userStatsCacheMu.Lock()
+	h.userStatsCacheVal = resp
+	h.userStatsCacheExp = time.Now().Add(userStatsCacheTTL)
+	h.userStatsCacheMu.Unlock()
+
+	h.logger.Debug("user stats cache refreshed", zap.Int("users", len(resp)))
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.logger.Error("failed to encode user stats", zap.Error(err))
+	}
 }
