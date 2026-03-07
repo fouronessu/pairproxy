@@ -136,6 +136,33 @@ func applyDefaults(cfg *CProxyConfig) {
 	if cfg.SProxy.RequestTimeout == 0 {
 		cfg.SProxy.RequestTimeout = 300 * time.Second
 	}
+	// 改进项3：健康检查增强默认值
+	if cfg.SProxy.HealthCheckTimeout == 0 {
+		cfg.SProxy.HealthCheckTimeout = 3 * time.Second
+	}
+	if cfg.SProxy.HealthCheckFailureThreshold == 0 {
+		cfg.SProxy.HealthCheckFailureThreshold = 3
+	}
+	if cfg.SProxy.HealthCheckRecoveryDelay == 0 {
+		cfg.SProxy.HealthCheckRecoveryDelay = 60 * time.Second
+	}
+	if cfg.SProxy.PassiveFailureThreshold == 0 {
+		cfg.SProxy.PassiveFailureThreshold = 3
+	}
+	// 改进项4：路由表主动发现默认值
+	if cfg.SProxy.RoutingPollInterval == 0 {
+		cfg.SProxy.RoutingPollInterval = 60 * time.Second
+	}
+	// 改进项5：请求级重试默认值
+	if !cfg.SProxy.Retry.Enabled {
+		cfg.SProxy.Retry.Enabled = true
+	}
+	if cfg.SProxy.Retry.MaxRetries == 0 {
+		cfg.SProxy.Retry.MaxRetries = 2
+	}
+	if len(cfg.SProxy.Retry.RetryOnStatus) == 0 {
+		cfg.SProxy.Retry.RetryOnStatus = []int{502, 503, 504}
+	}
 	if cfg.Auth.TokenDir == "" {
 		cfg.Auth.TokenDir = DefaultConfigDir()
 	} else {
@@ -197,6 +224,13 @@ func applySProxyDefaults(cfg *SProxyFullConfig) {
 	}
 	if cfg.Cluster.PeerMonitorInterval == 0 {
 		cfg.Cluster.PeerMonitorInterval = 30 * time.Second
+	}
+	// 改进项2：用量缓冲默认值
+	if !cfg.Cluster.UsageBuffer.Enabled {
+		cfg.Cluster.UsageBuffer.Enabled = true
+	}
+	if cfg.Cluster.UsageBuffer.MaxRecordsPerBatch == 0 {
+		cfg.Cluster.UsageBuffer.MaxRecordsPerBatch = 1000
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"

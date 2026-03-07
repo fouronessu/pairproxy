@@ -1776,7 +1776,23 @@ sproxy:
 
   # request_timeout: 300s   # 预留字段（当前版本不控制流式请求时长）
 
-auth:
+  # ---- 健康检查增强（改进项3）----
+  health_check_timeout: 3s              # 单次主动检查超时（默认 3s）
+  health_check_failure_threshold: 3     # 连续失败多少次后熔断（默认 3）
+  health_check_recovery_delay: 60s      # 熔断后自动恢复延迟（默认 60s；0=禁用）
+  passive_failure_threshold: 3          # 被动熔断阈值（默认 3）
+
+  # ---- 路由表主动发现（改进项4）----
+  shared_secret: "${CLUSTER_SECRET}"    # 与 sproxy 集群通信的共享密钥
+  routing_poll_interval: 60s            # 主动轮询路由表间隔（默认 60s；0=禁用）
+
+  # ---- 请求级重试（改进项5）----
+  retry:
+    enabled: true                       # 是否启用非流式请求重试（默认 true）
+    max_retries: 2                      # 最大重试次数（不含首次，默认 2）
+    retry_on_status: [502, 503, 504]    # 触发重试的状态码（默认 [502,503,504]）
+
+
   refresh_threshold: 30m   # 令牌剩余有效期低于此值时自动续期
 
 log:
@@ -1859,6 +1875,10 @@ cluster:
   peer_monitor_interval: 30s  # primary 专用：检查 worker 是否下线的间隔
   report_interval: 30s        # worker 专用：向 primary 心跳的间隔
   alert_webhook: ""           # 告警推送 URL（Slack/飞书等，留空不推送）
+  # ---- 用量缓冲（改进项2）----
+  usage_buffer:
+    enabled: true             # 启用 worker 本地用量缓冲（默认 true）
+    max_records_per_batch: 1000  # 每批最多上报条数（默认 1000）
 
 # Dashboard 配置
 dashboard:
@@ -2427,7 +2447,87 @@ ls /var/lib/pairproxy/track/conversations/contractor1/
 
 ---
 
-## 18. 升级指南
+## 18. 可靠性增强（v2.5.0）
+
+本节介绍 v2.5.0 引入的四项可靠性改进，无需额外操作即可生效（均有合理默认值）。
+
+### 18.1 Worker 用量数据可靠性（改进项2）
+
+**问题**：原有实现中，worker 节点的用量数据仅在心跳时实时上报，若 primary 短暂不可用，数据会丢失。
+
+**改进**：worker 将用量记录写入本地 SQLite DB，每次心跳时批量读取未同步记录并上报给 primary。上报成功后标记为已同步（水印追踪），primary 宕机期间数据不丢失，恢复后自动补报。
+
+**配置**（`sproxy.yaml`，worker 节点）：
+```yaml
+cluster:
+  usage_buffer:
+    enabled: true              # 默认 true
+    max_records_per_batch: 1000  # 每批最多上报条数
+```
+
+**可观测性**：`Reporter.UsageReportFails()` 和 `Reporter.PendingRecords()` 可接入 Prometheus 告警。
+
+---
+
+### 18.2 健康检查优化（改进项3）
+
+**改进**：新增可配置的健康检查参数，支持更精细的熔断控制。
+
+**配置**（`cproxy.yaml`）：
+```yaml
+sproxy:
+  health_check_timeout: 3s              # 单次检查超时（默认 3s）
+  health_check_failure_threshold: 3     # 连续失败多少次后熔断（默认 3）
+  health_check_recovery_delay: 60s      # 熔断后自动恢复延迟（默认 60s；0=禁用）
+  passive_failure_threshold: 3          # 被动熔断阈值（默认 3）
+```
+
+**行为说明**：
+- 主动健康检查（`health_check_path` 非空时）：连续失败 `failure_threshold` 次后熔断
+- 被动熔断：请求失败（502/503/504）累计 `passive_failure_threshold` 次后熔断
+- 熔断后经过 `recovery_delay` 自动恢复，或等待下次主动检查通过
+
+---
+
+### 18.3 路由表主动发现（改进项4）
+
+**问题**：原有实现中，cproxy 只能通过响应头被动接收路由表更新，若长时间无请求则路由表可能过期。
+
+**改进**：cproxy 新增主动轮询机制，定期向 sproxy 的 `/cluster/routing-poll` 端点查询路由表。若路由表无变化，sproxy 返回 304 Not Modified，不消耗带宽。
+
+**配置**（`cproxy.yaml`）：
+```yaml
+sproxy:
+  shared_secret: "${CLUSTER_SECRET}"  # 与 sproxy cluster.shared_secret 一致
+  routing_poll_interval: 60s          # 轮询间隔（默认 60s；0=禁用）
+```
+
+> **注意**：`shared_secret` 为空时禁用主动轮询，cproxy 仍可通过响应头被动接收更新。
+
+---
+
+### 18.4 请求级重试（改进项5）
+
+**改进**：非流式请求（`stream: false` 或无 stream 字段）在遇到可重试状态码时，自动切换到其他健康节点重试，对用户透明。
+
+**配置**（`cproxy.yaml`）：
+```yaml
+sproxy:
+  retry:
+    enabled: true                     # 默认 true
+    max_retries: 2                    # 最大重试次数（不含首次，默认 2）
+    retry_on_status: [502, 503, 504]  # 触发重试的状态码
+```
+
+**行为说明**：
+- 流式请求（`"stream": true`）**不走重试路径**，直接使用 ReverseProxy 转发
+- 重试时优先选择未尝试过的健康节点（避免重复打到同一故障节点）
+- 所有节点均失败时返回 502，响应体包含 `"all_targets_exhausted"` 错误码
+- 每次失败会通知健康检查器（被动熔断计数）
+
+---
+
+## 19. 升级指南
 
 > 详细的版本变更记录、数据库 Schema 迁移步骤和回滚方法见 [`docs/UPGRADE.md`](./UPGRADE.md)。
 

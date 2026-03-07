@@ -409,6 +409,124 @@ sproxy:
 	}
 }
 
+// TestApplyDefaultsCProxy_RetryAndHealthCheck 验证改进项3/5 的默认值。
+func TestApplyDefaultsCProxy_RetryAndHealthCheck(t *testing.T) {
+	minimalYAML := `
+sproxy:
+  primary: "http://sp-1:9000"
+auth:
+  token_dir: "/tmp/tokens"
+`
+	path := writeTempFile(t, minimalYAML)
+	cfg, _, err := LoadCProxyConfig(path)
+	if err != nil {
+		t.Fatalf("LoadCProxyConfig: %v", err)
+	}
+
+	// 改进项3：健康检查默认值
+	if cfg.SProxy.HealthCheckTimeout != 3*time.Second {
+		t.Errorf("HealthCheckTimeout = %v, want 3s", cfg.SProxy.HealthCheckTimeout)
+	}
+	if cfg.SProxy.HealthCheckFailureThreshold != 3 {
+		t.Errorf("HealthCheckFailureThreshold = %d, want 3", cfg.SProxy.HealthCheckFailureThreshold)
+	}
+	if cfg.SProxy.HealthCheckRecoveryDelay != 60*time.Second {
+		t.Errorf("HealthCheckRecoveryDelay = %v, want 60s", cfg.SProxy.HealthCheckRecoveryDelay)
+	}
+	if cfg.SProxy.PassiveFailureThreshold != 3 {
+		t.Errorf("PassiveFailureThreshold = %d, want 3", cfg.SProxy.PassiveFailureThreshold)
+	}
+
+	// 改进项4：路由轮询默认值
+	if cfg.SProxy.RoutingPollInterval != 60*time.Second {
+		t.Errorf("RoutingPollInterval = %v, want 60s", cfg.SProxy.RoutingPollInterval)
+	}
+
+	// 改进项5：重试默认值
+	if !cfg.SProxy.Retry.Enabled {
+		t.Error("Retry.Enabled should default to true")
+	}
+	if cfg.SProxy.Retry.MaxRetries != 2 {
+		t.Errorf("Retry.MaxRetries = %d, want 2", cfg.SProxy.Retry.MaxRetries)
+	}
+	if len(cfg.SProxy.Retry.RetryOnStatus) != 3 {
+		t.Errorf("Retry.RetryOnStatus len = %d, want 3", len(cfg.SProxy.Retry.RetryOnStatus))
+	}
+}
+
+// TestRetryConfig_ExplicitValues 验证显式配置的重试参数被正确加载。
+func TestRetryConfig_ExplicitValues(t *testing.T) {
+	yaml := `
+sproxy:
+  primary: "http://sp-1:9000"
+  retry:
+    enabled: true
+    max_retries: 5
+    retry_on_status: [429, 503]
+  health_check_timeout: 5s
+  health_check_failure_threshold: 2
+  passive_failure_threshold: 1
+  routing_poll_interval: 30s
+auth:
+  token_dir: "/tmp/tokens"
+`
+	path := writeTempFile(t, yaml)
+	cfg, _, err := LoadCProxyConfig(path)
+	if err != nil {
+		t.Fatalf("LoadCProxyConfig: %v", err)
+	}
+
+	if !cfg.SProxy.Retry.Enabled {
+		t.Error("Retry.Enabled should be true")
+	}
+	if cfg.SProxy.Retry.MaxRetries != 5 {
+		t.Errorf("Retry.MaxRetries = %d, want 5", cfg.SProxy.Retry.MaxRetries)
+	}
+	if len(cfg.SProxy.Retry.RetryOnStatus) != 2 {
+		t.Errorf("Retry.RetryOnStatus len = %d, want 2", len(cfg.SProxy.Retry.RetryOnStatus))
+	}
+	if cfg.SProxy.HealthCheckTimeout != 5*time.Second {
+		t.Errorf("HealthCheckTimeout = %v, want 5s", cfg.SProxy.HealthCheckTimeout)
+	}
+	if cfg.SProxy.HealthCheckFailureThreshold != 2 {
+		t.Errorf("HealthCheckFailureThreshold = %d, want 2", cfg.SProxy.HealthCheckFailureThreshold)
+	}
+	if cfg.SProxy.PassiveFailureThreshold != 1 {
+		t.Errorf("PassiveFailureThreshold = %d, want 1", cfg.SProxy.PassiveFailureThreshold)
+	}
+	if cfg.SProxy.RoutingPollInterval != 30*time.Second {
+		t.Errorf("RoutingPollInterval = %v, want 30s", cfg.SProxy.RoutingPollInterval)
+	}
+}
+
+// TestUsageBufferConfig_Defaults 验证 UsageBuffer 默认值。
+func TestUsageBufferConfig_Defaults(t *testing.T) {
+	minimalYAML := `
+auth:
+  jwt_secret: "test-jwt-secret-1234567890abcdef"
+database:
+  path: "./test.db"
+llm:
+  targets:
+    - url: "https://api.anthropic.com"
+      api_key: "sk-ant-test"
+      weight: 1
+`
+	path := writeTempFile(t, minimalYAML)
+	cfg, _, err := LoadSProxyConfig(path)
+	if err != nil {
+		t.Fatalf("LoadSProxyConfig: %v", err)
+	}
+
+	// UsageBuffer 默认值（改进项2）：loader 自动启用并设置默认批量大小
+	if !cfg.Cluster.UsageBuffer.Enabled {
+		t.Error("UsageBuffer.Enabled should default to true")
+	}
+	if cfg.Cluster.UsageBuffer.MaxRecordsPerBatch != 1000 {
+		t.Errorf("UsageBuffer.MaxRecordsPerBatch default = %d, want 1000", cfg.Cluster.UsageBuffer.MaxRecordsPerBatch)
+	}
+}
+
 func TestPricingComputeCost(t *testing.T) {
 	p := PricingConfig{
 		Models: map[string]ModelPrice{

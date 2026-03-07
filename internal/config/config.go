@@ -70,6 +70,13 @@ type ListenConfig struct {
 	Port int    `yaml:"port"` // c-proxy 默认 8080，s-proxy 默认 9000
 }
 
+// RetryConfig cproxy 请求级重试配置
+type RetryConfig struct {
+	Enabled       bool  `yaml:"enabled"`         // 默认 true
+	MaxRetries    int   `yaml:"max_retries"`     // 最大重试次数（不含首次），默认 2
+	RetryOnStatus []int `yaml:"retry_on_status"` // 触发重试的 HTTP 状态码，默认 [502, 503, 504]
+}
+
 // SProxySect c-proxy 中关于 s-proxy 的配置节
 type SProxySect struct {
 	Primary             string        `yaml:"primary"`               // 初始 sp-1 地址（种子节点）
@@ -77,6 +84,19 @@ type SProxySect struct {
 	LBStrategy          string        `yaml:"lb_strategy"`           // 当前固定 "weighted_random"
 	HealthCheckInterval time.Duration `yaml:"health_check_interval"` // 默认 30s
 	RequestTimeout      time.Duration `yaml:"request_timeout"`       // 默认 300s
+
+	// 健康检查增强（改进项3）
+	HealthCheckTimeout         time.Duration `yaml:"health_check_timeout"`          // 单次检查超时，默认 3s
+	HealthCheckFailureThreshold int          `yaml:"health_check_failure_threshold"` // 连续失败阈值，默认 3
+	HealthCheckRecoveryDelay   time.Duration `yaml:"health_check_recovery_delay"`   // 熔断后自动恢复延迟，默认 60s
+	PassiveFailureThreshold    int           `yaml:"passive_failure_threshold"`     // 被动熔断阈值，默认 3
+
+	// 路由表主动发现（改进项4）
+	SharedSecret        string        `yaml:"shared_secret"`         // 集群内部 API 密钥（路由轮询用）
+	RoutingPollInterval time.Duration `yaml:"routing_poll_interval"` // 路由表主动轮询间隔，默认 60s；0=禁用
+
+	// 请求级重试（改进项5）
+	Retry RetryConfig `yaml:"retry"`
 }
 
 // CProxyAuth c-proxy 认证配置
@@ -153,18 +173,25 @@ type WebhookTarget struct {
 	Template string   `yaml:"template"` // 空 = 默认 JSON；Go text/template 渲染请求 body
 }
 
+// UsageBufferConfig worker 用量缓冲配置（改进项2）
+type UsageBufferConfig struct {
+	Enabled            bool `yaml:"enabled"`              // 默认 true
+	MaxRecordsPerBatch int  `yaml:"max_records_per_batch"` // 每批最多上报条数，默认 1000
+}
+
 // ClusterConfig 集群配置（s-proxy）
 type ClusterConfig struct {
-	Role                string          `yaml:"role"`                  // "primary" | "worker"
-	Primary             string          `yaml:"primary"`               // worker 用：sp-1 的地址
-	SelfAddr            string          `yaml:"self_addr"`             // 本节点对外地址
-	SelfWeight          int             `yaml:"self_weight"`           // 建议权重，默认 50
-	AlertThreshold      int             `yaml:"alert_threshold"`       // active_req 超过此值触发告警，默认 80
-	AlertWebhook        string          `yaml:"alert_webhook"`         // 旧字段，向后兼容（单 URL）
-	AlertWebhooks       []WebhookTarget `yaml:"alert_webhooks"`        // 新字段：多 webhook + 事件过滤 + 自定义模板
-	ReportInterval      time.Duration   `yaml:"report_interval"`       // worker 用量上报间隔，默认 30s
-	PeerMonitorInterval time.Duration   `yaml:"peer_monitor_interval"` // primary 监控 peer 间隔，默认 30s
-	SharedSecret        string          `yaml:"shared_secret"`         // 集群内部 API 共享密钥（HMAC Bearer token）
+	Role                string            `yaml:"role"`                  // "primary" | "worker"
+	Primary             string            `yaml:"primary"`               // worker 用：sp-1 的地址
+	SelfAddr            string            `yaml:"self_addr"`             // 本节点对外地址
+	SelfWeight          int               `yaml:"self_weight"`           // 建议权重，默认 50
+	AlertThreshold      int               `yaml:"alert_threshold"`       // active_req 超过此值触发告警，默认 80
+	AlertWebhook        string            `yaml:"alert_webhook"`         // 旧字段，向后兼容（单 URL）
+	AlertWebhooks       []WebhookTarget   `yaml:"alert_webhooks"`        // 新字段：多 webhook + 事件过滤 + 自定义模板
+	ReportInterval      time.Duration     `yaml:"report_interval"`       // worker 用量上报间隔，默认 30s
+	PeerMonitorInterval time.Duration     `yaml:"peer_monitor_interval"` // primary 监控 peer 间隔，默认 30s
+	SharedSecret        string            `yaml:"shared_secret"`         // 集群内部 API 共享密钥（HMAC Bearer token）
+	UsageBuffer         UsageBufferConfig `yaml:"usage_buffer"`          // worker 用量缓冲配置（改进项2）
 }
 
 // DashboardConfig Dashboard 配置

@@ -282,6 +282,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			SelfWeight:   cfg.Cluster.SelfWeight,
 			Interval:     reportInterval,
 			SharedSecret: cfg.Cluster.SharedSecret, // P0-4: 集群内部 API 认证密钥
+			MaxBatch:     cfg.Cluster.UsageBuffer.MaxRecordsPerBatch, // 改进项2
 		}, usageRepo)
 		reporter.Start(ctx)
 
@@ -590,6 +591,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if peerRegistry != nil {
 		// P0-4: 使用 cluster.shared_secret 作为内部 API 认证密钥，而非节点地址
 		clusterHandler := api.NewClusterHandler(logger, peerRegistry, writer, cfg.Cluster.SharedSecret)
+		// 改进项4：注入 Manager 以支持路由表轮询端点
+		if clusterMgr != nil {
+			clusterHandler.SetManager(clusterMgr)
+		}
 		clusterHandler.RegisterRoutes(mux)
 		if cfg.Cluster.SharedSecret == "" {
 			logger.Warn("cluster.shared_secret is not configured; internal API will reject all requests (fail-closed). " +

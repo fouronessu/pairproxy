@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -15,6 +16,7 @@ import (
 type ClusterHandler struct {
 	logger       *zap.Logger
 	registry     *cluster.PeerRegistry
+	manager      *cluster.Manager // 用于路由表轮询端点（改进项4）
 	usageWriter  *db.UsageWriter
 	sharedSecret string // Bearer token，空串表示不鉴权（仅测试用）
 }
@@ -34,12 +36,18 @@ func NewClusterHandler(
 	}
 }
 
+// SetManager 设置集群管理器（用于路由表轮询端点）。
+func (h *ClusterHandler) SetManager(m *cluster.Manager) {
+	h.manager = m
+}
+
 // RegisterRoutes 注册内部 API 路由。
 // mux: 已有的 *http.ServeMux（或兼容接口）
 func (h *ClusterHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/internal/register", h.handleRegister)
 	mux.HandleFunc("/api/internal/usage", h.handleUsageReport)
 	mux.HandleFunc("/cluster/routing", h.handleGetRouting)
+	mux.HandleFunc("/cluster/routing-poll", h.handleRoutingPoll) // 改进项4
 }
 
 // ---------------------------------------------------------------------------
@@ -191,4 +199,74 @@ func (h *ClusterHandler) checkAuth(r *http.Request) bool {
 		)
 	}
 	return ok
+}
+
+// ---------------------------------------------------------------------------
+// GET /cluster/routing-poll（改进项4）
+// ---------------------------------------------------------------------------
+
+// handleRoutingPoll 供 c-proxy 主动轮询路由表更新。
+// 若客户端版本已是最新，返回 304 Not Modified；否则返回编码后的路由表。
+func (h *ClusterHandler) handleRoutingPoll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.checkAuth(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if h.manager == nil {
+		h.logger.Warn("routing poll: manager not initialized (not in cluster mode)",
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+		http.Error(w, "not in cluster mode", http.StatusNotFound)
+		return
+	}
+
+	// 读取客户端当前版本
+	clientVersionStr := r.Header.Get("X-Routing-Version")
+	var clientVersion int64
+	if clientVersionStr != "" {
+		if v, err := strconv.ParseInt(clientVersionStr, 10, 64); err == nil {
+			clientVersion = v
+		}
+	}
+
+	rt := h.manager.CurrentTable()
+
+	if rt.Version <= clientVersion {
+		// 客户端版本已是最新，无需更新
+		h.logger.Debug("routing poll: client up to date",
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.Int64("client_version", clientVersion),
+			zap.Int64("server_version", rt.Version),
+		)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	encoded, err := rt.Encode()
+	if err != nil {
+		h.logger.Error("routing poll: failed to encode routing table",
+			zap.Error(err),
+		)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("routing poll: sending routing update",
+		zap.String("remote_addr", r.RemoteAddr),
+		zap.Int64("client_version", clientVersion),
+		zap.Int64("server_version", rt.Version),
+		zap.Int("entries", len(rt.Entries)),
+	)
+
+	// 使用与普通请求相同的响应头格式，c-proxy 可复用 processRoutingHeaders 逻辑
+	w.Header().Set("X-Routing-Version", strconv.FormatInt(rt.Version, 10))
+	w.Header().Set("X-Routing-Update", encoded)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

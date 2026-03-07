@@ -186,6 +186,14 @@ cluster:
   shared_secret: "${CLUSTER_SECRET}"
   # shared_secret: ""   # 单机部署时留空即可
 
+  # ---- 改进项2：worker 用量缓冲配置 ----
+  usage_buffer:
+    # enabled: 是否启用 worker 本地用量缓冲（默认 true）
+    # 启用后，worker 将用量记录写入本地 DB，并在每次心跳时批量上报给 primary
+    enabled: true
+    # max_records_per_batch: 每批最多上报的记录数（默认 1000）
+    max_records_per_batch: 1000
+
 
 # ------------------------------------------------------------------------------
 # dashboard — Web Dashboard 配置

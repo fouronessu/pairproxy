@@ -229,6 +229,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// 健康检查器（主动检查 s-proxy 节点健康状态）
 	hc := lb.NewHealthChecker(balancer, logger,
 		lb.WithInterval(cfg.SProxy.HealthCheckInterval),
+		lb.WithTimeout(cfg.SProxy.HealthCheckTimeout),
+		lb.WithFailThreshold(cfg.SProxy.HealthCheckFailureThreshold),
+		lb.WithRecoveryDelay(cfg.SProxy.HealthCheckRecoveryDelay),
 	)
 
 	// Token store
@@ -254,6 +257,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create cproxy: %w", err)
 	}
 
+	// 改进项3：注入健康检查器（被动熔断上报）
+	cp.SetHealthChecker(hc)
+
+	// 改进项5：注入请求级重试配置
+	cp.SetRetryConfig(cfg.SProxy.Retry)
+
+	// 改进项4：注入路由表主动发现配置
+	cp.SetRoutingPoller(cfg.SProxy.SharedSecret, cfg.SProxy.RoutingPollInterval)
+
 	// 可选：debug 文件日志（记录双向转发内容）
 	if cfg.Log.DebugFile != "" {
 		debugLogger, dbgErr := buildDebugFileLogger(cfg.Log.DebugFile)
@@ -270,6 +282,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	hcCtx, hcCancel := context.WithCancel(context.Background())
 	defer hcCancel()
 	hc.Start(hcCtx)
+
+	// 改进项4：启动路由表主动发现 goroutine
+	cp.StartRoutingPoller(hcCtx)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", cp.Handler())

@@ -18,6 +18,7 @@ const (
 	defaultReportInterval  = 30 * time.Second
 	defaultRegisterPath    = "/api/internal/register"
 	defaultUsageReportPath = "/api/internal/usage"
+	defaultMaxBatchSize    = 1000
 )
 
 // Reporter 运行在 sp-2 上，周期性地：
@@ -33,10 +34,13 @@ type Reporter struct {
 	client       *http.Client
 	usageRepo    *db.UsageRepo // 从本地 DB 读取待上报记录（可为 nil，则不上报用量）
 	sharedSecret string        // 用于对 sp-1 内部 API 鉴权
+	maxBatch     int           // 每批最多上报条数
 
 	// 可观测性指标（原子操作，供 /metrics 端点读取）
 	heartbeatFailures atomic.Int64 // 心跳失败累计次数
 	lastLatencyMs     atomic.Int64 // 最近一次心跳的延迟（毫秒），-1 表示从未成功
+	usageReportFails  atomic.Int64 // 用量上报失败累计次数（改进项2）
+	pendingRecords    atomic.Int64 // 当前待上报记录数（改进项2）
 }
 
 // HeartbeatFailures 返回累计心跳失败次数。
@@ -44,6 +48,12 @@ func (r *Reporter) HeartbeatFailures() int64 { return r.heartbeatFailures.Load()
 
 // LastLatencyMs 返回最近一次成功心跳的延迟（毫秒），-1 表示从未成功。
 func (r *Reporter) LastLatencyMs() int64 { return r.lastLatencyMs.Load() }
+
+// UsageReportFails 返回累计用量上报失败次数。
+func (r *Reporter) UsageReportFails() int64 { return r.usageReportFails.Load() }
+
+// PendingRecords 返回当前待上报记录数（上次查询时的快照）。
+func (r *Reporter) PendingRecords() int64 { return r.pendingRecords.Load() }
 
 // ReporterConfig 配置 Reporter。
 type ReporterConfig struct {
@@ -53,6 +63,7 @@ type ReporterConfig struct {
 	SelfWeight   int
 	Interval     time.Duration
 	SharedSecret string // 内部 API 共享密钥（Bearer token）
+	MaxBatch     int    // 每批最多上报条数（改进项2），0=使用默认值 1000
 }
 
 // NewReporter 创建 Reporter。
@@ -65,6 +76,10 @@ func NewReporter(logger *zap.Logger, cfg ReporterConfig, usageRepo *db.UsageRepo
 	if weight <= 0 {
 		weight = 1
 	}
+	maxBatch := cfg.MaxBatch
+	if maxBatch <= 0 {
+		maxBatch = defaultMaxBatchSize
+	}
 	r := &Reporter{
 		logger:       logger.Named("reporter"),
 		sp1Addr:      cfg.SP1Addr,
@@ -75,6 +90,7 @@ func NewReporter(logger *zap.Logger, cfg ReporterConfig, usageRepo *db.UsageRepo
 		client:       &http.Client{Timeout: 10 * time.Second},
 		usageRepo:    usageRepo,
 		sharedSecret: cfg.SharedSecret,
+		maxBatch:     maxBatch,
 	}
 	r.lastLatencyMs.Store(-1) // -1 表示从未成功
 	return r
@@ -91,6 +107,10 @@ func (r *Reporter) loop(ctx context.Context) {
 
 	// 启动时立即注册一次
 	r.sendHeartbeat(ctx)
+	// 启动时立即尝试上报一次（改进项2）
+	if r.usageRepo != nil {
+		r.flushUsage(ctx)
+	}
 
 	for {
 		select {
@@ -98,8 +118,85 @@ func (r *Reporter) loop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.sendHeartbeat(ctx)
+			// 每次心跳后也尝试上报用量（改进项2）
+			if r.usageRepo != nil {
+				r.flushUsage(ctx)
+			}
 		}
 	}
+}
+
+// flushUsage 查询本地未上报记录并批量发送给 sp-1。
+// 使用 ListUnsynced + MarkSynced 实现水印追踪，保证幂等性（RequestID 去重）。
+func (r *Reporter) flushUsage(ctx context.Context) {
+	logs, err := r.usageRepo.ListUnsynced(r.maxBatch)
+	if err != nil {
+		r.logger.Error("usage flush: failed to list unsynced records",
+			zap.String("sp1", r.sp1Addr),
+			zap.Error(err),
+		)
+		r.usageReportFails.Add(1)
+		return
+	}
+
+	if len(logs) == 0 {
+		r.pendingRecords.Store(0)
+		r.logger.Debug("usage flush: no pending records")
+		return
+	}
+
+	r.pendingRecords.Store(int64(len(logs)))
+	r.logger.Info("usage flush: sending pending records",
+		zap.String("sp1", r.sp1Addr),
+		zap.Int("count", len(logs)),
+	)
+
+	// 将 UsageLog 转换为 UsageRecord（Reporter 使用 UsageRecord 格式上报）
+	records := make([]db.UsageRecord, 0, len(logs))
+	requestIDs := make([]string, 0, len(logs))
+	for _, log := range logs {
+		records = append(records, db.UsageRecord{
+			RequestID:    log.RequestID,
+			UserID:       log.UserID,
+			Model:        log.Model,
+			InputTokens:  log.InputTokens,
+			OutputTokens: log.OutputTokens,
+			IsStreaming:  log.IsStreaming,
+			UpstreamURL:  log.UpstreamURL,
+			StatusCode:   log.StatusCode,
+			DurationMs:   log.DurationMs,
+			SourceNode:   log.SourceNode,
+			CreatedAt:    log.CreatedAt,
+		})
+		requestIDs = append(requestIDs, log.RequestID)
+	}
+
+	if err := r.ReportUsage(ctx, records); err != nil {
+		r.logger.Warn("usage flush: failed to report to sp-1, will retry next cycle",
+			zap.String("sp1", r.sp1Addr),
+			zap.Int("count", len(records)),
+			zap.Int64("total_fails", r.usageReportFails.Load()+1),
+			zap.Error(err),
+		)
+		r.usageReportFails.Add(1)
+		return
+	}
+
+	// 上报成功：标记为已同步
+	if err := r.usageRepo.MarkSynced(requestIDs); err != nil {
+		r.logger.Error("usage flush: failed to mark records as synced (will re-report next cycle)",
+			zap.Int("count", len(requestIDs)),
+			zap.Error(err),
+		)
+		// 不计入 usageReportFails，因为数据已成功发送到 sp-1
+		return
+	}
+
+	r.pendingRecords.Store(0)
+	r.logger.Info("usage flush: records synced successfully",
+		zap.String("sp1", r.sp1Addr),
+		zap.Int("count", len(records)),
+	)
 }
 
 // RegisterPayload 心跳注册请求体。
@@ -210,3 +307,4 @@ func (r *Reporter) ReportUsage(ctx context.Context, records []db.UsageRecord) er
 	)
 	return nil
 }
+

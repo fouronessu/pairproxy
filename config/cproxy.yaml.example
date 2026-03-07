@@ -64,6 +64,39 @@ sproxy:
   # 建议 >= 5m，因为 LLM 流式响应可能很长
   request_timeout: 300s
 
+  # ---- 改进项3：健康检查增强 ----
+  # health_check_timeout: 单次主动健康检查的超时时间（默认 3s）
+  health_check_timeout: 3s
+
+  # health_check_failure_threshold: 连续失败多少次后将节点标记为不健康（默认 3）
+  health_check_failure_threshold: 3
+
+  # health_check_recovery_delay: 节点被熔断后，多久自动恢复为健康状态（默认 60s）
+  # 0 = 禁用自动恢复（需等待主动健康检查通过）
+  health_check_recovery_delay: 60s
+
+  # passive_failure_threshold: 被动熔断阈值——请求失败多少次后触发熔断（默认 3）
+  passive_failure_threshold: 3
+
+  # ---- 改进项4：路由表主动发现 ----
+  # shared_secret: 与 s-proxy 集群通信的共享密钥（用于 /cluster/routing-poll 鉴权）
+  # 与 sproxy.yaml 中 cluster.shared_secret 保持一致；空串=禁用主动轮询
+  # shared_secret: "${CLUSTER_SECRET}"
+
+  # routing_poll_interval: 主动轮询路由表的间隔（默认 60s；0=禁用）
+  # 轮询时若路由表无变化，s-proxy 返回 304，不消耗带宽
+  routing_poll_interval: 60s
+
+  # ---- 改进项5：请求级重试 ----
+  retry:
+    # enabled: 是否启用非流式请求的自动重试（默认 true）
+    enabled: true
+    # max_retries: 最大重试次数（不含首次请求，默认 2）
+    max_retries: 2
+    # retry_on_status: 触发重试的 HTTP 状态码（默认 [502, 503, 504]）
+    # 注意：流式请求（stream: true）不走重试路径
+    retry_on_status: [502, 503, 504]
+
 
 # ------------------------------------------------------------------------------
 # auth — 本地 JWT 令牌管理

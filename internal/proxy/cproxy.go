@@ -20,6 +20,7 @@ import (
 
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/config"
 	"github.com/l17728/pairproxy/internal/lb"
 )
 
@@ -37,12 +38,39 @@ type CProxy struct {
 	refreshMu sync.Mutex // 防止并发刷新（P2-4）
 
 	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
+
+	// 改进项3：被动熔断（健康检查器引用）
+	healthChecker *lb.HealthChecker
+
+	// 改进项5：请求级重试配置
+	retryConfig config.RetryConfig
+
+	// 改进项4：路由表主动发现
+	sharedSecret        string
+	routingPollInterval time.Duration
 }
 
 // SetDebugLogger 设置 debug 文件日志器。
 // 非 nil 时，每个请求的转发内容（请求体、响应体、streaming chunks）均会写入该 logger。
 func (cp *CProxy) SetDebugLogger(l *zap.Logger) {
 	cp.debugLogger.Store(l)
+}
+
+// SetHealthChecker 设置健康检查器（用于被动熔断上报）。
+func (cp *CProxy) SetHealthChecker(hc *lb.HealthChecker) {
+	cp.healthChecker = hc
+}
+
+// SetRetryConfig 设置请求级重试配置。
+func (cp *CProxy) SetRetryConfig(rc config.RetryConfig) {
+	cp.retryConfig = rc
+}
+
+// SetRoutingPoller 设置路由表主动发现参数。
+// sharedSecret 为空时禁用轮询。
+func (cp *CProxy) SetRoutingPoller(sharedSecret string, pollInterval time.Duration) {
+	cp.sharedSecret = sharedSecret
+	cp.routingPollInterval = pollInterval
 }
 
 // NewCProxy 创建 CProxy。
@@ -152,10 +180,11 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 每次请求捕获一次 debug logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
 	dl := cp.debugLogger.Load()
 
-	// 读取请求 body（一次性），用于：① debug 日志  ② 提取模型名称
+	// 读取请求 body（一次性），用于：① debug 日志  ② 提取模型名称  ③ 重试时重放
 	// 无论 debug logger 是否开启，只要有 body 就读取一次并重置，避免下游二次读取失败。
+	var bodyBytes []byte
 	if r.Body != nil {
-		bodyBytes, _ := io.ReadAll(r.Body)
+		bodyBytes, _ = io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		// 提取模型名称，存入 context 供 Director 注入 header
@@ -175,6 +204,14 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 改进项5：非流式请求启用重试；流式请求保持原有 ReverseProxy 路径（不可重试）
+	streaming := isStreamingBody(bodyBytes)
+	if cp.retryConfig.Enabled && !streaming && cp.retryConfig.MaxRetries > 0 {
+		cp.serveWithRetry(w, r, tf, bodyBytes, dl, reqID)
+		return
+	}
+
+	// 流式请求或未启用重试：使用原有 ReverseProxy 路径
 	target, err := cp.balancer.Pick()
 	if err != nil {
 		cp.logger.Error("no healthy s-proxy available",
@@ -263,7 +300,296 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(rw, r)
 }
 
-// tryRefresh 使用 refresh_token 向 s-proxy 换取新的 access_token。
+// isStreamingBody 检测请求体是否为流式请求（"stream": true）。
+// 仅检查 JSON body 中的 stream 字段，避免误判。
+func isStreamingBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var partial struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &partial); err != nil {
+		return false
+	}
+	return partial.Stream
+}
+
+// shouldRetry 判断给定 HTTP 状态码是否应触发重试。
+func shouldRetry(statusCode int, retryOnStatus []int) bool {
+	for _, s := range retryOnStatus {
+		if statusCode == s {
+			return true
+		}
+	}
+	return false
+}
+
+// pickUntried 从 balancer 中选取一个未尝试过的健康节点。
+// 先用 Pick()（保留权重随机），若返回已尝试节点则遍历所有节点找未尝试的。
+func (cp *CProxy) pickUntried(tried map[string]bool) *lb.Target {
+	t, err := cp.balancer.Pick()
+	if err == nil && !tried[t.ID] {
+		return t
+	}
+	// Pick 返回已尝试节点，遍历所有健康节点找未尝试的
+	for _, target := range cp.balancer.Targets() {
+		if target.Healthy && !target.Draining && !tried[target.ID] {
+			t := target // 避免循环变量逃逸
+			return &t
+		}
+	}
+	return nil
+}
+
+// doRequest 向指定 target 发送一次请求，返回原始响应（调用方负责关闭 Body）。
+// bodyBytes 用于重建请求体（支持重试时重放）。
+func (cp *CProxy) doRequest(r *http.Request, target *lb.Target, tf *auth.TokenFile, bodyBytes []byte) (*http.Response, error) {
+	targetURL, err := url.Parse(target.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("parse target URL %q: %w", target.Addr, err)
+	}
+
+	// 克隆请求，避免修改原始请求
+	req := r.Clone(r.Context())
+	req.URL.Scheme = targetURL.Scheme
+	req.URL.Host = targetURL.Host
+	req.Host = targetURL.Host
+	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	req.ContentLength = int64(len(bodyBytes))
+
+	// 删除 Claude Code 设置的假 API Key，注入用户 JWT
+	req.Header.Del("Authorization")
+	req.Header.Set("X-PairProxy-Auth", tf.AccessToken)
+
+	// 注入模型名称
+	if model, ok := r.Context().Value(ctxKeyModel).(string); ok && model != "" {
+		req.Header.Set("X-PairProxy-Model", model)
+	}
+
+	// 告知 s-proxy 本地路由版本
+	req.Header.Set("X-Routing-Version", strconv.FormatInt(cp.routingVersion.Load(), 10))
+
+	// 移除 hop-by-hop headers（避免代理链问题）
+	req.Header.Del("Connection")
+	req.Header.Del("Transfer-Encoding")
+	req.Header.Del("Upgrade")
+
+	return cp.transport.RoundTrip(req)
+}
+
+// serveWithRetry 对非流式请求实现重试逻辑。
+// 每次失败后切换到未尝试过的健康节点，最多重试 maxRetries 次。
+// 成功时处理路由更新头并写入响应；全部失败时返回 502。
+func (cp *CProxy) serveWithRetry(w http.ResponseWriter, r *http.Request, tf *auth.TokenFile, bodyBytes []byte, dl *zap.Logger, reqID string) {
+	tried := make(map[string]bool)
+	maxAttempts := cp.retryConfig.MaxRetries + 1 // 首次 + 重试次数
+
+	cp.logger.Debug("serveWithRetry: starting",
+		zap.String("request_id", reqID),
+		zap.Int("max_attempts", maxAttempts),
+		zap.String("path", r.URL.Path),
+	)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		target := cp.pickUntried(tried)
+		if target == nil {
+			cp.logger.Warn("serveWithRetry: no untried healthy targets",
+				zap.String("request_id", reqID),
+				zap.Int("attempt", attempt),
+				zap.Int("tried", len(tried)),
+			)
+			break
+		}
+		tried[target.ID] = true
+
+		cp.logger.Debug("serveWithRetry: attempting request",
+			zap.String("request_id", reqID),
+			zap.Int("attempt", attempt+1),
+			zap.String("target", target.Addr),
+		)
+
+		if dl != nil {
+			dl.Debug("→ s-proxy request (retry)",
+				zap.String("request_id", reqID),
+				zap.Int("attempt", attempt+1),
+				zap.String("target", target.Addr),
+				zap.String("path", r.URL.Path),
+			)
+		}
+
+		resp, err := cp.doRequest(r, target, tf, bodyBytes)
+		if err != nil {
+			cp.logger.Warn("serveWithRetry: request failed, will retry",
+				zap.String("request_id", reqID),
+				zap.Int("attempt", attempt+1),
+				zap.String("target", target.Addr),
+				zap.Error(err),
+			)
+			if cp.healthChecker != nil {
+				cp.healthChecker.RecordFailure(target.ID)
+			}
+			continue
+		}
+
+		if shouldRetry(resp.StatusCode, cp.retryConfig.RetryOnStatus) {
+			// 消费并丢弃响应体，释放连接
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			cp.logger.Warn("serveWithRetry: retryable status code, will retry",
+				zap.String("request_id", reqID),
+				zap.Int("attempt", attempt+1),
+				zap.String("target", target.Addr),
+				zap.Int("status", resp.StatusCode),
+			)
+			if cp.healthChecker != nil {
+				cp.healthChecker.RecordFailure(target.ID)
+			}
+			continue
+		}
+
+		// 成功：处理路由更新头
+		cp.processRoutingHeaders(resp, reqID)
+		if cp.healthChecker != nil {
+			cp.healthChecker.RecordSuccess(target.ID)
+		}
+
+		if dl != nil {
+			dl.Debug("← s-proxy response (retry)",
+				zap.String("request_id", reqID),
+				zap.Int("attempt", attempt+1),
+				zap.String("target", target.Addr),
+				zap.Int("status", resp.StatusCode),
+				sanitizeHeaders(resp.Header),
+			)
+		}
+
+		cp.logger.Debug("serveWithRetry: request succeeded",
+			zap.String("request_id", reqID),
+			zap.Int("attempt", attempt+1),
+			zap.String("target", target.Addr),
+			zap.Int("status", resp.StatusCode),
+		)
+
+		// 写入响应到客户端
+		writeProxyResponse(w, resp)
+		return
+	}
+
+	// 所有重试均失败
+	cp.logger.Error("serveWithRetry: all targets exhausted",
+		zap.String("request_id", reqID),
+		zap.Int("tried", len(tried)),
+		zap.Strings("targets", func() []string {
+			ids := make([]string, 0, len(tried))
+			for id := range tried {
+				ids = append(ids, id)
+			}
+			return ids
+		}()),
+	)
+	writeJSONError(w, http.StatusBadGateway, "all_targets_exhausted", "all s-proxy targets failed")
+}
+
+// writeProxyResponse 将上游响应写入 http.ResponseWriter。
+func writeProxyResponse(w http.ResponseWriter, resp *http.Response) {
+	defer resp.Body.Close()
+	// 复制响应头（排除 hop-by-hop headers）
+	for key, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(key, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// StartRoutingPoller 启动路由表主动发现 goroutine（改进项4）。
+// 若 sharedSecret 为空或 pollInterval <= 0，则不启动。
+func (cp *CProxy) StartRoutingPoller(ctx context.Context) {
+	if cp.sharedSecret == "" {
+		cp.logger.Info("routing poller disabled: no shared_secret configured")
+		return
+	}
+	if cp.routingPollInterval <= 0 {
+		cp.logger.Info("routing poller disabled: routing_poll_interval is 0")
+		return
+	}
+	cp.logger.Info("routing poller started",
+		zap.Duration("interval", cp.routingPollInterval),
+	)
+	go cp.routingPollLoop(ctx)
+}
+
+func (cp *CProxy) routingPollLoop(ctx context.Context) {
+	ticker := time.NewTicker(cp.routingPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			cp.logger.Debug("routing poller stopped")
+			return
+		case <-ticker.C:
+			cp.pollRoutingTable(ctx)
+		}
+	}
+}
+
+// pollRoutingTable 向一个健康的 s-proxy 节点轮询路由表更新。
+func (cp *CProxy) pollRoutingTable(ctx context.Context) {
+	target, err := cp.balancer.Pick()
+	if err != nil {
+		cp.logger.Debug("routing poll: no healthy target available", zap.Error(err))
+		return
+	}
+
+	pollURL := strings.TrimRight(target.Addr, "/") + "/cluster/routing-poll"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+	if err != nil {
+		cp.logger.Warn("routing poll: failed to create request",
+			zap.String("target", target.Addr),
+			zap.Error(err),
+		)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+cp.sharedSecret)
+	req.Header.Set("X-Routing-Version", strconv.FormatInt(cp.routingVersion.Load(), 10))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		cp.logger.Debug("routing poll: request failed",
+			zap.String("target", target.Addr),
+			zap.Error(err),
+		)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		cp.logger.Debug("routing poll: routing table up to date",
+			zap.String("target", target.Addr),
+			zap.Int64("version", cp.routingVersion.Load()),
+		)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cp.logger.Warn("routing poll: unexpected status",
+			zap.String("target", target.Addr),
+			zap.Int("status", resp.StatusCode),
+		)
+		return
+	}
+
+	// 处理路由更新头（与普通请求响应处理相同）
+	cp.processRoutingHeaders(resp, "routing-poll")
+	cp.logger.Debug("routing poll: completed",
+		zap.String("target", target.Addr),
+		zap.Int64("version", cp.routingVersion.Load()),
+	)
+}
 // 使用互斥锁防止并发刷新（仅一个 goroutine 实际发出请求，其余等待后复用结果）。
 // HTTP 请求使用 5s context 超时（P2-4）。
 func (cp *CProxy) tryRefresh(ctx context.Context, tf *auth.TokenFile) (*auth.TokenFile, error) {

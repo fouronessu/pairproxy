@@ -50,6 +50,41 @@
 
 ## 版本变更记录
 
+### v2.5.0 — 可靠性增强（用量可靠性 + 健康检查 + 路由发现 + 请求重试）
+
+**无数据库 Schema 变更**，直接替换二进制即可，零停机升级。
+
+**新增配置字段**（均有合理默认值，不填写也能正常运行）
+
+`cproxy.yaml` 新增：
+```yaml
+sproxy:
+  health_check_timeout: 3s
+  health_check_failure_threshold: 3
+  health_check_recovery_delay: 60s
+  passive_failure_threshold: 3
+  shared_secret: ""          # 空=禁用路由主动轮询
+  routing_poll_interval: 60s
+  retry:
+    enabled: true
+    max_retries: 2
+    retry_on_status: [502, 503, 504]
+```
+
+`sproxy.yaml` 新增（worker 节点）：
+```yaml
+cluster:
+  usage_buffer:
+    enabled: true
+    max_records_per_batch: 1000
+```
+
+**回滚说明**
+
+降级到 v2.4.0 时，新增配置字段会被忽略，无兼容性问题。
+
+---
+
 ### v2.4.0 — 用户对话内容追踪
 
 **无数据库 Schema 变更**，直接替换二进制即可，零停机升级。
