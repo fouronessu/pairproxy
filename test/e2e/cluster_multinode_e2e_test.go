@@ -56,7 +56,6 @@ type mockResponse struct {
 	outputTokens int
 	content      string
 	statusCode   int
-	delay        time.Duration
 }
 
 func newMockLLMServer(t *testing.T) *mockLLMServer {
