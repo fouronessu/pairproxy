@@ -34,10 +34,13 @@
     - [10.1 Prometheus 指标接入](#101-prometheus-指标接入)
     - [10.2 Webhook 告警](#102-webhook-告警)
     - [10.3 动态调整日志级别（SIGHUP）](#103-动态调整日志级别不重启服务)
-11. [升级指南](#11-升级指南)
-12. [常见问题与排查](#12-常见问题与排查)
-13. [安全建议](#13-安全建议)
-14. [配置文件完整参考](#14-配置文件完整参考)
+11. [常见问题与排查](#12-常见问题与排查)
+12. [安全建议](#13-安全建议)
+13. [配置文件完整参考](#14-配置文件完整参考)
+14. [LLM 目标管理（网络可靠性 + 绑定均分）](#15-llm-目标管理网络可靠性--绑定均分)
+15. [接入 OpenAI 格式客户端](#16-接入-openai-格式客户端)
+16. [用户对话内容跟踪](#17-用户对话内容跟踪)
+17. [升级指南](#18-升级指南)
 
 ---
 
@@ -2421,5 +2424,37 @@ ls /var/lib/pairproxy/track/conversations/contractor1/
 - **隐私合规**：对话内容含用户数据，请确保符合所在地区的数据保护法规，并告知被跟踪用户
 - **文件权限**：跟踪目录权限由 sproxy 进程的运行用户决定（默认 0755/0644）
 - **无加密**：记录文件以明文 JSON 存储，如需加密请在文件系统层面处理
+
+---
+
+## 18. 升级指南
+
+> 详细的版本变更记录、数据库 Schema 迁移步骤和回滚方法见 [`docs/UPGRADE.md`](./UPGRADE.md)。
+
+### 通用升级流程
+
+```bash
+# 1. 备份数据库
+cp pairproxy.db pairproxy.db.bak
+
+# 2. 停止 sproxy
+systemctl stop sproxy   # 或 kill -TERM <pid>
+
+# 3. 替换二进制
+cp sproxy-new /usr/local/bin/sproxy
+cp cproxy-new /usr/local/bin/cproxy
+
+# 4. 启动（AutoMigrate 自动应用 Schema 变更）
+systemctl start sproxy
+
+# 5. 验证
+curl http://localhost:9000/health
+```
+
+### v2.4.0 升级说明
+
+- **无数据库变更**，直接替换二进制即可
+- 首次启动后自动创建 `<db_dir>/track/` 目录（对话跟踪存储）
+- 新增 `sproxy admin track` 系列命令，见 [§17](#17-用户对话内容跟踪)
 
 ---
