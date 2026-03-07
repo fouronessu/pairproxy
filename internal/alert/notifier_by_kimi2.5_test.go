@@ -391,11 +391,11 @@ func TestNotifier_Notify_UnreachableServer_by_kimi2_5(t *testing.T) {
 
 // TestNotifier_Notify_CustomTemplate tests notification with custom template
 func TestNotifier_Notify_CustomTemplate_by_kimi2_5(t *testing.T) {
-	var body string
+	var body atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, r.ContentLength)
 		r.Body.Read(buf)
-		body = string(buf)
+		body.Store(string(buf))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -416,11 +416,12 @@ func TestNotifier_Notify_CustomTemplate_by_kimi2_5(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	if body == "" {
+	got, _ := body.Load().(string)
+	if got == "" {
 		t.Error("expected body to be set")
 	}
-	if body != `{"custom_kind":"quota_exceeded"}` {
-		t.Errorf("unexpected body: %s", body)
+	if got != `{"custom_kind":"quota_exceeded"}` {
+		t.Errorf("unexpected body: %s", got)
 	}
 }
 
