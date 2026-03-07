@@ -44,6 +44,7 @@
 | **Token 自动刷新** | cproxy 自动检测 token 过期，5s 内向 sproxy 换取新 token |
 | **趋势图表（F-10）** | Dashboard 概览页显示 Token 用量趋势、费用趋势、Top 5 用户图表，支持 7/30/90 天切换 |
 | **用户自助页面（F-10）** | 普通用户可查看自己的配额状态、用量历史，访问 `/dashboard/my-usage` 或调用 `/api/user/*` API |
+| **对话内容追踪** | 按用户隔离记录完整对话内容（JSON 文件），支持非流式和 SSE 流式双路径捕获，`sproxy admin track` 管理 |
 
 ---
 
@@ -240,6 +241,13 @@ sproxy admin stats [--user <username>] [--days <n>]
 
 # Token 管理
 sproxy admin token revoke <username>   # 强制下线用户
+
+# 对话内容追踪
+sproxy admin track enable <username>   # 开启指定用户的追踪
+sproxy admin track disable <username>  # 关闭追踪
+sproxy admin track list                # 查看所有被追踪用户
+sproxy admin track show <username>     # 查看追踪记录
+sproxy admin track clear <username>    # 清除历史记录
 
 # 工具
 sproxy hash-password [--password <pwd>]   # 生成 bcrypt hash
@@ -542,6 +550,7 @@ pairproxy/
 │   ├── dashboard/            # Web Dashboard（Go 模板 + embed）
 │   ├── metrics/              # Prometheus 格式 /metrics 端点
 │   ├── alert/                # Webhook 告警通知器
+│   ├── track/                # 对话内容追踪（按用户隔离的 JSON 文件记录）
 │   ├── config/               # YAML 配置加载（支持 ${ENV_VAR} 展开）
 │   └── version/              # 版本信息
 ├── config/
