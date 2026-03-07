@@ -1,0 +1,2 @@
+2026/03/07 01:18:53 mockllm listening on :11434  (delay=0s chunks=1 verbose=false)
+2026/03/07 01:18:53 ListenAndServe: listen tcp :11434: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.

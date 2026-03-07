@@ -121,3 +121,82 @@ func TestPeerSyncToBalancer(t *testing.T) {
 		t.Errorf("remaining target should be sp-2, got %s", targets[0].ID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestSetSelfTarget — SetSelfTarget (0% coverage)
+// ---------------------------------------------------------------------------
+
+// TestSetSelfTarget_PlacedFirst 验证设置 selfTarget 后，syncToManager 将其置于路由表首位。
+func TestSetSelfTarget_PlacedFirst(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	balancer := lb.NewWeightedRandom(nil)
+	mgr := NewManager(logger, balancer, nil, "")
+	registry := NewPeerRegistry(logger, mgr)
+
+	selfTarget := lb.Target{ID: "sp-1", Addr: "http://sp-1:9000", Weight: 1, Healthy: true}
+	registry.SetSelfTarget(selfTarget)
+
+	// 注册一个 peer
+	registry.Register("sp-2", "http://sp-2:9000", "sp-2", 1)
+
+	// 路由表中 sp-1 应在首位
+	rt := mgr.CurrentTable()
+	if len(rt.Entries) < 2 {
+		t.Fatalf("expected ≥2 entries after SetSelfTarget + Register, got %d", len(rt.Entries))
+	}
+	if rt.Entries[0].ID != "sp-1" {
+		t.Errorf("selfTarget should be first in routing table, got %q", rt.Entries[0].ID)
+	}
+}
+
+// TestSetSelfTarget_NoPeers_SelfAlwaysPresent 验证即使没有 peer，self 仍出现在路由表中。
+func TestSetSelfTarget_NoPeers_SelfAlwaysPresent(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	balancer := lb.NewWeightedRandom(nil)
+	mgr := NewManager(logger, balancer, nil, "")
+	registry := NewPeerRegistry(logger, mgr)
+
+	selfTarget := lb.Target{ID: "sp-1-only", Addr: "http://sp-1-only:9000", Weight: 2, Healthy: true}
+	registry.SetSelfTarget(selfTarget)
+
+	// 触发 syncToManager
+	registry.Register("tmp-peer", "http://tmp:9000", "tmp", 1)
+	registry.Deregister("tmp-peer")
+
+	// 路由表中应只有 sp-1-only
+	rt := mgr.CurrentTable()
+	if len(rt.Entries) != 1 {
+		t.Fatalf("expected 1 entry (selfTarget only), got %d", len(rt.Entries))
+	}
+	if rt.Entries[0].ID != "sp-1-only" {
+		t.Errorf("expected selfTarget in routing table, got %q", rt.Entries[0].ID)
+	}
+}
+
+// TestSetSelfTarget_WorkerHeartbeatCannotRemoveSelf 验证 worker 心跳不会从路由表中抹去 primary。
+func TestSetSelfTarget_WorkerHeartbeatCannotRemoveSelf(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	balancer := lb.NewWeightedRandom(nil)
+	mgr := NewManager(logger, balancer, nil, "")
+	registry := NewPeerRegistry(logger, mgr)
+
+	selfTarget := lb.Target{ID: "sp-1", Addr: "http://sp-1:9000", Weight: 1, Healthy: true}
+	registry.SetSelfTarget(selfTarget)
+
+	// 多次 worker 心跳
+	for i := 0; i < 5; i++ {
+		registry.Register("sp-2", "http://sp-2:9000", "sp-2", 1)
+	}
+
+	rt := mgr.CurrentTable()
+	found := false
+	for _, e := range rt.Entries {
+		if e.ID == "sp-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("selfTarget sp-1 should always be present in routing table after worker heartbeat")
+	}
+}

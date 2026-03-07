@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/lb"
 )
 
@@ -381,5 +382,239 @@ func TestCProxyRoutingTableUpdate(t *testing.T) {
 	// 验证本地路由版本已更新
 	if cp.routingVersion.Load() != 5 {
 		t.Errorf("routingVersion = %d, want 5", cp.routingVersion.Load())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestNewCProxy_CacheDir — NewCProxy cacheDir 路径（37.5% → 提升）
+// ---------------------------------------------------------------------------
+
+// TestNewCProxy_WithCacheDir_NoCache 验证 cacheDir != "" 但缓存不存在时，不影响创建。
+func TestNewCProxy_WithCacheDir_NoCache(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	store := auth.NewTokenStore(logger, 30*time.Minute)
+	dir := t.TempDir() // 空目录，无缓存文件
+	cacheDir := t.TempDir()
+
+	balancer := lb.NewWeightedRandom([]lb.Target{
+		{ID: "sp1", Addr: "http://sp1:9000", Weight: 1, Healthy: true},
+	})
+
+	cp, err := NewCProxy(logger, store, dir, balancer, cacheDir)
+	if err != nil {
+		t.Fatalf("NewCProxy: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("NewCProxy returned nil")
+	}
+	// 无缓存，routingVersion 应从 0 开始
+	if cp.routingVersion.Load() != 0 {
+		t.Errorf("routingVersion = %d, want 0 (no cache)", cp.routingVersion.Load())
+	}
+}
+
+// TestNewCProxy_WithCacheDir_CacheExists 验证 cacheDir != "" 且缓存存在时，恢复路由表。
+func TestNewCProxy_WithCacheDir_CacheExists(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	store := auth.NewTokenStore(logger, 30*time.Minute)
+	dir := t.TempDir()
+	cacheDir := t.TempDir()
+
+	// 先创建一个缓存路由表
+	rt := &cluster.RoutingTable{
+		Version: 42,
+		Entries: []cluster.RoutingEntry{
+			{ID: "sp-cached", Addr: "http://cached:9000", Weight: 1, Healthy: true},
+		},
+	}
+	if err := rt.SaveToDir(cacheDir); err != nil {
+		t.Fatalf("SaveToDir: %v", err)
+	}
+
+	balancer := lb.NewWeightedRandom([]lb.Target{
+		{ID: "sp1", Addr: "http://sp1:9000", Weight: 1, Healthy: true},
+	})
+
+	cp, err := NewCProxy(logger, store, dir, balancer, cacheDir)
+	if err != nil {
+		t.Fatalf("NewCProxy: %v", err)
+	}
+	if cp == nil {
+		t.Fatal("NewCProxy returned nil")
+	}
+
+	// 从缓存恢复，routingVersion 应为 42
+	if cp.routingVersion.Load() != 42 {
+		t.Errorf("routingVersion = %d, want 42 (from cache)", cp.routingVersion.Load())
+	}
+
+	// Balancer 应被更新为缓存中的条目
+	targets := balancer.Targets()
+	found := false
+	for _, t2 := range targets {
+		if t2.ID == "sp-cached" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("balancer should have been updated with cached routing entries")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBalancer — Balancer() getter (0% coverage)
+// ---------------------------------------------------------------------------
+
+func TestCProxy_Balancer_ReturnsNonNil(t *testing.T) {
+	mockSProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockSProxy.Close()
+
+	cp, _ := newTestCProxy(t, mockSProxy.URL, validToken())
+
+	b := cp.Balancer()
+	if b == nil {
+		t.Error("Balancer() should return non-nil balancer")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestApplyRoutingTable — ApplyRoutingTable() (0% coverage)
+// ---------------------------------------------------------------------------
+
+func TestCProxy_ApplyRoutingTable_UpdatesTargets(t *testing.T) {
+	mockSProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockSProxy.Close()
+
+	cp, _ := newTestCProxy(t, mockSProxy.URL, validToken())
+
+	newRT := &cluster.RoutingTable{
+		Version: 10,
+		Entries: []cluster.RoutingEntry{
+			{ID: "sp-new1", Addr: "http://new1:9000", Weight: 1, Healthy: true},
+			{ID: "sp-new2", Addr: "http://new2:9000", Weight: 2, Healthy: true},
+		},
+	}
+
+	cp.ApplyRoutingTable(newRT)
+
+	// routingVersion 应更新为 10
+	if cp.routingVersion.Load() != 10 {
+		t.Errorf("routingVersion = %d, want 10 after ApplyRoutingTable", cp.routingVersion.Load())
+	}
+
+	// Balancer 应有 2 个新目标
+	targets := cp.Balancer().Targets()
+	if len(targets) != 2 {
+		t.Fatalf("balancer targets = %d, want 2", len(targets))
+	}
+	ids := map[string]bool{}
+	for _, t2 := range targets {
+		ids[t2.ID] = true
+	}
+	if !ids["sp-new1"] || !ids["sp-new2"] {
+		t.Errorf("balancer should have sp-new1 and sp-new2, got %v", ids)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestProcessRoutingHeaders — processRoutingHeaders 缺失分支 (68.2% → 提升)
+// ---------------------------------------------------------------------------
+
+// makeMinimalResponse 创建用于测试的最小 http.Response。
+func makeMinimalResponse(headers map[string]string) *http.Response {
+	h := http.Header{}
+	for k, v := range headers {
+		h.Set(k, v)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+}
+
+// TestProcessRoutingHeaders_EmptyVersion 验证 X-Routing-Version 为空时直接 return。
+func TestProcessRoutingHeaders_EmptyVersion(t *testing.T) {
+	cp, _ := newTestCProxy(t, "http://dummy", validToken())
+	before := cp.routingVersion.Load()
+
+	resp := makeMinimalResponse(map[string]string{}) // 无 X-Routing-Version
+	cp.processRoutingHeaders(resp, "req-test")
+
+	if cp.routingVersion.Load() != before {
+		t.Errorf("routingVersion should not change when X-Routing-Version is empty")
+	}
+}
+
+// TestProcessRoutingHeaders_InvalidVersion 验证 X-Routing-Version 为非数字时直接 return。
+func TestProcessRoutingHeaders_InvalidVersion(t *testing.T) {
+	cp, _ := newTestCProxy(t, "http://dummy", validToken())
+	before := cp.routingVersion.Load()
+
+	resp := makeMinimalResponse(map[string]string{
+		"X-Routing-Version": "not-a-number",
+	})
+	cp.processRoutingHeaders(resp, "req-test")
+
+	if cp.routingVersion.Load() != before {
+		t.Errorf("routingVersion should not change with invalid version header")
+	}
+}
+
+// TestProcessRoutingHeaders_ServerVersionLELocalVersion 验证 server version <= local version 时跳过。
+func TestProcessRoutingHeaders_ServerVersionLELocalVersion(t *testing.T) {
+	cp, _ := newTestCProxy(t, "http://dummy", validToken())
+	// 先设置本地版本为 10
+	cp.routingVersion.Store(10)
+
+	// server version = 10 <= local version 10，应跳过
+	resp := makeMinimalResponse(map[string]string{
+		"X-Routing-Version": "10",
+		"X-Routing-Update":  "some-data",
+	})
+	cp.processRoutingHeaders(resp, "req-test")
+
+	if cp.routingVersion.Load() != 10 {
+		t.Errorf("routingVersion should remain 10 when server version <= local version")
+	}
+}
+
+// TestProcessRoutingHeaders_ServerVersionGreaterButNoUpdate 验证 server version > local 但 X-Routing-Update 为空时只更新版本号。
+func TestProcessRoutingHeaders_ServerVersionGreaterButNoUpdate(t *testing.T) {
+	cp, _ := newTestCProxy(t, "http://dummy", validToken())
+	cp.routingVersion.Store(5)
+
+	// server version 15 > local 5，但无 X-Routing-Update
+	resp := makeMinimalResponse(map[string]string{
+		"X-Routing-Version": "15",
+		// 无 X-Routing-Update
+	})
+	cp.processRoutingHeaders(resp, "req-test")
+
+	if cp.routingVersion.Load() != 15 {
+		t.Errorf("routingVersion = %d, want 15 (only version updated, no full table)", cp.routingVersion.Load())
+	}
+}
+
+// TestProcessRoutingHeaders_InvalidRoutingUpdate 验证 X-Routing-Update 内容无效时不更新。
+func TestProcessRoutingHeaders_InvalidRoutingUpdate(t *testing.T) {
+	cp, _ := newTestCProxy(t, "http://dummy", validToken())
+	cp.routingVersion.Store(5)
+
+	// server version 20 > local 5，但 X-Routing-Update 解码失败
+	resp := makeMinimalResponse(map[string]string{
+		"X-Routing-Version": "20",
+		"X-Routing-Update":  "!!!invalid-base64!!!",
+	})
+	cp.processRoutingHeaders(resp, "req-test")
+
+	// 版本号不应更新（解码失败直接 return）
+	if cp.routingVersion.Load() != 5 {
+		t.Errorf("routingVersion = %d, want 5 (decode failure should not update version)", cp.routingVersion.Load())
 	}
 }

@@ -151,3 +151,85 @@ func TestManagerPersistAndLoad(t *testing.T) {
 		t.Errorf("cached version = %d, want %d", loaded.Version, rt.Version)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestDrainNode — DrainNode (0% coverage)
+// ---------------------------------------------------------------------------
+
+func TestDrainNode_IsDrainingTrue(t *testing.T) {
+	targets := []lb.Target{
+		{ID: "a", Addr: "http://a:9000", Weight: 1, Healthy: true},
+		{ID: "b", Addr: "http://b:9000", Weight: 1, Healthy: true},
+	}
+	mgr, balancer := makeManager(t, targets)
+
+	v1 := mgr.CurrentTable().Version
+
+	// 排水前 a 应可被 Pick 到
+	mgr.DrainNode("a")
+
+	// IsDraining 应返回 true
+	if !mgr.IsDraining("a") {
+		t.Error("IsDraining('a') should be true after DrainNode")
+	}
+	if mgr.IsDraining("b") {
+		t.Error("IsDraining('b') should still be false")
+	}
+
+	// 路由表版本应递增
+	v2 := mgr.CurrentTable().Version
+	if v2 <= v1 {
+		t.Errorf("routing version should increase after DrainNode: v1=%d v2=%d", v1, v2)
+	}
+
+	// Pick 结果中不应有 a（因为 a 处于排水模式）
+	for i := 0; i < 20; i++ {
+		got, err := balancer.Pick()
+		if err != nil {
+			t.Fatalf("Pick: %v", err)
+		}
+		if got.ID == "a" {
+			t.Error("drained node 'a' should not be picked")
+		}
+	}
+}
+
+func TestDrainNode_AllDrainedReturnsError(t *testing.T) {
+	targets := []lb.Target{
+		{ID: "x", Addr: "http://x:9000", Weight: 1, Healthy: true},
+	}
+	mgr, balancer := makeManager(t, targets)
+
+	mgr.DrainNode("x")
+
+	_, err := balancer.Pick()
+	if err != lb.ErrNoHealthyTarget {
+		t.Errorf("after draining all nodes, Pick should return ErrNoHealthyTarget, got: %v", err)
+	}
+}
+
+func TestUndrainNode_RestoresPickability(t *testing.T) {
+	targets := []lb.Target{
+		{ID: "a", Addr: "http://a:9000", Weight: 1, Healthy: true},
+	}
+	mgr, balancer := makeManager(t, targets)
+
+	mgr.DrainNode("a")
+	if !mgr.IsDraining("a") {
+		t.Fatal("expected IsDraining=true after DrainNode")
+	}
+
+	mgr.UndrainNode("a")
+	if mgr.IsDraining("a") {
+		t.Error("IsDraining should be false after UndrainNode")
+	}
+
+	// 恢复后 Pick 应成功
+	got, err := balancer.Pick()
+	if err != nil {
+		t.Fatalf("Pick after undrain: %v", err)
+	}
+	if got.ID != "a" {
+		t.Errorf("got ID = %q, want 'a'", got.ID)
+	}
+}

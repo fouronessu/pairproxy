@@ -11,7 +11,9 @@ import (
 
 	"github.com/l17728/pairproxy/internal/alert"
 	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/lb"
 )
 
 // ---------------------------------------------------------------------------
@@ -397,5 +399,85 @@ func TestSProxy_SetBindingResolver(t *testing.T) {
 	url, found := sp.bindingResolver("u1", "g1")
 	if !found || url != "https://custom-target.example.com" {
 		t.Error("bindingResolver should return the configured url")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewSProxyWithCluster — (0% coverage)
+// ---------------------------------------------------------------------------
+
+// TestNewSProxyWithCluster_ReturnsNonNil verifies NewSProxyWithCluster creates a valid SProxy.
+func TestNewSProxyWithCluster_ReturnsNonNil(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	jwtMgr, err := auth.NewManager(logger, "test-cluster-secret")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Second)
+	writer.Start(ctx)
+	t.Cleanup(func() { cancel(); writer.Wait() })
+
+	// 构造 cluster manager
+	balancer := lb.NewWeightedRandom([]lb.Target{
+		{ID: "llm-1", Addr: "http://llm:8080", Weight: 1, Healthy: true},
+	})
+	clusterMgr := cluster.NewManager(logger, balancer, nil, "")
+
+	sp, err := NewSProxyWithCluster(logger, jwtMgr, writer,
+		[]LLMTarget{
+			{URL: "https://api.anthropic.com", APIKey: "test-key", Provider: "anthropic"},
+		},
+		clusterMgr, "sp-1",
+	)
+	if err != nil {
+		t.Fatalf("NewSProxyWithCluster: %v", err)
+	}
+	if sp == nil {
+		t.Fatal("NewSProxyWithCluster returned nil")
+	}
+}
+
+// TestNewSProxyWithCluster_NilClusterManager verifies nil clusterMgr is acceptable.
+func TestNewSProxyWithCluster_NilClusterManager(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	jwtMgr, err := auth.NewManager(logger, "test-nil-cluster-secret")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Second)
+	writer.Start(ctx)
+	t.Cleanup(func() { cancel(); writer.Wait() })
+
+	sp, err := NewSProxyWithCluster(logger, jwtMgr, writer,
+		[]LLMTarget{
+			{URL: "https://api.anthropic.com", APIKey: "key", Provider: "anthropic"},
+		},
+		nil, "standalone",
+	)
+	if err != nil {
+		t.Fatalf("NewSProxyWithCluster with nil clusterMgr: %v", err)
+	}
+	if sp == nil {
+		t.Fatal("NewSProxyWithCluster returned nil")
 	}
 }

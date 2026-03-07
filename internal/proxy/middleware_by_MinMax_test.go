@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -236,6 +237,68 @@ func TestWriteJSONError_ByMinMax(t *testing.T) {
 		contentType := w.Header().Get("Content-Type")
 		if contentType != "application/json" {
 			t.Errorf("expected application/json, got %s", contentType)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// writeQuotaError — (0% coverage)
+// ---------------------------------------------------------------------------
+
+// TestWriteQuotaError verifies HTTP 429, Content-Type: application/json, and body fields.
+func TestWriteQuotaError_HTTP429AndFields(t *testing.T) {
+	resetAt := time.Now().Add(1 * time.Hour).UTC()
+	w := httptest.NewRecorder()
+	writeQuotaError(w, "token", 500, 1000, resetAt)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body["error"] != "quota_exceeded" {
+		t.Errorf("error = %q, want quota_exceeded", body["error"])
+	}
+	if body["kind"] != "token" {
+		t.Errorf("kind = %q, want token", body["kind"])
+	}
+	// JSON numbers decode as float64
+	if current, ok := body["current"].(float64); !ok || current != 500 {
+		t.Errorf("current = %v, want 500", body["current"])
+	}
+	if limit, ok := body["limit"].(float64); !ok || limit != 1000 {
+		t.Errorf("limit = %v, want 1000", body["limit"])
+	}
+	if body["reset_at"] == "" || body["reset_at"] == nil {
+		t.Error("reset_at should be set")
+	}
+}
+
+// TestWriteQuotaError_DifferentKinds verifies various quota kind values.
+func TestWriteQuotaError_DifferentKinds(t *testing.T) {
+	kinds := []string{"token", "request", "daily", "monthly"}
+	resetAt := time.Now().Add(24 * time.Hour).UTC()
+
+	for _, kind := range kinds {
+		w := httptest.NewRecorder()
+		writeQuotaError(w, kind, 100, 200, resetAt)
+
+		if w.Code != http.StatusTooManyRequests {
+			t.Errorf("[kind=%s] status = %d, want 429", kind, w.Code)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("[kind=%s] decode body: %v", kind, err)
+		}
+		if body["kind"] != kind {
+			t.Errorf("[kind=%s] body.kind = %q, want %q", kind, body["kind"], kind)
 		}
 	}
 }

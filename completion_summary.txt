@@ -1,0 +1,85 @@
+# 任务完成总结 (Task Completion Summary)
+
+## 原始需求 (Original Requirements)
+1. 检查代码是否还需要补充打印日志，方便出现问题进行定位
+2. 检查是否还需要补充e2e测试用例
+3. 刷新所有设计文档和手册，确保文档最新，保持一致性，与代码同步
+
+## 已完成工作 (Completed Work)
+
+### 1. 日志增强 (Logging Enhancements)
+✅ internal/cluster/manager.go (+23 lines)
+   - 添加集群管理器初始化日志
+   - 添加节点健康状态变更日志 (MarkHealthy/MarkUnhealthy)
+   - 添加路由表更新日志 (applyTargets/rebuildFromBalancer)
+   - 添加路由更新注入响应头日志
+
+✅ internal/api/cluster_handler.go (+25 lines)
+   - 添加 peer register 请求体解析错误日志
+   - 添加 peer register 必填字段缺失日志
+   - 增强 peer heartbeat 日志（添加 weight 和 source_node）
+   - 添加 usage report 请求体解析错误日志
+   - 添加 cluster routing query 日志
+
+### 2. E2E 测试补充 (E2E Test Additions)
+✅ test/e2e/quota_enforcement_e2e_test.go (新文件，424 lines)
+   - TestE2ERequestSizeQuotaEnforcement: 测试单次请求大小限制
+   - TestE2ERequestSizeAllowedWhenWithinLimit: 测试限制内请求通过
+   - TestE2EConcurrentRequestsQuotaEnforcement: 测试并发请求限制
+   - TestE2EConcurrentAllowedWhenWithinLimit: 测试限制内并发通过
+   - TestE2ERequestSizeNoMaxTokensField: 测试无 max_tokens 字段场景
+
+✅ 修复配额错误响应格式
+   - internal/proxy/middleware.go: 新增 writeQuotaError 函数
+   - internal/proxy/sproxy.go: 更新配额错误响应为结构化格式
+   - 响应现在包含: error, kind, current, limit, reset_at 字段
+
+### 3. 文档更新 (Documentation Updates)
+✅ docs/API.md (+366 lines)
+   新增以下 API 文档章节：
+   - Quota Management (GET /api/admin/quota/status)
+   - Audit & Logs (GET /api/admin/audit, DELETE /api/admin/logs, GET /api/admin/export)
+   - Drain Mode (POST /api/admin/drain, POST /api/admin/undrain, GET /api/admin/drain/status)
+   - API Key Management (GET/POST/DELETE /api/admin/api-keys, POST /api/admin/api-keys/{id}/assign)
+   - LLM Target Management (GET /api/admin/llm/targets, GET/POST/DELETE /api/admin/llm/bindings, POST /api/admin/llm/distribute)
+   - 更新 Group Management 章节，添加 max_tokens_per_request 和 concurrent_requests 字段说明
+
+✅ docs/manual.md (+10 lines)
+   - 更新 4.2 创建分组章节，添加新配额字段语法
+   - 更新 4.5 修改分组配额章节，添加新配额字段示例
+   - 新增 --max-tokens-per-request 和 --concurrent-requests 参数说明
+
+## 测试验证 (Test Verification)
+✅ 所有单元测试通过
+   - internal/cluster: PASS
+   - internal/api: PASS
+   - internal/proxy: PASS
+
+✅ 所有 E2E 测试通过
+   - TestE2ERequestSizeQuotaEnforcement: PASS
+   - TestE2ERequestSizeAllowedWhenWithinLimit: PASS
+   - TestE2EConcurrentRequestsQuotaEnforcement: PASS
+   - TestE2EConcurrentAllowedWhenWithinLimit: PASS
+   - TestE2ERequestSizeNoMaxTokensField: PASS
+
+## 代码变更统计 (Code Change Statistics)
+ docs/API.md                     | +366 lines
+ docs/manual.md                  | +10 lines
+ internal/api/cluster_handler.go | +25 lines
+ internal/cluster/manager.go     | +23 lines
+ internal/proxy/middleware.go    | +14 lines
+ internal/proxy/sproxy.go        | +12 lines
+ --------------------------------
+ Total: +450 lines, -7 lines
+
+## 关键改进 (Key Improvements)
+1. 集群路由和节点管理现在有完整的日志追踪
+2. 配额限制（请求大小和并发）有完整的 E2E 测试覆盖
+3. API 文档现在完整记录所有管理端点
+4. 用户手册同步更新，包含所有配额字段说明
+5. 配额错误响应格式标准化，符合 API 规范
+
+## 下一步建议 (Next Steps)
+- 考虑为其他关键路径添加更多日志（如 LLM 绑定、API Key 管理）
+- 考虑添加集群多节点场景的 E2E 测试
+- 考虑添加性能测试以验证日志不影响吞吐量

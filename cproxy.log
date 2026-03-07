@@ -1,0 +1,14 @@
+{"level":"info","ts":1772817566.4083555,"caller":"cproxy/main.go:197","msg":"cproxy starting","listen":"127.0.0.1:8080","sproxy_primary":"http://127.0.0.1:9000","sproxy_targets":[]}
+{"level":"info","ts":1772817566.408863,"logger":"preflight","caller":"preflight/checker.go:71","msg":"running cproxy preflight checks","listen":"127.0.0.1:8080"}
+{"level":"warn","ts":1772817566.4098818,"logger":"preflight","caller":"preflight/checker.go:80","msg":"preflight: listen address check failed","addr":"127.0.0.1:8080","error":"listen address \"127.0.0.1:8080\" is already in use: listen tcp 127.0.0.1:8080: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted."}
+{"level":"error","ts":1772817566.4098818,"logger":"preflight","caller":"preflight/checker.go:89","msg":"cproxy preflight checks failed","errors":["listen address \"127.0.0.1:8080\" is already in use: listen tcp 127.0.0.1:8080: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted."],"stacktrace":"github.com/l17728/pairproxy/internal/preflight.CheckCProxy\n\tD:/pairproxy/internal/preflight/checker.go:89\nmain.runStart\n\tD:/pairproxy/cmd/cproxy/main.go:204\ngithub.com/spf13/cobra.(*Command).execute\n\tC:/Users/HW/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1015\ngithub.com/spf13/cobra.(*Command).ExecuteC\n\tC:/Users/HW/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1148\ngithub.com/spf13/cobra.(*Command).Execute\n\tC:/Users/HW/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1071\nmain.main\n\tD:/pairproxy/cmd/cproxy/main.go:30\nruntime.main\n\tC:/Program Files/Go/src/runtime/proc.go:290"}
+Error: preflight: preflight checks failed:
+  - listen address "127.0.0.1:8080" is already in use: listen tcp 127.0.0.1:8080: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+Usage:
+  cproxy start [flags]
+
+Flags:
+      --config string   path to cproxy.yaml (default: ~/.config/pairproxy/cproxy.yaml)
+      --daemon          run in background, detached from the terminal (Linux/macOS only; use 'cproxy install-service' on Windows)
+  -h, --help            help for start
+
