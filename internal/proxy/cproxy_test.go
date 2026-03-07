@@ -618,3 +618,151 @@ func TestProcessRoutingHeaders_InvalidRoutingUpdate(t *testing.T) {
 		t.Errorf("routingVersion = %d, want 5 (decode failure should not update version)", cp.routingVersion.Load())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Model header injection tests  (FR-1 + FR-2)
+// ---------------------------------------------------------------------------
+
+// TestExtractModelFromBody 验证从不同格式的 JSON body 中提取 model 字段。
+func TestExtractModelFromBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     []byte
+		expected string
+	}{
+		{
+			name:     "Anthropic format",
+			body:     []byte(`{"model":"claude-3-5-sonnet-20241022","messages":[],"max_tokens":1024}`),
+			expected: "claude-3-5-sonnet-20241022",
+		},
+		{
+			name:     "OpenAI format",
+			body:     []byte(`{"model":"gpt-4","messages":[]}`),
+			expected: "gpt-4",
+		},
+		{
+			name:     "Ollama format",
+			body:     []byte(`{"model":"llama2","prompt":"hello"}`),
+			expected: "llama2",
+		},
+		{
+			name:     "missing model field",
+			body:     []byte(`{"messages":[]}`),
+			expected: "",
+		},
+		{
+			name:     "invalid JSON",
+			body:     []byte(`not-json`),
+			expected: "",
+		},
+		{
+			name:     "empty body",
+			body:     []byte(``),
+			expected: "",
+		},
+		{
+			name:     "nil body",
+			body:     nil,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractModelFromBody(tt.body)
+			if got != tt.expected {
+				t.Errorf("extractModelFromBody() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestCProxy_InjectsModelHeader 验证 cproxy 将请求体中的 model 字段注入为
+// X-PairProxy-Model 头发送给 s-proxy。
+func TestCProxy_InjectsModelHeader(t *testing.T) {
+	var capturedModel string
+
+	mockSProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedModel = r.Header.Get("X-PairProxy-Model")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message"}`)
+	}))
+	defer mockSProxy.Close()
+
+	cp, _ := newTestCProxy(t, mockSProxy.URL, validToken())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-3-opus-20240229","messages":[],"max_tokens":256}`))
+	req.Header.Set("Authorization", "Bearer dummy-api-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	cp.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if capturedModel != "claude-3-opus-20240229" {
+		t.Errorf("X-PairProxy-Model = %q, want %q", capturedModel, "claude-3-opus-20240229")
+	}
+}
+
+// TestCProxy_NoModelHeader_WhenMissing 验证 body 中缺少 model 字段时，
+// cproxy 不注入 X-PairProxy-Model 头（保留 sproxy fallback 机制）。
+func TestCProxy_NoModelHeader_WhenMissing(t *testing.T) {
+	var capturedModel string
+
+	mockSProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedModel = r.Header.Get("X-PairProxy-Model")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_2","type":"message"}`)
+	}))
+	defer mockSProxy.Close()
+
+	cp, _ := newTestCProxy(t, mockSProxy.URL, validToken())
+
+	// body 中不含 model 字段
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"messages":[],"max_tokens":256}`))
+	req.Header.Set("Authorization", "Bearer dummy-api-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	cp.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if capturedModel != "" {
+		t.Errorf("X-PairProxy-Model = %q, want empty (no model in body)", capturedModel)
+	}
+}
+
+// TestCProxy_ModelHeader_InvalidJSON 验证 body 为非法 JSON 时，
+// cproxy 不注入 X-PairProxy-Model 头且请求正常转发（不阻断）。
+func TestCProxy_ModelHeader_InvalidJSON(t *testing.T) {
+	var capturedModel string
+	requestReceived := false
+
+	mockSProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		capturedModel = r.Header.Get("X-PairProxy-Model")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_3","type":"message"}`)
+	}))
+	defer mockSProxy.Close()
+
+	cp, _ := newTestCProxy(t, mockSProxy.URL, validToken())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`not-valid-json`))
+	req.Header.Set("Authorization", "Bearer dummy-api-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	cp.Handler().ServeHTTP(rr, req)
+
+	if !requestReceived {
+		t.Fatal("mock s-proxy should have received the request even with invalid JSON body")
+	}
+	if capturedModel != "" {
+		t.Errorf("X-PairProxy-Model = %q, want empty for invalid JSON", capturedModel)
+	}
+}

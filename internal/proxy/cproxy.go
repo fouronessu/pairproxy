@@ -152,17 +152,27 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 每次请求捕获一次 debug logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
 	dl := cp.debugLogger.Load()
 
-	// debug 日志：← client request（Claude Code 发来的原始请求）
-	if dl != nil && r.Body != nil {
-		debugBody, _ := io.ReadAll(r.Body)
-		r.Body = io.NopCloser(bytes.NewReader(debugBody))
-		dl.Debug("← client request",
-			zap.String("request_id", reqID),
-			zap.String("method", r.Method),
-			zap.String("path", r.URL.Path),
-			sanitizeHeaders(r.Header),
-			zap.ByteString("body", truncate(debugBody, debugBodyMaxBytes)),
-		)
+	// 读取请求 body（一次性），用于：① debug 日志  ② 提取模型名称
+	// 无论 debug logger 是否开启，只要有 body 就读取一次并重置，避免下游二次读取失败。
+	if r.Body != nil {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+		// 提取模型名称，存入 context 供 Director 注入 header
+		if model := extractModelFromBody(bodyBytes); model != "" {
+			r = r.WithContext(context.WithValue(r.Context(), ctxKeyModel, model))
+		}
+
+		// debug 日志：← client request（Claude Code 发来的原始请求）
+		if dl != nil {
+			dl.Debug("← client request",
+				zap.String("request_id", reqID),
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				sanitizeHeaders(r.Header),
+				zap.ByteString("body", truncate(bodyBytes, debugBodyMaxBytes)),
+			)
+		}
 	}
 
 	target, err := cp.balancer.Pick()
@@ -197,6 +207,11 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// 删除 Claude Code 设置的假 API Key，注入用户 JWT
 			req.Header.Del("Authorization")
 			req.Header.Set("X-PairProxy-Auth", tf.AccessToken)
+
+			// 注入模型名称（从请求体预先提取，避免 body 二次消耗）
+			if model, ok := req.Context().Value(ctxKeyModel).(string); ok && model != "" {
+				req.Header.Set("X-PairProxy-Model", model)
+			}
 
 			// 告知 s-proxy 本地路由版本（s-proxy 决定是否下发更新）
 			req.Header.Set("X-Routing-Version", strconv.FormatInt(localVersion, 10))

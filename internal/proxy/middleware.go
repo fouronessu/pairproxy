@@ -19,6 +19,7 @@ type contextKey int
 const (
 	ctxKeyRequestID contextKey = iota
 	ctxKeyClaims
+	ctxKeyModel // 请求体中提取的 LLM 模型名称，由 cproxy 写入，Director 读取后注入 X-PairProxy-Model
 )
 
 // RequestIDFromContext 从 context 中取 request_id。
