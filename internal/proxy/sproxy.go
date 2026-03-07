@@ -29,6 +29,7 @@ import (
 	"github.com/l17728/pairproxy/internal/metrics"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
 )
 
@@ -80,6 +81,7 @@ type SProxy struct {
 
 	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
 	notifier    *alert.Notifier             // 可选，非 nil 时发送 high_load/load_recovered 告警
+	convTracker atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
 }
 
 // NewSProxy 创建 SProxy。
@@ -188,6 +190,12 @@ func (sp *SProxy) SyncAndSetDebugLogger(l *zap.Logger) {
 		_ = old.Sync()
 	}
 	sp.debugLogger.Store(l)
+}
+
+// SetConvTracker 设置用户对话内容跟踪器。
+// 非 nil 时，对已启用跟踪的用户，每次请求的输入消息和 LLM 回复均会写入文件。
+func (sp *SProxy) SetConvTracker(t *track.Tracker) {
+	sp.convTracker.Store(t)
 }
 
 // Drain 进入排水模式。
@@ -865,14 +873,42 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 用 TeeResponseWriter 包装（streaming + non-streaming 均适用）
 	// provider 决定解析器类型（Anthropic SSE / OpenAI SSE / Ollama SSE）
+
+	// 对话内容跟踪：仅在该用户已启用跟踪时创建 CaptureSession
+	var captureSession *track.CaptureSession
+	if t := sp.convTracker.Load(); t != nil && t.IsTracked(claims.Username) {
+		captureSession = track.NewCaptureSession(
+			t.UserConvDir(claims.Username),
+			reqID,
+			claims.Username,
+			bodyBytes,
+			targetProvider,
+		)
+		sp.logger.Debug("conversation tracking active",
+			zap.String("request_id", reqID),
+			zap.String("username", claims.Username),
+		)
+	}
+
 	var onChunk func([]byte)
-	if dl != nil {
+	if dl != nil && captureSession != nil {
+		// 同时启用 debug 日志 + 对话跟踪：合并为一个回调
+		onChunk = func(chunk []byte) {
+			dl.Debug("← LLM stream chunk",
+				zap.String("request_id", reqID),
+				zap.ByteString("data", truncate(chunk, debugBodyMaxBytes)),
+			)
+			captureSession.FeedChunk(chunk)
+		}
+	} else if dl != nil {
 		onChunk = func(chunk []byte) {
 			dl.Debug("← LLM stream chunk",
 				zap.String("request_id", reqID),
 				zap.ByteString("data", truncate(chunk, debugBodyMaxBytes)),
 			)
 		}
+	} else if captureSession != nil {
+		onChunk = captureSession.FeedChunk
 	}
 	tw := tap.NewTeeResponseWriter(w, sp.logger, sp.writer, usageRecord, targetProvider, startTime, onChunk)
 
@@ -983,6 +1019,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 				// 通过 TeeWriter 记录（token 解析 + 写入 UsageWriter）
 				tw.RecordNonStreaming(body, resp.StatusCode, durationMs)
+
+				// 对话跟踪：记录非流式响应内容
+				if captureSession != nil {
+					captureSession.SetNonStreamingResponse(body)
+					captureSession.Flush()
+				}
 			}
 			// streaming 情况：TeeResponseWriter.Write() 会自动 Feed SSE 解析器，
 			// 在 message_stop 事件时异步记录；onChunk 回调已记录每条 chunk

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,6 +37,7 @@ import (
 	"github.com/l17728/pairproxy/internal/preflight"
 	"github.com/l17728/pairproxy/internal/proxy"
 	"github.com/l17728/pairproxy/internal/quota"
+	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
 )
 
@@ -547,6 +550,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// 用户对话内容跟踪：基于文件系统标记文件，通过 sproxy admin track 命令管理
+	{
+		trackDir := filepath.Join(filepath.Dir(cfg.Database.Path), "track")
+		if t, tErr := track.New(trackDir); tErr != nil {
+			logger.Warn("failed to init conversation tracker, tracking disabled",
+				zap.String("track_dir", trackDir),
+				zap.Error(tErr),
+			)
+		} else {
+			sp.SetConvTracker(t)
+			logger.Info("conversation tracker initialized", zap.String("track_dir", trackDir))
+		}
+	}
+
 	// ---------------------------------------------------------------------------
 	// 注册路由
 	// ---------------------------------------------------------------------------
@@ -767,7 +784,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd)
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd, adminTrackCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
@@ -2949,6 +2966,190 @@ This is useful for rolling upgrades:
 func init() {
 	adminDrainWaitCmd.Flags().DurationVar(&drainWaitTimeout, "timeout", 0, "maximum time to wait (0 = no limit)")
 	adminDrainCmd.AddCommand(adminDrainEnterCmd, adminDrainExitCmd, adminDrainStatusCmd, adminDrainWaitCmd)
+}
+
+// ---------------------------------------------------------------------------
+// sproxy admin track — 用户对话内容跟踪管理
+// ---------------------------------------------------------------------------
+//
+// 跟踪数据存储在 <db_dir>/track/ 目录下：
+//   - track/users/<username>     — 标记文件（存在即表示已启用跟踪）
+//   - track/conversations/<username>/<timestamp>-<reqID>.json — 对话记录
+//
+// 用法：
+//   sproxy admin track enable alice     # 启用对 alice 的跟踪
+//   sproxy admin track disable alice    # 停用跟踪（保留历史记录）
+//   sproxy admin track list             # 列出所有已启用跟踪的用户
+//   sproxy admin track show alice       # 列出 alice 的对话记录文件
+//   sproxy admin track clear alice      # 删除 alice 的所有对话记录
+
+var adminTrackCmd = &cobra.Command{
+	Use:   "track",
+	Short: "Manage per-user conversation content tracking",
+}
+
+// openAdminTrackDir 加载配置，返回跟踪目录路径和 Tracker 实例。
+func openAdminTrackDir() (*track.Tracker, *zap.Logger, error) {
+	logger, _ := zap.NewProduction()
+	cfgPath := adminConfigFlag
+	if cfgPath == "" {
+		cfgPath = "sproxy.yaml"
+	}
+	cfg, _, err := config.LoadSProxyConfig(cfgPath)
+	if err != nil {
+		return nil, logger, fmt.Errorf("load config from %q: %w", cfgPath, err)
+	}
+	trackDir := filepath.Join(filepath.Dir(cfg.Database.Path), "track")
+	t, err := track.New(trackDir)
+	if err != nil {
+		return nil, logger, fmt.Errorf("open track dir %q: %w", trackDir, err)
+	}
+	return t, logger, nil
+}
+
+var adminTrackEnableCmd = &cobra.Command{
+	Use:   "enable <username>",
+	Short: "Enable conversation tracking for a user",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		username := args[0]
+		t, _, err := openAdminTrackDir()
+		if err != nil {
+			return err
+		}
+		if err := t.Enable(username); err != nil {
+			return fmt.Errorf("enable tracking: %w", err)
+		}
+		fmt.Printf("Tracking ENABLED for user: %s\n", username)
+		fmt.Printf("Conversations will be saved to: %s\n", t.UserConvDir(username))
+		return nil
+	},
+}
+
+var adminTrackDisableCmd = &cobra.Command{
+	Use:   "disable <username>",
+	Short: "Disable conversation tracking for a user (conversation files are kept)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		username := args[0]
+		t, _, err := openAdminTrackDir()
+		if err != nil {
+			return err
+		}
+		if err := t.Disable(username); err != nil {
+			return fmt.Errorf("disable tracking: %w", err)
+		}
+		fmt.Printf("Tracking DISABLED for user: %s\n", username)
+		fmt.Println("(Existing conversation files are preserved)")
+		return nil
+	},
+}
+
+var adminTrackListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all users with conversation tracking enabled",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		t, _, err := openAdminTrackDir()
+		if err != nil {
+			return err
+		}
+		users, err := t.ListTracked()
+		if err != nil {
+			return fmt.Errorf("list tracked users: %w", err)
+		}
+		if len(users) == 0 {
+			fmt.Println("No users currently tracked.")
+			return nil
+		}
+		fmt.Printf("Tracked users (%d):\n", len(users))
+		for _, u := range users {
+			fmt.Printf("  • %s\n", u)
+		}
+		return nil
+	},
+}
+
+var adminTrackShowCmd = &cobra.Command{
+	Use:   "show <username>",
+	Short: "List conversation record files for a user",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		username := args[0]
+		t, _, err := openAdminTrackDir()
+		if err != nil {
+			return err
+		}
+		convDir := t.UserConvDir(username)
+		entries, rdErr := os.ReadDir(convDir)
+		if rdErr != nil {
+			if os.IsNotExist(rdErr) {
+				fmt.Printf("No conversation records found for user: %s\n", username)
+				return nil
+			}
+			return fmt.Errorf("read conversation dir: %w", rdErr)
+		}
+
+		// 按文件名（即时间戳）倒序排列
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() > entries[j].Name()
+		})
+
+		if len(entries) == 0 {
+			fmt.Printf("No conversation records for user: %s\n", username)
+			return nil
+		}
+
+		status := "ENABLED"
+		if !t.IsTracked(username) {
+			status = "disabled"
+		}
+		fmt.Printf("Conversations for %s [tracking: %s] — %d record(s):\n", username, status, len(entries))
+		for i, e := range entries {
+			info, _ := e.Info()
+			size := int64(0)
+			if info != nil {
+				size = info.Size()
+			}
+			fmt.Printf("  %3d. %s  (%d bytes)\n", i+1, e.Name(), size)
+		}
+		fmt.Printf("\nLocation: %s\n", convDir)
+		return nil
+	},
+}
+
+var adminTrackClearCmd = &cobra.Command{
+	Use:   "clear <username>",
+	Short: "Delete all conversation record files for a user",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		username := args[0]
+		t, _, err := openAdminTrackDir()
+		if err != nil {
+			return err
+		}
+		convDir := t.UserConvDir(username)
+		entries, rdErr := os.ReadDir(convDir)
+		if rdErr != nil {
+			if os.IsNotExist(rdErr) {
+				fmt.Printf("No conversation records found for user: %s\n", username)
+				return nil
+			}
+			return fmt.Errorf("read conversation dir: %w", rdErr)
+		}
+
+		deleted := 0
+		for _, e := range entries {
+			if err := os.Remove(filepath.Join(convDir, e.Name())); err == nil {
+				deleted++
+			}
+		}
+		fmt.Printf("Deleted %d conversation record(s) for user: %s\n", deleted, username)
+		return nil
+	},
+}
+
+func init() {
+	adminTrackCmd.AddCommand(adminTrackEnableCmd, adminTrackDisableCmd, adminTrackListCmd, adminTrackShowCmd, adminTrackClearCmd)
 }
 
 // createAdminToken creates a short-lived admin JWT for CLI-to-API authentication.
