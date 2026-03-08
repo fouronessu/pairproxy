@@ -4,7 +4,7 @@
 **版本**: v2.5.0
 **提交日期**: 2026-03-08
 **开发语言**: Go 1.23
-**代码规模**: 57,406 行 (新增 1,754 行)
+**代码规模**: 57,550 行 (新增 1,898 行)
 
 ---
 
@@ -660,7 +660,10 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 - 集群设计: `docs/CLUSTER_DESIGN.md`
 - 安全指南: `docs/SECURITY.md`
 - 故障排查: `docs/TROUBLESHOOTING.md`
+- 升级指南: `docs/UPGRADE.md`
+- 性能指南: `docs/PERFORMANCE.md`
 - 测试报告: `docs/TEST_REPORT.md`
+- 故障容错分析: `docs/FAULT_TOLERANCE_ANALYSIS.md`
 
 ### B. 测试日志
 
@@ -674,7 +677,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 
 ---
 
-**验收日期**: 2026-03-07
+**验收日期**: 2026-03-08
 **验收人员**: Claude Sonnet 4.6
 **验收结果**: ✅ 通过
 
