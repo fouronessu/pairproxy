@@ -358,8 +358,10 @@ Type=simple
 User=pairproxy
 Group=pairproxy
 ExecStart=/usr/local/bin/sproxy start --config /etc/pairproxy/sproxy.yaml
-Restart=on-failure
+Restart=always
 RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=3
 EnvironmentFile=/etc/pairproxy/sproxy.env
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -379,6 +381,16 @@ sudo systemctl status sproxy
 ```
 
 `status` 显示 `Active: active (running)` 即表示成功。
+
+**自动重启配置说明**：
+
+上述配置中的 `Restart=always` 确保 sproxy 进程在任何情况下退出（崩溃、被kill、自己退出）时都会自动重启，提高服务可用性。配合防抖动参数：
+- `StartLimitIntervalSec=60`：60秒内
+- `StartLimitBurst=3`：最多重启3次
+
+如果60秒内连续失败3次，systemd会停止重启尝试，需手动执行 `sudo systemctl reset-failed sproxy && sudo systemctl start sproxy` 恢复。
+
+**注意**：管理员通过 `systemctl stop` 显式停止服务时，不会触发自动重启。
 
 **常用管理命令**：
 
@@ -1015,8 +1027,10 @@ After=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/cproxy start
-Restart=on-failure
+Restart=always
 RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Install]
 WantedBy=default.target
@@ -1031,6 +1045,14 @@ systemctl --user status cproxy
 # 查看日志
 journalctl --user -u cproxy -f
 ```
+
+**自动重启配置说明**：
+上述配置中的 `Restart=always` 确保 cproxy 进程在任何情况下退出（崩溃、被kill、自己退出）时都会自动重启，提高服务可用性。配合防抖动参数：
+- `StartLimitIntervalSec=60`：60秒内
+- `StartLimitBurst=3`：最多重启3次
+
+如果60秒内连续失败3次，systemd会停止重启尝试，需手动执行 `systemctl --user reset-failed cproxy && systemctl --user start cproxy` 恢复。
+**注意**：用户通过 `systemctl --user stop` 显式停止服务时，不会触发自动重启。
 
 ---
 
