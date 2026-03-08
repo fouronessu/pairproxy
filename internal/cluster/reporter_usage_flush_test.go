@@ -14,58 +14,7 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/l17728/pairproxy/internal/db"
-	gormdb "github.com/l17728/pairproxy/internal/db"
 )
-
-// mockUsageRepo 模拟 UsageRepo，用于测试 flushUsage 逻辑。
-type mockUsageRepo struct {
-	mu          sync.Mutex
-	unsynced    []gormdb.UsageLog
-	syncedIDs   []string
-	listErr     error
-	markSyncErr error
-}
-
-func (m *mockUsageRepo) ListUnsynced(limit int) ([]gormdb.UsageLog, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
-	n := len(m.unsynced)
-	if limit > 0 && n > limit {
-		n = limit
-	}
-	result := make([]gormdb.UsageLog, n)
-	copy(result, m.unsynced[:n])
-	return result, nil
-}
-
-func (m *mockUsageRepo) MarkSynced(ids []string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.markSyncErr != nil {
-		return m.markSyncErr
-	}
-	m.syncedIDs = append(m.syncedIDs, ids...)
-	// 从 unsynced 中移除已同步的记录
-	idSet := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		idSet[id] = true
-	}
-	remaining := m.unsynced[:0]
-	for _, log := range m.unsynced {
-		if !idSet[log.RequestID] {
-			remaining = append(remaining, log)
-		}
-	}
-	m.unsynced = remaining
-	return nil
-}
-
-// usageRepoAdapter 将 mockUsageRepo 适配为 *db.UsageRepo 接口。
-// 由于 db.UsageRepo 是具体类型，我们需要在 Reporter 中使用接口。
-// 这里我们直接测试 flushUsage 的行为，通过真实的 httptest server。
 
 // TestReporterFlushUsage_Success 测试正常情况下 flushUsage 成功上报并标记已同步。
 func TestReporterFlushUsage_Success(t *testing.T) {
