@@ -648,7 +648,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 		dashHandler.SetTokenRepo(tokenRepo)
 		dashHandler.SetDrainFunctions(sp.Drain, sp.Undrain, sp.GetDrainStatus)
 		dashHandler.RegisterRoutes(mux)
-		dashHandler.RegisterAdminLLMTargetRoutes(mux, llmTargetHandler)
 		logger.Info("dashboard registered at /dashboard/")
 	}
 

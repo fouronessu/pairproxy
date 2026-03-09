@@ -66,7 +66,7 @@ func setupLLMTest(t *testing.T) (*AdminHandler, *auth.Manager, *http.ServeMux, *
 }
 
 // ---------------------------------------------------------------------------
-// TestAdminLLMTargets — GET /api/admin/llm/targets
+// TestAdminLLMTargets — GET /api/admin/llm/targets/status
 // ---------------------------------------------------------------------------
 
 func TestAdminLLMTargets(t *testing.T) {
@@ -74,7 +74,7 @@ func TestAdminLLMTargets(t *testing.T) {
 	tok := adminToken(t, jwtMgr)
 	authHdr := "Bearer " + tok
 
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/llm/targets", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/llm/targets/status", nil)
 	req.Header.Set("Authorization", authHdr)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -120,7 +120,7 @@ func TestAdminLLMTargets_NotConfigured(t *testing.T) {
 	handler.RegisterLLMRoutes(mux)
 
 	tok := adminToken(t, jwtMgr)
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/llm/targets", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/llm/targets/status", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
