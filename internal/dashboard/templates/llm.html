@@ -38,9 +38,72 @@
   </div>
 </section>
 
-<!-- LLM 目标列表 -->
+<!-- LLM 目标管理 -->
 <section class="mb-8">
-  <h2 class="text-base font-semibold text-gray-700 mb-3">已配置的 LLM 目标</h2>
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-base font-semibold text-gray-700">LLM 目标管理</h2>
+    <button onclick="toggleAddTargetForm()" class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+      添加目标
+    </button>
+  </div>
+
+  <!-- 添加目标表单（默认隐藏） -->
+  <div id="addTargetForm" class="hidden bg-white p-4 rounded shadow mb-4">
+    <h3 class="text-sm font-semibold text-gray-700 mb-3">添加 LLM 目标</h3>
+    <form method="POST" action="/dashboard/llm/targets" class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">URL <span class="text-red-500">*</span></label>
+        <input type="text" name="url" required placeholder="https://api.example.com"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Provider <span class="text-red-500">*</span></label>
+          <select name="provider" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm">
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+          <select name="api_key_id" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm">
+            <option value="">（无）</option>
+            {{range .APIKeys}}
+            <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">名称</label>
+          <input type="text" name="name" placeholder="显示名称"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">权重</label>
+          <input type="number" name="weight" value="1" min="1"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">健康检查路径</label>
+        <input type="text" name="health_check_path" placeholder="/health"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
+      <div class="flex gap-2">
+        <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+          添加
+        </button>
+        <button type="button" onclick="toggleAddTargetForm()" class="inline-flex items-center px-4 py-2 bg-gray-300 text-gray-700 text-sm rounded hover:bg-gray-400">
+          取消
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- 目标列表 -->
   <div class="overflow-x-auto bg-white rounded shadow">
     <table class="min-w-full divide-y divide-gray-200 text-sm">
       <thead class="bg-gray-50">
@@ -48,17 +111,28 @@
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">名称/URL</th>
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Provider</th>
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">权重</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">来源</th>
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">健康</th>
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">排水</th>
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">绑定数</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
-        {{range .Targets}}
+        {{range .AllTargets}}
         <tr>
-          <td class="px-4 py-2 font-mono text-xs">{{if .Name}}<span class="font-semibold">{{.Name}}</span><br/><span class="text-gray-400">{{.URL}}</span>{{else}}{{.URL}}{{end}}</td>
+          <td class="px-4 py-2 font-mono text-xs">
+            {{if .Name}}<span class="font-semibold">{{.Name}}</span><br/><span class="text-gray-400">{{.URL}}</span>{{else}}{{.URL}}{{end}}
+          </td>
           <td class="px-4 py-2">{{if .Provider}}{{.Provider}}{{else}}anthropic{{end}}</td>
           <td class="px-4 py-2">{{.Weight}}</td>
+          <td class="px-4 py-2">
+            {{if eq .Source "config"}}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">配置文件</span>
+            {{else}}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">数据库</span>
+            {{end}}
+          </td>
           <td class="px-4 py-2">
             {{if .Healthy}}
             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">健康</span>
@@ -74,9 +148,24 @@
             {{end}}
           </td>
           <td class="px-4 py-2">{{index $.BoundCount .URL}}</td>
+          <td class="px-4 py-2">
+            {{if .IsEditable}}
+            <div class="flex gap-2">
+              <button onclick="editTarget('{{.ID}}', '{{.URL}}', '{{.Provider}}', '{{.Name}}', {{.Weight}}, '{{.HealthCheckPath}}', '{{.APIKeyID}}')"
+                      class="text-indigo-600 hover:text-indigo-800 text-xs">编辑</button>
+              <form method="POST" action="/dashboard/llm/targets/{{.ID}}/delete" class="inline">
+                <button type="submit" onclick="return confirm('确认删除此目标？')"
+                        class="text-red-600 hover:text-red-800 text-xs">删除</button>
+              </form>
+            </div>
+            {{else}}
+            <button onclick="viewTargetDetails('{{.URL}}', '{{.Provider}}', '{{.Name}}', {{.Weight}}, '{{.HealthCheckPath}}')"
+                    class="text-gray-600 hover:text-gray-800 text-xs">查看详情</button>
+            {{end}}
+          </td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="px-4 py-4 text-center text-gray-400">暂无 LLM 目标配置</td></tr>
+        <tr><td colspan="8" class="px-4 py-4 text-center text-gray-400">暂无 LLM 目标配置</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -88,6 +177,85 @@
     </button>
   </form>
 </section>
+
+<!-- 编辑目标模态框 -->
+<div id="editTargetModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+  <div class="bg-white rounded-lg shadow-xl p-6 max-w-lg w-full mx-4">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">编辑 LLM 目标</h3>
+    <form id="editTargetForm" method="POST" action="" class="space-y-3">
+      <input type="hidden" name="id" id="edit_id" />
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">URL <span class="text-red-500">*</span></label>
+        <input type="text" name="url" id="edit_url" required
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Provider <span class="text-red-500">*</span></label>
+          <select name="provider" id="edit_provider" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm">
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+          <select name="api_key_id" id="edit_api_key_id" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm">
+            <option value="">（无）</option>
+            {{range .APIKeys}}
+            <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">名称</label>
+          <input type="text" name="name" id="edit_name"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">权重</label>
+          <input type="number" name="weight" id="edit_weight" value="1" min="1"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">健康检查路径</label>
+        <input type="text" name="health_check_path" id="edit_health_check_path"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+          保存
+        </button>
+        <button type="button" onclick="closeEditModal()" class="inline-flex items-center px-4 py-2 bg-gray-300 text-gray-700 text-sm rounded hover:bg-gray-400">
+          取消
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 查看详情模态框 -->
+<div id="viewTargetModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+  <div class="bg-white rounded-lg shadow-xl p-6 max-w-lg w-full mx-4">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">目标详情（配置文件来源）</h3>
+    <div class="space-y-2 text-sm">
+      <div><span class="font-medium text-gray-700">URL:</span> <span id="view_url" class="font-mono text-gray-600"></span></div>
+      <div><span class="font-medium text-gray-700">Provider:</span> <span id="view_provider" class="text-gray-600"></span></div>
+      <div><span class="font-medium text-gray-700">名称:</span> <span id="view_name" class="text-gray-600"></span></div>
+      <div><span class="font-medium text-gray-700">权重:</span> <span id="view_weight" class="text-gray-600"></span></div>
+      <div><span class="font-medium text-gray-700">健康检查路径:</span> <span id="view_health_check_path" class="text-gray-600"></span></div>
+      <p class="text-xs text-gray-500 mt-3">配置文件来源的目标不可通过 WebUI 编辑，请修改 sproxy.yaml 配置文件。</p>
+    </div>
+    <div class="flex justify-end pt-4">
+      <button type="button" onclick="closeViewModal()" class="inline-flex items-center px-4 py-2 bg-gray-300 text-gray-700 text-sm rounded hover:bg-gray-400">
+        关闭
+      </button>
+    </div>
+  </div>
+</div>
 
 <!-- 当前绑定关系 -->
 <section class="mb-8">
@@ -170,6 +338,40 @@
 function toggleBindType(val) {
   document.getElementById('user_select').classList.toggle('hidden', val !== 'user');
   document.getElementById('group_select').classList.toggle('hidden', val !== 'group');
+}
+
+function toggleAddTargetForm() {
+  const form = document.getElementById('addTargetForm');
+  form.classList.toggle('hidden');
+}
+
+function editTarget(id, url, provider, name, weight, healthCheckPath, apiKeyID) {
+  document.getElementById('edit_id').value = id;
+  document.getElementById('edit_url').value = url;
+  document.getElementById('edit_provider').value = provider || 'anthropic';
+  document.getElementById('edit_name').value = name || '';
+  document.getElementById('edit_weight').value = weight || 1;
+  document.getElementById('edit_health_check_path').value = healthCheckPath || '';
+  document.getElementById('edit_api_key_id').value = apiKeyID || '';
+  document.getElementById('editTargetForm').action = '/dashboard/llm/targets/' + id + '/update';
+  document.getElementById('editTargetModal').classList.remove('hidden');
+}
+
+function closeEditModal() {
+  document.getElementById('editTargetModal').classList.add('hidden');
+}
+
+function viewTargetDetails(url, provider, name, weight, healthCheckPath) {
+  document.getElementById('view_url').textContent = url;
+  document.getElementById('view_provider').textContent = provider || 'anthropic';
+  document.getElementById('view_name').textContent = name || '（无）';
+  document.getElementById('view_weight').textContent = weight || 1;
+  document.getElementById('view_health_check_path').textContent = healthCheckPath || '（无）';
+  document.getElementById('viewTargetModal').classList.remove('hidden');
+}
+
+function closeViewModal() {
+  document.getElementById('viewTargetModal').classList.add('hidden');
 }
 </script>
 {{end}}

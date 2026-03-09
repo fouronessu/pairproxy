@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,11 +15,28 @@ import (
 type llmPageData struct {
 	baseData
 	Targets     []proxy.LLMTargetStatus
+	AllTargets  []llmTargetWithMeta // 合并后的目标列表（含 Source/IsEditable）
 	Bindings    []db.LLMBinding
 	BoundCount  map[string]int // target URL → 绑定数量
 	Users       []db.User
 	Groups      []db.Group
+	APIKeys     []db.APIKey
 	DrainStatus proxy.DrainStatus // 排水状态
+}
+
+// llmTargetWithMeta 扩展的目标信息（用于 WebUI 显示）
+type llmTargetWithMeta struct {
+	ID              string
+	URL             string
+	Provider        string
+	Name            string
+	Weight          int
+	HealthCheckPath string
+	APIKeyID        string
+	Source          string // "config" | "database"
+	IsEditable      bool
+	Healthy         bool
+	Draining        bool
 }
 
 // handleLLMPage GET /dashboard/llm
@@ -31,10 +49,47 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		BoundCount: make(map[string]int),
 	}
 
+	// 获取健康状态（来自 proxy）
+	var healthMap = make(map[string]proxy.LLMTargetStatus)
 	if h.llmHealthFn != nil {
 		data.Targets = h.llmHealthFn()
+		for _, t := range data.Targets {
+			healthMap[t.URL] = t
+		}
 	}
 
+	// 获取数据库中的目标列表
+	var allTargets []llmTargetWithMeta
+	if h.llmTargetRepo != nil {
+		dbTargets, err := h.llmTargetRepo.ListAll()
+		if err != nil {
+			h.logger.Error("list llm targets from db", zap.Error(err))
+		} else {
+			for _, t := range dbTargets {
+				health := healthMap[t.URL]
+				apiKeyID := ""
+				if t.APIKeyID != nil {
+					apiKeyID = *t.APIKeyID
+				}
+				allTargets = append(allTargets, llmTargetWithMeta{
+					ID:              t.ID,
+					URL:             t.URL,
+					Provider:        t.Provider,
+					Name:            t.Name,
+					Weight:          t.Weight,
+					HealthCheckPath: t.HealthCheckPath,
+					APIKeyID:        apiKeyID,
+					Source:          t.Source,
+					IsEditable:      t.IsEditable,
+					Healthy:         health.Healthy,
+					Draining:        health.Draining,
+				})
+			}
+		}
+	}
+	data.AllTargets = allTargets
+
+	// 获取绑定关系
 	if h.llmBindingRepo != nil {
 		bindings, err := h.llmBindingRepo.List()
 		if err != nil {
@@ -47,6 +102,7 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 获取用户和分组列表
 	if h.userRepo != nil {
 		users, _ := h.userRepo.ListByGroup("")
 		data.Users = users
@@ -54,6 +110,16 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 	if h.groupRepo != nil {
 		groups, _ := h.groupRepo.List()
 		data.Groups = groups
+	}
+
+	// 获取 API Keys
+	if h.apiKeyRepo != nil {
+		apiKeys, err := h.apiKeyRepo.List()
+		if err != nil {
+			h.logger.Error("list api keys", zap.Error(err))
+		} else {
+			data.APIKeys = apiKeys
+		}
 	}
 
 	// 获取排水状态
@@ -224,4 +290,213 @@ func (h *Handler) handleDrainExit(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("drain mode exited via dashboard")
 	http.Redirect(w, r, "/dashboard/llm?flash=已退出排水模式", http.StatusSeeOther)
+}
+
+// ---------------------------------------------------------------------------
+// LLM 目标管理
+// ---------------------------------------------------------------------------
+
+// handleLLMCreateTarget POST /dashboard/llm/targets
+func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) {
+	if h.llmTargetRepo == nil {
+		http.Redirect(w, r, "/dashboard/llm?error=LLM+target+management+not+configured", http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/dashboard/llm?error=invalid+form", http.StatusSeeOther)
+		return
+	}
+
+	url := r.FormValue("url")
+	provider := r.FormValue("provider")
+	name := r.FormValue("name")
+	weightStr := r.FormValue("weight")
+	healthCheckPath := r.FormValue("health_check_path")
+	apiKeyID := r.FormValue("api_key_id")
+
+	if url == "" || provider == "" {
+		http.Redirect(w, r, "/dashboard/llm?error=URL+and+provider+required", http.StatusSeeOther)
+		return
+	}
+
+	// 检查 URL 冲突
+	exists, err := h.llmTargetRepo.URLExists(url)
+	if err != nil {
+		h.logger.Error("check url exists", zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
+		return
+	}
+	if exists {
+		http.Redirect(w, r, "/dashboard/llm?error=URL+already+exists", http.StatusSeeOther)
+		return
+	}
+
+	weight := 1
+	if weightStr != "" {
+		if w, err := strconv.Atoi(weightStr); err == nil && w > 0 {
+			weight = w
+		}
+	}
+
+	var apiKeyIDPtr *string
+	if apiKeyID != "" {
+		apiKeyIDPtr = &apiKeyID
+	}
+
+	target := &db.LLMTarget{
+		ID:              generateID(),
+		URL:             url,
+		Provider:        provider,
+		Name:            name,
+		Weight:          weight,
+		HealthCheckPath: healthCheckPath,
+		APIKeyID:        apiKeyIDPtr,
+		Source:          "database",
+		IsEditable:      true,
+		IsActive:        true,
+	}
+
+	if err := h.llmTargetRepo.Create(target); err != nil {
+		h.logger.Error("create llm target", zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	h.logger.Info("llm target created via dashboard",
+		zap.String("url", url),
+		zap.String("provider", provider),
+	)
+	http.Redirect(w, r, "/dashboard/llm?flash=目标已创建", http.StatusSeeOther)
+}
+
+// handleLLMUpdateTarget POST /dashboard/llm/targets/{id}/update
+func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) {
+	if h.llmTargetRepo == nil {
+		http.Redirect(w, r, "/dashboard/llm?error=LLM+target+management+not+configured", http.StatusSeeOther)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Redirect(w, r, "/dashboard/llm?error=id+required", http.StatusSeeOther)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/dashboard/llm?error=invalid+form", http.StatusSeeOther)
+		return
+	}
+
+	// 获取现有目标
+	existing, err := h.llmTargetRepo.GetByID(id)
+	if err != nil {
+		h.logger.Error("get llm target", zap.String("id", id), zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error=target+not+found", http.StatusSeeOther)
+		return
+	}
+
+	// 检查是否可编辑
+	if !existing.IsEditable {
+		http.Redirect(w, r, "/dashboard/llm?error=config-sourced+targets+cannot+be+edited", http.StatusSeeOther)
+		return
+	}
+
+	url := r.FormValue("url")
+	provider := r.FormValue("provider")
+	name := r.FormValue("name")
+	weightStr := r.FormValue("weight")
+	healthCheckPath := r.FormValue("health_check_path")
+	apiKeyID := r.FormValue("api_key_id")
+
+	if url == "" || provider == "" {
+		http.Redirect(w, r, "/dashboard/llm?error=URL+and+provider+required", http.StatusSeeOther)
+		return
+	}
+
+	// 如果 URL 变更，检查冲突
+	if url != existing.URL {
+		exists, err := h.llmTargetRepo.URLExists(url)
+		if err != nil {
+			h.logger.Error("check url exists", zap.Error(err))
+			http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
+			return
+		}
+		if exists {
+			http.Redirect(w, r, "/dashboard/llm?error=URL+already+exists", http.StatusSeeOther)
+			return
+		}
+	}
+
+	weight := 1
+	if weightStr != "" {
+		if w, err := strconv.Atoi(weightStr); err == nil && w > 0 {
+			weight = w
+		}
+	}
+
+	var apiKeyIDPtr *string
+	if apiKeyID != "" {
+		apiKeyIDPtr = &apiKeyID
+	}
+
+	existing.URL = url
+	existing.Provider = provider
+	existing.Name = name
+	existing.Weight = weight
+	existing.HealthCheckPath = healthCheckPath
+	existing.APIKeyID = apiKeyIDPtr
+
+	if err := h.llmTargetRepo.Update(existing); err != nil {
+		h.logger.Error("update llm target", zap.String("id", id), zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	h.logger.Info("llm target updated via dashboard",
+		zap.String("id", id),
+		zap.String("url", url),
+	)
+	http.Redirect(w, r, "/dashboard/llm?flash=目标已更新", http.StatusSeeOther)
+}
+
+// handleLLMDeleteTarget POST /dashboard/llm/targets/{id}/delete
+func (h *Handler) handleLLMDeleteTarget(w http.ResponseWriter, r *http.Request) {
+	if h.llmTargetRepo == nil {
+		http.Redirect(w, r, "/dashboard/llm?error=LLM+target+management+not+configured", http.StatusSeeOther)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Redirect(w, r, "/dashboard/llm?error=id+required", http.StatusSeeOther)
+		return
+	}
+
+	// 获取现有目标
+	existing, err := h.llmTargetRepo.GetByID(id)
+	if err != nil {
+		h.logger.Error("get llm target", zap.String("id", id), zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error=target+not+found", http.StatusSeeOther)
+		return
+	}
+
+	// 检查是否可编辑
+	if !existing.IsEditable {
+		http.Redirect(w, r, "/dashboard/llm?error=config-sourced+targets+cannot+be+deleted", http.StatusSeeOther)
+		return
+	}
+
+	if err := h.llmTargetRepo.Delete(id); err != nil {
+		h.logger.Error("delete llm target", zap.String("id", id), zap.Error(err))
+		http.Redirect(w, r, "/dashboard/llm?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	h.logger.Info("llm target deleted via dashboard", zap.String("id", id))
+	http.Redirect(w, r, "/dashboard/llm?flash=目标已删除", http.StatusSeeOther)
+}
+
+// generateID 生成唯一 ID（简单实现）
+func generateID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }

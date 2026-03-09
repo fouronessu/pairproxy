@@ -32,6 +32,8 @@ type Handler struct {
 	adminPasswordHash string
 	tokenTTL          time.Duration
 	llmBindingRepo    *db.LLMBindingRepo             // 可选，LLM 绑定管理
+	llmTargetRepo     *db.LLMTargetRepo              // 可选，LLM 目标管理
+	apiKeyRepo        *db.APIKeyRepo                 // 可选，API Key 管理
 	llmHealthFn       func() []proxy.LLMTargetStatus // 可选，查询 LLM 健康状态
 	drainFn           func() error                   // 可选，进入排水模式
 	undrainFn         func() error                   // 可选，退出排水模式
@@ -45,6 +47,12 @@ type Handler struct {
 
 // SetTokenRepo 设置 RefreshTokenRepo（用于 token 吊销操作）
 func (h *Handler) SetTokenRepo(repo *db.RefreshTokenRepo) { h.tokenRepo = repo }
+
+// SetLLMTargetRepo 设置 LLMTargetRepo（用于 LLM 目标管理）
+func (h *Handler) SetLLMTargetRepo(repo *db.LLMTargetRepo) { h.llmTargetRepo = repo }
+
+// SetAPIKeyRepo 设置 APIKeyRepo（用于 API Key 管理）
+func (h *Handler) SetAPIKeyRepo(repo *db.APIKeyRepo) { h.apiKeyRepo = repo }
 
 // NewHandler 创建 Dashboard Handler
 func NewHandler(
@@ -98,6 +106,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /dashboard/llm/bindings", h.requireSession(http.HandlerFunc(h.handleLLMCreateBinding)))
 	mux.Handle("POST /dashboard/llm/bindings/{id}/delete", h.requireSession(http.HandlerFunc(h.handleLLMDeleteBinding)))
 	mux.Handle("POST /dashboard/llm/distribute", h.requireSession(http.HandlerFunc(h.handleLLMDistribute)))
+
+	// LLM 目标管理（可选，需设置 llmTargetRepo）
+	mux.Handle("POST /dashboard/llm/targets", h.requireSession(http.HandlerFunc(h.handleLLMCreateTarget)))
+	mux.Handle("POST /dashboard/llm/targets/{id}/update", h.requireSession(http.HandlerFunc(h.handleLLMUpdateTarget)))
+	mux.Handle("POST /dashboard/llm/targets/{id}/delete", h.requireSession(http.HandlerFunc(h.handleLLMDeleteTarget)))
 
 	// 排水控制（可选，需设置 drainFn）
 	mux.Handle("POST /dashboard/drain/enter", h.requireSession(http.HandlerFunc(h.handleDrainEnter)))
