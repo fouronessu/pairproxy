@@ -113,6 +113,85 @@ curl -H "Authorization: Bearer <user-jwt>" \
 ./sproxy admin llm distribute                              # 均分所有活跃用户到所有 target
 ```
 
+### LLM Target 动态管理
+
+**设计理念**：
+- **配置文件（sproxy.yaml）**：定义初始 target 列表，服务启动时加载
+- **数据库（SQLite）**：运行时动态管理，支持增删改查、启用/禁用，无需重启服务
+- **优先级**：数据库中的 target 配置优先于配置文件（启动时合并，数据库记录覆盖同 URL 的配置文件条目）
+
+**CLI 命令**：
+```bash
+# 查看所有 target（含健康状态、绑定数、启用状态）
+./sproxy admin llm targets
+
+# 添加新 target（立即生效，无需重启）
+./sproxy admin llm target add \
+  --url "https://api.example.com" \
+  --api-key "sk-..." \
+  --provider "anthropic" \
+  --name "新节点" \
+  --weight 1
+
+# 更新 target 配置（支持部分更新）
+./sproxy admin llm target update "https://api.example.com" \
+  --api-key "sk-new-key" \
+  --weight 2 \
+  --name "更新后的名称"
+
+# 禁用 target（保留配置，停止路由流量）
+./sproxy admin llm target disable "https://api.example.com"
+
+# 启用 target（恢复路由流量）
+./sproxy admin llm target enable "https://api.example.com"
+
+# 删除 target（需先解除所有用户/分组绑定）
+./sproxy admin llm target delete "https://api.example.com"
+
+# 强制删除 target（自动解绑所有用户/分组）
+./sproxy admin llm target delete "https://api.example.com" --force
+```
+
+**使用示例**：
+```bash
+# 场景1: 临时下线维护节点
+./sproxy admin llm target disable "https://api.node1.com"
+# 维护完成后恢复
+./sproxy admin llm target enable "https://api.node1.com"
+
+# 场景2: 动态扩容（添加新节点）
+./sproxy admin llm target add \
+  --url "https://api.node3.com" \
+  --api-key "${NODE3_KEY}" \
+  --provider "anthropic" \
+  --name "扩容节点3" \
+  --weight 1
+# 自动参与负载均衡，无需重启
+
+# 场景3: 更新 API Key（密钥轮换）
+./sproxy admin llm target update "https://api.node1.com" \
+  --api-key "sk-new-rotated-key"
+
+# 场景4: 调整权重（流量倾斜）
+./sproxy admin llm target update "https://api.node1.com" --weight 3
+./sproxy admin llm target update "https://api.node2.com" --weight 1
+# node1 将获得 75% 流量，node2 获得 25%
+```
+
+**WebUI 使用**：
+1. 访问 Dashboard → "LLM Targets" 页面
+2. 查看所有 target 的实时状态（健康检查、绑定数、启用状态）
+3. 点击 "Add Target" 按钮添加新节点（表单填写 URL、API Key、Provider 等）
+4. 点击 target 行的 "Edit" 按钮修改配置
+5. 使用 "Enable/Disable" 开关快速切换节点状态
+6. 点击 "Delete" 按钮删除节点（需确认，若有绑定会提示）
+
+**注意事项**：
+- 动态添加的 target 仅存储在数据库中，不会写回 sproxy.yaml
+- 禁用的 target 不参与负载均衡和健康检查，但保留配置和绑定关系
+- 删除 target 前需先解除所有用户/分组绑定（或使用 `--force` 自动解绑）
+- 配置文件中的 target 在每次启动时会同步到数据库（URL 相同则更新，不存在则插入）
+
 ### 统计与审计
 ```bash
 ./sproxy admin stats                                       # 全局统计（最近 7 天）
