@@ -26,6 +26,7 @@
 | **JWT 认证** | 每位用户独立 JWT，access token 24h，refresh token 7天，支持自动刷新 |
 | **LDAP / AD 集成** | 一行配置接入企业 LDAP / Active Directory，首次登录自动 JIT 创建用户，支持 LDAPS |
 | **多 Provider 支持** | 透传 Anthropic / OpenAI / Ollama 请求，按路径自动路由，精确解析各 provider token 用量 |
+| **协议自动转换** | Claude CLI → Ollama/OpenAI 自动协议转换，支持流式/非流式双向转换，零配置启用 |
 | **数据导出** | `sproxy admin export --format csv\|json` CLI 导出或 `GET /api/admin/export` 流式下载；`sproxy admin backup` 一键备份 SQLite |
 | **Token 统计** | 同步/流式（SSE）请求均精确统计 input/output tokens，不缓冲不延迟 |
 | **费用估算** | 按模型定价配置，Dashboard 实时显示 USD 消耗 |

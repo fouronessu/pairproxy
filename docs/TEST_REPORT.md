@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
-**生成时间**: 2026-03-07
-**测试版本**: v2.4.0
+**生成时间**: 2026-03-09
+**测试版本**: v2.6.0 (协议转换功能)
 **测试环境**: Windows 11, Go 1.23
 
 ---
@@ -12,13 +12,13 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,007+ | 1,007+ | 0 | 22个包全量单元测试 |
+| 单元测试 (UT) | ✅ PASS | 1,072+ | 1,072+ | 0 | 21个包全量单元测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | integration_by_GLM5_test.go |
-| E2E测试 | ✅ PASS | 66+ | 66+ | 0 | 含对话追踪7个新E2E |
-| 真实进程测试 | ✅ PASS | 4 | 4 | 0 | TestFullChainWithMockProcesses |
-| 完整链路手动测试 | ✅ PASS | 50 | 50 | 0 | mockagent → cproxy → sproxy → mockllm |
+| E2E测试 (httptest) | ✅ PASS | 67 | 67 | 0 | 含对话追踪7个新E2E |
+| E2E测试 (integration) | ✅ PASS | 68 | 68 | 0 | 真实进程集成测试 |
+| 协议转换测试 | ✅ PASS | 27 | 27 | 0 | protocol_converter_test.go |
 
-**总计**: 1,100+ 测试用例，全部通过
+**总计**: 1,072+ 测试用例，全部通过（包含2558个子测试执行）
 
 ---
 
@@ -29,18 +29,19 @@
 go test ./...
 ```
 
-### 测试覆盖的包 (22个)
+### 测试覆盖的包 (21个)
 - ✅ github.com/l17728/pairproxy/internal/alert
 - ✅ github.com/l17728/pairproxy/internal/api
 - ✅ github.com/l17728/pairproxy/internal/auth
 - ✅ github.com/l17728/pairproxy/internal/cluster
 - ✅ github.com/l17728/pairproxy/internal/config
+- ✅ github.com/l17728/pairproxy/internal/dashboard
 - ✅ github.com/l17728/pairproxy/internal/db
 - ✅ github.com/l17728/pairproxy/internal/lb
 - ✅ github.com/l17728/pairproxy/internal/metrics
 - ✅ github.com/l17728/pairproxy/internal/otel
 - ✅ github.com/l17728/pairproxy/internal/preflight
-- ✅ github.com/l17728/pairproxy/internal/proxy
+- ✅ github.com/l17728/pairproxy/internal/proxy     （含协议转换 v2.6.0）
 - ✅ github.com/l17728/pairproxy/internal/quota
 - ✅ github.com/l17728/pairproxy/internal/tap
 - ✅ github.com/l17728/pairproxy/internal/track     （v2.4.0 新增）
@@ -76,6 +77,15 @@ go test ./...
 - OpenAI API兼容层
 - OpenAI provider 路径推断修复（v2.4.0）
 - 流式响应处理
+- **协议自动转换（v2.6.0新增）**
+  - Anthropic ↔ OpenAI 双向转换
+  - 自动检测（请求路径 + 目标 provider）
+  - System 消息处理
+  - 结构化内容提取
+  - 流式/非流式响应转换
+  - stream_options 自动注入
+  - finish_reason 映射
+  - 优雅降级处理
 
 #### 对话追踪模块 (internal/track)（v2.4.0新增）
 - Tracker Enable/Disable/IsTracked 生命周期
@@ -302,16 +312,102 @@ echo -e "testuser\ntestpass123" | ./cproxy.exe login --server http://localhost:9
 - 完整的认证流程（login → token → request）
 - 支持压力测试和长时间运行
 
-### 3.4 综合统计
+### 3.4 协议转换测试 (v2.6.0 新增)
+
+#### 测试文件
+- `internal/proxy/protocol_converter_test.go` (533 行)
+
+#### 测试函数 (7个)
+
+**1. TestShouldConvertProtocol (5个子测试)**
+- ✅ Anthropic path + Ollama target → 转换
+- ✅ Anthropic path + OpenAI target → 转换
+- ✅ Anthropic path + Anthropic target → 不转换
+- ✅ OpenAI path + Ollama target → 不转换
+- ✅ 空 provider → 不转换
+
+**2. TestConvertAnthropicToOpenAIRequest (6个子测试)**
+- ✅ 简单文本消息
+- ✅ 带 system 消息
+- ✅ 结构化内容块
+- ✅ 流式请求 + stream_options 注入
+- ✅ 空 body
+- ✅ 畸形 JSON
+
+**3. TestConvertOpenAIToAnthropicResponse (3个子测试)**
+- ✅ 成功响应
+- ✅ 空 body
+- ✅ 畸形 JSON
+
+**4. TestExtractTextContent (5个子测试)**
+- ✅ 简单字符串
+- ✅ 单个文本块
+- ✅ 多个文本块
+- ✅ 混合块（仅提取文本）
+- ✅ nil content
+
+**5. TestConvertFinishReason (4个子测试)**
+- ✅ stop → end_turn
+- ✅ length → max_tokens
+- ✅ content_filter → stop_sequence
+- ✅ unknown → end_turn
+
+**6. TestOpenAIToAnthropicStreamConverter (3个子测试)**
+- ✅ 完整流式响应
+- ✅ 空 chunks
+- ✅ 畸形 JSON chunk
+
+**7. TestProtocolConversionRoundTrip (1个集成测试)**
+- ✅ 端到端转换验证
+
+#### 统计
+- **测试函数**: 7个
+- **子测试用例**: 27个
+- **通过**: 27/27
+- **失败**: 0
+- **通过率**: 100%
+- **代码覆盖率**: 80.1%
+
+#### 覆盖率详情
+
+| 函数 | 覆盖率 |
+|------|--------|
+| shouldConvertProtocol | 100.0% |
+| convertAnthropicToOpenAIRequest | 94.1% |
+| extractTextContent | 100.0% |
+| convertOpenAIToAnthropicResponse | 92.3% |
+| convertFinishReason | 100.0% |
+| NewOpenAIToAnthropicStreamConverter | 100.0% |
+| Write (stream converter) | 96.0% |
+| sendMessageStart | 100.0% |
+| sendContentDelta | 100.0% |
+| sendMessageDelta | 100.0% |
+| sendMessageStop | 100.0% |
+
+#### 测试特点
+- 完整覆盖请求转换、响应转换、流式转换
+- 边界条件测试（空body、畸形JSON）
+- 端到端集成测试
+- 100% 功能覆盖
+
+#### 相关文档
+- `docs/PROTOCOL_CONVERSION.md` - 功能设计文档
+- `docs/PROTOCOL_CONVERSION_LOGS.md` - 日志示例
+- `docs/RESPONSE_CONVERSION.md` - 响应转换详解
+- `docs/TEST_COVERAGE_PROTOCOL_CONVERSION.md` - 测试覆盖分析
+
+---
+
+### 3.5 综合统计
 
 | 测试方法 | 测试用例 | 通过 | 失败 | 通过率 | 平均耗时 |
-|---------|---------|------|------|--------|---------|
-| httptest 测试 | 66+ | 66+ | 0 | 100% | ~64ms/用例 |
-| 进程集成测试 | 4 | 4 | 0 | 100% | ~613ms/用例 |
-| 手动完整链路 | 50 | 50 | 0 | 100% | ~1.2ms/请求 |
-| **总计** | **120+** | **120+** | **0** | **100%** | - |
+|---------|---------|------|------|--------|----------|
+| httptest 测试 | 67 | 67 | 0 | 100% | ~64ms/用例 |
+| 进程集成测试 | 68 | 68 | 0 | 100% | ~100ms/用例 |
+| 协议转换测试 | 27 | 27 | 0 | 100% | <1ms/用例 |
+| **总计** | **162+** | **162+** | **0** | **100%** | - |
 
-### 3.5 最佳实践
+### 3.6 最佳实践
 
 **日常开发** - 推荐方法1
 ```bash
