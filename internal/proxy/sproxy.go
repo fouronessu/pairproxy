@@ -729,7 +729,9 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// F-3: 单次请求大小限制 + 并发请求限制
 	// OpenAI 兼容：同时在此阶段注入 stream_options（无论是否有 quotaChecker）
 	var bodyBytes []byte
-	needBodyRead := sp.quotaChecker != nil || strings.HasPrefix(r.URL.Path, "/v1/chat/completions")
+	needBodyRead := sp.quotaChecker != nil ||
+		strings.HasPrefix(r.URL.Path, "/v1/chat/completions") ||
+		strings.HasPrefix(r.URL.Path, "/v1/messages")
 
 	if needBodyRead && r.Body != nil && r.ContentLength != 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit

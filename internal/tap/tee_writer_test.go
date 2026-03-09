@@ -344,3 +344,72 @@ func TestTeeWriterLargeSSEStream(t *testing.T) {
 		t.Error("output body should contain message_stop")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestTeeWriterStreaming_DurationMsNonZero：流式响应记录的 DurationMs 必须 > 0
+// ---------------------------------------------------------------------------
+//
+// 背景：streaming 回调使用 OnCompleteFunc（message_stop 触发），其中需要用
+// tw.startTime 计算耗时。旧代码忘记填写 DurationMs，导致流式请求在日志页永远
+// 显示 0 毫秒。
+func TestTeeWriterStreaming_DurationMsNonZero(t *testing.T) {
+	rr := httptest.NewRecorder()
+	logger := zaptest.NewLogger(t)
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+	writer.Start(ctx)
+
+	record := db.UsageRecord{
+		RequestID:  "req-dur-test",
+		UserID:     "user-dur",
+		SourceNode: "local",
+	}
+
+	// startTime 必须是真实时间（不是零值），否则 DurationMs 无法计算
+	startTime := time.Now()
+	tw := NewTeeResponseWriter(rr, logger, writer, record, "", startTime, nil)
+	tw.ResponseWriter.Header().Set("Content-Type", "text/event-stream")
+
+	// 稍等一点点，确保 DurationMs > 0（避免时间精度问题）
+	time.Sleep(2 * time.Millisecond)
+
+	// 写入完整 Anthropic SSE（触发 message_stop → OnCompleteFunc 回调）
+	sse := BuildAnthropicSSE(50, 20, []string{"hello"})
+	_, _ = tw.Write([]byte(sse))
+
+	cancel()
+	writer.Wait()
+
+	repo := db.NewUsageRepo(gormDB, logger)
+	logs, err := repo.Query(db.UsageFilter{UserID: "user-dur", Limit: 10})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 usage log, got %d", len(logs))
+	}
+	log := logs[0]
+	if log.DurationMs <= 0 {
+		t.Errorf("DurationMs = %d, want > 0 (streaming callback must set duration)", log.DurationMs)
+	}
+	// 同时验证 tokens 正确写入（防止回归）
+	if log.InputTokens != 50 {
+		t.Errorf("InputTokens = %d, want 50", log.InputTokens)
+	}
+	if log.OutputTokens != 20 {
+		t.Errorf("OutputTokens = %d, want 20", log.OutputTokens)
+	}
+	if !log.IsStreaming {
+		t.Error("IsStreaming should be true")
+	}
+}
+

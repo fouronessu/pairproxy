@@ -72,6 +72,9 @@ func NewTeeResponseWriter(
 		r.OutputTokens = outputTokens
 		r.StatusCode = tw.statusCode
 		r.IsStreaming = true
+		if !tw.startTime.IsZero() {
+			r.DurationMs = time.Since(tw.startTime).Milliseconds()
+		}
 		if r.CreatedAt.IsZero() {
 			r.CreatedAt = time.Now()
 		}
