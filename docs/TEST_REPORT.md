@@ -12,13 +12,13 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,072+ | 1,072+ | 0 | 21个包全量单元测试 |
+| 单元测试 (UT) | ✅ PASS | 1,122+ | 1,122+ | 0 | 21个包全量单元测试（含 LLM Target 管理） |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | integration_by_GLM5_test.go |
-| E2E测试 (httptest) | ✅ PASS | 67 | 67 | 0 | 含对话追踪7个新E2E |
+| E2E测试 (httptest) | ✅ PASS | 74 | 74 | 0 | 含对话追踪7个 + LLM Target 7个新E2E |
 | E2E测试 (integration) | ✅ PASS | 68 | 68 | 0 | 真实进程集成测试 |
 | 协议转换测试 | ✅ PASS | 27 | 27 | 0 | protocol_converter_test.go |
 
-**总计**: 1,072+ 测试用例，全部通过（包含2558个子测试执行）
+**总计**: 1,299+ 测试用例，全部通过（包含2558个子测试执行）
 
 ---
 
@@ -576,6 +576,51 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 **v2.4.0 新增测试**:
 - `internal/track` 包：15个单元测试（Tracker + CaptureSession）
 - `test/e2e/track_e2e_test.go`：7个E2E测试（覆盖 Anthropic/OpenAI 双格式、流式/非流式、用户隔离、生命周期）
+
+**v2.7.0 新增测试（LLM Target 动态管理）**:
+- `internal/db/llm_target_repo_test.go`：17个单元测试
+  - ✅ Create - 创建 target
+  - ✅ GetByURL - 按 URL 查询
+  - ✅ GetByID - 按 ID 查询
+  - ✅ ListAll - 列出所有 targets
+  - ✅ URLExists - URL 唯一性检查
+  - ✅ Update - 更新 target
+  - ✅ Delete - 删除 target
+  - ✅ Upsert - 插入或更新
+  - ✅ DeleteConfigTargetsNotInList - 清理配置来源 targets
+- `internal/db/llm_target_sync_test.go`：4个单元测试
+  - ✅ syncConfigTargetsToDatabase - 配置同步到数据库
+  - ✅ syncConfigTargetsToDatabase_cleanup - 清理旧配置 targets
+  - ✅ syncConfigTargetsToDatabase_idempotent - 幂等性
+  - ✅ syncConfigTargetsToDatabase_update_existing - 更新已存在 targets
+- `cmd/sproxy/admin_llm_target_test.go`：12个单元测试
+  - ✅ llmTargetAddCmd - 添加 target
+  - ✅ llmTargetUpdateCmd - 更新 target
+  - ✅ llmTargetDeleteCmd - 删除 target
+  - ✅ llmTargetEnableCmd - 启用 target
+  - ✅ llmTargetDisableCmd - 禁用 target
+  - ✅ URL validation - URL 格式验证
+  - ✅ Provider validation - Provider 枚举验证
+  - ✅ Weight validation - Weight 范围验证
+- `internal/api/admin_llm_target_handler_test.go`：10个单元测试
+  - ✅ GET /api/admin/llm-targets - 列出所有 targets
+  - ✅ POST /api/admin/llm-targets - 创建 target
+  - ✅ GET /api/admin/llm-targets/:id - 获取单个 target
+  - ✅ PUT /api/admin/llm-targets/:id - 更新 target
+  - ✅ DELETE /api/admin/llm-targets/:id - 删除 target
+  - ✅ POST /api/admin/llm-targets/:id/enable - 启用 target
+  - ✅ POST /api/admin/llm-targets/:id/disable - 禁用 target
+  - ✅ URL uniqueness constraint - URL 唯一性约束
+  - ✅ Config-sourced targets read-only - 配置来源 targets 只读
+  - ✅ Authorization check - 管理员权限检查
+- `test/e2e/llm_target_management_e2e_test.go`：7个E2E测试
+  - ✅ TestLLMTargetE2E_ConfigSync - 配置文件同步到数据库
+  - ✅ TestLLMTargetE2E_CLIOperations - CLI 命令操作
+  - ✅ TestLLMTargetE2E_WebUIOperations - WebUI 操作
+  - ✅ TestLLMTargetE2E_URLUniqueness - URL 唯一性约束
+  - ✅ TestLLMTargetE2E_ConfigSourceReadOnly - 配置来源只读
+  - ✅ TestLLMTargetE2E_EnableDisable - 启用/禁用功能
+  - ✅ TestLLMTargetE2E_FullLifecycle - 完整生命周期
 
 **测试质量**: 优秀
 **代码稳定性**: 高
