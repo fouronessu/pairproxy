@@ -16,14 +16,17 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/l17728/pairproxy/internal/alert"
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/cluster"
+	"github.com/l17728/pairproxy/internal/config"
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/l17728/pairproxy/internal/metrics"
@@ -82,6 +85,10 @@ type SProxy struct {
 	debugLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
 	notifier    *alert.Notifier             // 可选，非 nil 时发送 high_load/load_recovered 告警
 	convTracker atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
+
+	// 配置和数据库（用于 config target sync）
+	cfg *config.SProxyFullConfig // 可选，用于同步配置文件中的 LLM targets
+	db  *gorm.DB                 // 可选，用于同步配置文件中的 LLM targets
 }
 
 // NewSProxy 创建 SProxy。
@@ -196,6 +203,125 @@ func (sp *SProxy) SyncAndSetDebugLogger(l *zap.Logger) {
 // 非 nil 时，对已启用跟踪的用户，每次请求的输入消息和 LLM 回复均会写入文件。
 func (sp *SProxy) SetConvTracker(t *track.Tracker) {
 	sp.convTracker.Store(t)
+}
+
+// SetConfigAndDB 设置配置和数据库（用于 config target sync）。
+func (sp *SProxy) SetConfigAndDB(cfg *config.SProxyFullConfig, gormDB *gorm.DB) {
+	sp.cfg = cfg
+	sp.db = gormDB
+}
+
+// resolveAPIKeyID 解析 API Key 字符串为 API Key ID。
+// 如果 API Key 不存在，创建新记录。
+func (sp *SProxy) resolveAPIKeyID(apiKey, provider string) (*string, error) {
+	if apiKey == "" {
+		return nil, nil // API Key 可选
+	}
+
+	// 查询是否已存在（按 provider 查找第一个）
+	var existingKey db.APIKey
+	err := sp.db.Where("provider = ?", provider).First(&existingKey).Error
+	if err == nil {
+		// 找到了，返回 ID
+		return &existingKey.ID, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return nil, fmt.Errorf("query api key: %w", err)
+	}
+
+	// 不存在，创建新记录
+	// 注意：这里暂时存储明文，实际生产环境应该加密
+	newKey := &db.APIKey{
+		ID:             uuid.NewString(),
+		Name:           fmt.Sprintf("Auto-created for %s", provider),
+		Provider:       provider,
+		EncryptedValue: apiKey, // TODO: 应该加密存储
+		IsActive:       true,
+		CreatedAt:      time.Now(),
+	}
+
+	if err := sp.db.Create(newKey).Error; err != nil {
+		return nil, fmt.Errorf("create api key: %w", err)
+	}
+
+	sp.logger.Info("auto-created api key for config target",
+		zap.String("provider", provider),
+		zap.String("key_id", newKey.ID))
+
+	return &newKey.ID, nil
+}
+
+// syncConfigTargetsToDatabase 将配置文件中的 targets 同步到数据库。
+func (sp *SProxy) syncConfigTargetsToDatabase(repo *db.LLMTargetRepo) error {
+	logger := sp.logger.Named("sync")
+
+	// 1. 加载配置文件中的 targets
+	configTargets := sp.cfg.LLM.Targets
+	logger.Info("syncing config targets to database",
+		zap.Int("count", len(configTargets)))
+
+	// 2. 同步到数据库
+	configURLs := make([]string, 0, len(configTargets))
+	for _, ct := range configTargets {
+		// 解析 API Key ID
+		apiKeyID, err := sp.resolveAPIKeyID(ct.APIKey, ct.Provider)
+		if err != nil {
+			logger.Warn("failed to resolve api key",
+				zap.String("url", ct.URL),
+				zap.Error(err))
+			continue
+		}
+
+		// UPSERT
+		target := &db.LLMTarget{
+			URL:             ct.URL,
+			APIKeyID:        apiKeyID,
+			Provider:        ct.Provider,
+			Name:            ct.Name,
+			Weight:          ct.Weight,
+			HealthCheckPath: ct.HealthCheckPath,
+			Source:          "config",
+			IsEditable:      false,
+			IsActive:        true,
+		}
+
+		err = repo.Upsert(target)
+		if err != nil {
+			logger.Error("failed to sync config target",
+				zap.String("url", ct.URL),
+				zap.Error(err))
+			continue
+		}
+
+		configURLs = append(configURLs, ct.URL)
+		logger.Debug("config target synced",
+			zap.String("url", ct.URL))
+	}
+
+	// 3. 清理：删除数据库中 source='config' 但不在配置文件中的记录
+	deleted, err := repo.DeleteConfigTargetsNotInList(configURLs)
+	if err != nil {
+		logger.Error("failed to clean up config targets", zap.Error(err))
+	} else if deleted > 0 {
+		logger.Info("cleaned up removed config targets", zap.Int("count", deleted))
+	}
+
+	logger.Info("config targets sync completed",
+		zap.Int("synced", len(configURLs)),
+		zap.Int("deleted", deleted))
+
+	return nil
+}
+
+// SyncConfigTargets 同步配置文件中的 LLM targets 到数据库。
+// 必须先调用 SetConfigAndDB 设置配置和数据库。
+func (sp *SProxy) SyncConfigTargets() error {
+	if sp.cfg == nil || sp.db == nil {
+		return fmt.Errorf("config and db must be set before syncing targets")
+	}
+
+	repo := db.NewLLMTargetRepo(sp.db, sp.logger)
+	return sp.syncConfigTargetsToDatabase(repo)
 }
 
 // Drain 进入排水模式。

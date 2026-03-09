@@ -152,7 +152,10 @@ func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
 	if existing != nil {
 		// 更新：保留 ID，更新其他字段
 		target.ID = existing.ID
-		if err := r.db.Save(target).Error; err != nil {
+		// 使用 Select 明确指定要更新的字段，包括 boolean false 值
+		if err := r.db.Model(&LLMTarget{}).Where("id = ?", target.ID).
+			Select("*").
+			Updates(target).Error; err != nil {
 			r.logger.Error("failed to upsert (update) llm target",
 				zap.String("url", target.URL),
 				zap.Error(err))
@@ -165,12 +168,36 @@ func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
 		if target.ID == "" {
 			target.ID = uuid.NewString()
 		}
+		// GORM gotcha: boolean false 值需要两步操作
+		// 1. 先 Create（会使用 default:true）
+		// 2. 再显式更新 boolean false 字段
+		needsEditableFix := !target.IsEditable
+		needsActiveFix := !target.IsActive
+
 		if err := r.db.Create(target).Error; err != nil {
 			r.logger.Error("failed to upsert (insert) llm target",
 				zap.String("url", target.URL),
 				zap.Error(err))
 			return fmt.Errorf("upsert llm target: %w", err)
 		}
+
+		// 修复 boolean false 值
+		if needsEditableFix || needsActiveFix {
+			updates := make(map[string]interface{})
+			if needsEditableFix {
+				updates["is_editable"] = false
+			}
+			if needsActiveFix {
+				updates["is_active"] = false
+			}
+			if err := r.db.Model(&LLMTarget{}).Where("id = ?", target.ID).Updates(updates).Error; err != nil {
+				r.logger.Error("failed to fix boolean fields",
+					zap.String("id", target.ID),
+					zap.Error(err))
+				return fmt.Errorf("fix boolean fields: %w", err)
+			}
+		}
+
 		r.logger.Debug("llm target upserted (inserted)",
 			zap.String("url", target.URL))
 	}

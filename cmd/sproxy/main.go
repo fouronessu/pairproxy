@@ -307,6 +307,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// ---------------------------------------------------------------------------
+	// 配置文件 LLM targets 同步到数据库
+	// ---------------------------------------------------------------------------
+
+	sp.SetConfigAndDB(cfg, database)
+	if err := sp.SyncConfigTargets(); err != nil {
+		logger.Error("failed to sync config targets to database", zap.Error(err))
+		// Non-fatal: continue startup
+	}
+
+	// ---------------------------------------------------------------------------
 	// LLM 负载均衡 + 健康检查 + 绑定解析（可靠性特性）
 	// ---------------------------------------------------------------------------
 
