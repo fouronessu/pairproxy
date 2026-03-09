@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/l17728/pairproxy/internal/db"
@@ -21,6 +22,10 @@ var llmTargetCmd = &cobra.Command{
 func init() {
 	// 注册子命令
 	llmTargetCmd.AddCommand(llmTargetAddCmd)
+	llmTargetCmd.AddCommand(llmTargetUpdateCmd)
+	llmTargetCmd.AddCommand(llmTargetDeleteCmd)
+	llmTargetCmd.AddCommand(llmTargetEnableCmd)
+	llmTargetCmd.AddCommand(llmTargetDisableCmd)
 }
 
 // ---------------------------------------------------------------------------
@@ -121,4 +126,344 @@ func init() {
 
 	llmTargetAddCmd.MarkFlagRequired("url")
 	llmTargetAddCmd.MarkFlagRequired("api-key-id")
+}
+
+// ---------------------------------------------------------------------------
+// llm target update
+// ---------------------------------------------------------------------------
+
+var (
+	// Update command flags
+	updateURL             string
+	updateProvider        string
+	updateAPIKeyID        string
+	updateName            string
+	updateWeight          int
+	updateHealthCheckPath string
+)
+
+// llmTargetUpdateCmd 更新 LLM target
+var llmTargetUpdateCmd = &cobra.Command{
+	Use:   "update <url>",
+	Short: "Update an existing LLM target",
+	Long:  "Update an existing LLM target in the database (only database-sourced targets can be updated)",
+	Example: `  sproxy admin llm target update http://ollama.local:11434 \
+    --provider ollama \
+    --name "Updated Ollama" \
+    --weight 2`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		targetURL := args[0]
+
+		_, _, _, _, logger, gormDB, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, gormDB)
+
+		repo := db.NewLLMTargetRepo(gormDB, logger)
+
+		// 查询 target
+		target, err := repo.GetByURL(targetURL)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("LLM target not found: %s", targetURL)
+			}
+			return fmt.Errorf("query target: %w", err)
+		}
+
+		// 检查是否可编辑
+		if !target.IsEditable {
+			return fmt.Errorf("cannot update config-sourced target: %s\nConfig-sourced targets must be modified in sproxy.yaml", targetURL)
+		}
+
+		// 记录变更前的值（用于审计日志）
+		changes := []string{}
+
+		// 更新字段（仅更新提供的 flag）
+		if cmd.Flags().Changed("provider") {
+			if target.Provider != updateProvider {
+				changes = append(changes, fmt.Sprintf("provider: %s→%s", target.Provider, updateProvider))
+				target.Provider = updateProvider
+			}
+		}
+
+		if cmd.Flags().Changed("api-key-id") {
+			// 验证 API Key 存在性
+			var apiKey db.APIKey
+			if err := gormDB.Where("id = ?", updateAPIKeyID).First(&apiKey).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					return fmt.Errorf("API Key not found: %s", updateAPIKeyID)
+				}
+				return fmt.Errorf("query api key: %w", err)
+			}
+
+			oldKeyID := ""
+			if target.APIKeyID != nil {
+				oldKeyID = *target.APIKeyID
+			}
+			if oldKeyID != updateAPIKeyID {
+				changes = append(changes, fmt.Sprintf("api_key_id: %s→%s", oldKeyID, updateAPIKeyID))
+				target.APIKeyID = &updateAPIKeyID
+			}
+		}
+
+		if cmd.Flags().Changed("name") {
+			if target.Name != updateName {
+				changes = append(changes, fmt.Sprintf("name: %s→%s", target.Name, updateName))
+				target.Name = updateName
+			}
+		}
+
+		if cmd.Flags().Changed("weight") {
+			if target.Weight != updateWeight {
+				changes = append(changes, fmt.Sprintf("weight: %d→%d", target.Weight, updateWeight))
+				target.Weight = updateWeight
+			}
+		}
+
+		if cmd.Flags().Changed("health-check-path") {
+			if target.HealthCheckPath != updateHealthCheckPath {
+				changes = append(changes, fmt.Sprintf("health_check_path: %s→%s", target.HealthCheckPath, updateHealthCheckPath))
+				target.HealthCheckPath = updateHealthCheckPath
+			}
+		}
+
+		// 如果没有任何变更，提示用户
+		if len(changes) == 0 {
+			fmt.Printf("No changes detected for target: %s\n", targetURL)
+			return nil
+		}
+
+		// 更新时间戳
+		target.UpdatedAt = time.Now()
+
+		// 执行更新
+		if err := repo.Update(target); err != nil {
+			return fmt.Errorf("update target: %w", err)
+		}
+
+		// 记录审计日志
+		changesSummary := ""
+		for i, change := range changes {
+			if i > 0 {
+				changesSummary += ", "
+			}
+			changesSummary += change
+		}
+		auditCLI(gormDB, logger, "llm_target.update", targetURL, changesSummary)
+
+		// 输出成功信息
+		fmt.Printf("✓ LLM target updated successfully\n")
+		fmt.Printf("  URL:      %s\n", target.URL)
+		fmt.Printf("  Provider: %s\n", target.Provider)
+		fmt.Printf("  Name:     %s\n", target.Name)
+		fmt.Printf("  Weight:   %d\n", target.Weight)
+		if len(changes) > 0 {
+			fmt.Printf("\nChanges:\n")
+			for _, change := range changes {
+				fmt.Printf("  - %s\n", change)
+			}
+		}
+
+		return nil
+	},
+}
+
+func init() {
+	llmTargetUpdateCmd.Flags().StringVar(&updateProvider, "provider", "", "Provider: anthropic, openai, ollama")
+	llmTargetUpdateCmd.Flags().StringVar(&updateAPIKeyID, "api-key-id", "", "API Key ID")
+	llmTargetUpdateCmd.Flags().StringVar(&updateName, "name", "", "Display name")
+	llmTargetUpdateCmd.Flags().IntVar(&updateWeight, "weight", 0, "Load balancing weight")
+	llmTargetUpdateCmd.Flags().StringVar(&updateHealthCheckPath, "health-check-path", "", "Health check path")
+}
+
+// ---------------------------------------------------------------------------
+// llm target delete
+// ---------------------------------------------------------------------------
+
+// llmTargetDeleteCmd 删除 LLM target
+var llmTargetDeleteCmd = &cobra.Command{
+	Use:     "delete <url>",
+	Short:   "Delete an LLM target",
+	Long:    "Delete an LLM target from the database (only database-sourced targets can be deleted)",
+	Example: `  sproxy admin llm target delete http://ollama.local:11434`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		targetURL := args[0]
+
+		_, _, _, _, logger, gormDB, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, gormDB)
+
+		repo := db.NewLLMTargetRepo(gormDB, logger)
+
+		// 查询 target
+		target, err := repo.GetByURL(targetURL)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("LLM target not found: %s", targetURL)
+			}
+			return fmt.Errorf("query target: %w", err)
+		}
+
+		// 检查是否可编辑
+		if !target.IsEditable {
+			return fmt.Errorf("cannot delete config-sourced target: %s\nConfig-sourced targets must be removed from sproxy.yaml", targetURL)
+		}
+
+		// 删除 target
+		if err := repo.Delete(target.ID); err != nil {
+			return fmt.Errorf("delete target: %w", err)
+		}
+
+		// 记录审计日志
+		auditCLI(gormDB, logger, "llm_target.delete", targetURL, fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
+
+		// 输出成功信息
+		fmt.Printf("✓ LLM target deleted successfully\n")
+		fmt.Printf("  URL:      %s\n", target.URL)
+		fmt.Printf("  Name:     %s\n", target.Name)
+		fmt.Printf("  Provider: %s\n", target.Provider)
+
+		return nil
+	},
+}
+
+// ---------------------------------------------------------------------------
+// llm target enable
+// ---------------------------------------------------------------------------
+
+// llmTargetEnableCmd 启用 LLM target
+var llmTargetEnableCmd = &cobra.Command{
+	Use:     "enable <url>",
+	Short:   "Enable an LLM target",
+	Long:    "Enable an LLM target (set is_active=true)",
+	Example: `  sproxy admin llm target enable http://ollama.local:11434`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		targetURL := args[0]
+
+		_, _, _, _, logger, gormDB, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, gormDB)
+
+		repo := db.NewLLMTargetRepo(gormDB, logger)
+
+		// 查询 target
+		target, err := repo.GetByURL(targetURL)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("LLM target not found: %s", targetURL)
+			}
+			return fmt.Errorf("query target: %w", err)
+		}
+
+		// 检查当前状态
+		if target.IsActive {
+			fmt.Printf("Target is already enabled: %s\n", targetURL)
+			return nil
+		}
+
+		// 更新 is_active 字段
+		target.IsActive = true
+		target.UpdatedAt = time.Now()
+
+		// 使用 Updates 方法更新（支持 boolean 字段）
+		if err := gormDB.Model(&db.LLMTarget{}).Where("id = ?", target.ID).
+			Updates(map[string]interface{}{
+				"is_active":  true,
+				"updated_at": target.UpdatedAt,
+			}).Error; err != nil {
+			logger.Error("failed to enable llm target",
+				zap.String("id", target.ID),
+				zap.String("url", target.URL),
+				zap.Error(err))
+			return fmt.Errorf("enable target: %w", err)
+		}
+
+		// 记录审计日志
+		auditCLI(gormDB, logger, "llm_target.enable", targetURL, fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
+
+		// 输出成功信息
+		fmt.Printf("✓ LLM target enabled successfully\n")
+		fmt.Printf("  URL:      %s\n", target.URL)
+		fmt.Printf("  Name:     %s\n", target.Name)
+		fmt.Printf("  Provider: %s\n", target.Provider)
+		fmt.Printf("  Status:   active\n")
+
+		return nil
+	},
+}
+
+// ---------------------------------------------------------------------------
+// llm target disable
+// ---------------------------------------------------------------------------
+
+// llmTargetDisableCmd 禁用 LLM target
+var llmTargetDisableCmd = &cobra.Command{
+	Use:     "disable <url>",
+	Short:   "Disable an LLM target",
+	Long:    "Disable an LLM target (set is_active=false)",
+	Example: `  sproxy admin llm target disable http://ollama.local:11434`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		targetURL := args[0]
+
+		_, _, _, _, logger, gormDB, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, gormDB)
+
+		repo := db.NewLLMTargetRepo(gormDB, logger)
+
+		// 查询 target
+		target, err := repo.GetByURL(targetURL)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("LLM target not found: %s", targetURL)
+			}
+			return fmt.Errorf("query target: %w", err)
+		}
+
+		// 检查当前状态
+		if !target.IsActive {
+			fmt.Printf("Target is already disabled: %s\n", targetURL)
+			return nil
+		}
+
+		// 更新 is_active 字段
+		target.IsActive = false
+		target.UpdatedAt = time.Now()
+
+		// 使用 Updates 方法更新（支持 boolean 字段）
+		if err := gormDB.Model(&db.LLMTarget{}).Where("id = ?", target.ID).
+			Updates(map[string]interface{}{
+				"is_active":  false,
+				"updated_at": target.UpdatedAt,
+			}).Error; err != nil {
+			logger.Error("failed to disable llm target",
+				zap.String("id", target.ID),
+				zap.String("url", target.URL),
+				zap.Error(err))
+			return fmt.Errorf("disable target: %w", err)
+		}
+
+		// 记录审计日志
+		auditCLI(gormDB, logger, "llm_target.disable", targetURL, fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
+
+		// 输出成功信息
+		fmt.Printf("✓ LLM target disabled successfully\n")
+		fmt.Printf("  URL:      %s\n", target.URL)
+		fmt.Printf("  Name:     %s\n", target.Name)
+		fmt.Printf("  Provider: %s\n", target.Provider)
+		fmt.Printf("  Status:   inactive\n")
+
+		return nil
+	},
 }
