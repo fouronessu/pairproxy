@@ -177,3 +177,31 @@ func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
 
 	return nil
 }
+
+// DeleteConfigTargetsNotInList 删除不在列表中的配置文件来源的 targets
+// 用于配置文件同步时清理已移除的 targets
+func (r *LLMTargetRepo) DeleteConfigTargetsNotInList(keepURLs []string) (int, error) {
+	query := r.db.Where("source = ?", "config")
+
+	// 如果 keepURLs 不为空，添加 NOT IN 条件
+	if len(keepURLs) > 0 {
+		query = query.Where("url NOT IN ?", keepURLs)
+	}
+
+	result := query.Delete(&LLMTarget{})
+	if result.Error != nil {
+		r.logger.Error("failed to delete config targets not in list",
+			zap.Int("keep_count", len(keepURLs)),
+			zap.Error(result.Error))
+		return 0, fmt.Errorf("delete config targets not in list: %w", result.Error)
+	}
+
+	deleted := int(result.RowsAffected)
+	if deleted > 0 {
+		r.logger.Info("deleted config targets not in list",
+			zap.Int("deleted", deleted),
+			zap.Int("kept", len(keepURLs)))
+	}
+
+	return deleted, nil
+}

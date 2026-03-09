@@ -374,3 +374,107 @@ func TestLLMTargetRepo_Upsert_Update(t *testing.T) {
 	assert.Equal(t, "Updated", found.Name)
 	assert.Equal(t, 10, found.Weight)
 }
+
+func TestLLMTargetRepo_DeleteConfigTargetsNotInList(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create multiple targets
+	targets := []*LLMTarget{
+		{ID: uuid.NewString(), URL: "http://config1.local", Source: "config", IsEditable: false},
+		{ID: uuid.NewString(), URL: "http://config2.local", Source: "config", IsEditable: false},
+		{ID: uuid.NewString(), URL: "http://config3.local", Source: "config", IsEditable: false},
+		{ID: uuid.NewString(), URL: "http://database1.local", Source: "database", IsEditable: true},
+	}
+	for _, target := range targets {
+		err := repo.Create(target)
+		require.NoError(t, err)
+	}
+
+	// Keep only config1 and config2, delete config3
+	keepURLs := []string{"http://config1.local", "http://config2.local"}
+	deleted, err := repo.DeleteConfigTargetsNotInList(keepURLs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted) // Only config3 should be deleted
+
+	// Verify config3 is deleted
+	_, err = repo.GetByURL("http://config3.local")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	// Verify config1 and config2 still exist
+	_, err = repo.GetByURL("http://config1.local")
+	assert.NoError(t, err)
+	_, err = repo.GetByURL("http://config2.local")
+	assert.NoError(t, err)
+
+	// Verify database-sourced target is untouched
+	_, err = repo.GetByURL("http://database1.local")
+	assert.NoError(t, err)
+}
+
+func TestLLMTargetRepo_DeleteConfigTargetsNotInList_EmptyList(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create targets
+	targets := []*LLMTarget{
+		{ID: uuid.NewString(), URL: "http://config1.local", Source: "config", IsEditable: false},
+		{ID: uuid.NewString(), URL: "http://config2.local", Source: "config", IsEditable: false},
+		{ID: uuid.NewString(), URL: "http://database1.local", Source: "database", IsEditable: true},
+	}
+	for _, target := range targets {
+		err := repo.Create(target)
+		require.NoError(t, err)
+	}
+
+	// Empty list - should delete all config-sourced targets
+	deleted, err := repo.DeleteConfigTargetsNotInList([]string{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted) // Both config targets deleted
+
+	// Verify config targets are deleted
+	_, err = repo.GetByURL("http://config1.local")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = repo.GetByURL("http://config2.local")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	// Verify database-sourced target is untouched
+	_, err = repo.GetByURL("http://database1.local")
+	assert.NoError(t, err)
+}
+
+func TestLLMTargetRepo_DeleteConfigTargetsNotInList_NoConfigTargets(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create only database-sourced targets
+	target := &LLMTarget{
+		ID:         uuid.NewString(),
+		URL:        "http://database1.local",
+		Source:     "database",
+		IsEditable: true,
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Should delete nothing
+	deleted, err := repo.DeleteConfigTargetsNotInList([]string{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted)
+
+	// Verify database target is untouched
+	_, err = repo.GetByURL("http://database1.local")
+	assert.NoError(t, err)
+}
