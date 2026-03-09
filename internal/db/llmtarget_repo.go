@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -90,4 +91,89 @@ func (r *LLMTargetRepo) URLExists(url string) (bool, error) {
 		return false, fmt.Errorf("check url exists: %w", err)
 	}
 	return count > 0, nil
+}
+
+// Update 更新 LLM target（仅可编辑的）
+func (r *LLMTargetRepo) Update(target *LLMTarget) error {
+	// 检查是否可编辑
+	if !target.IsEditable {
+		return fmt.Errorf("target is not editable (config-sourced)")
+	}
+
+	if err := r.db.Save(target).Error; err != nil {
+		r.logger.Error("failed to update llm target",
+			zap.String("id", target.ID),
+			zap.String("url", target.URL),
+			zap.Error(err))
+		return fmt.Errorf("update llm target: %w", err)
+	}
+
+	r.logger.Info("llm target updated",
+		zap.String("id", target.ID),
+		zap.String("url", target.URL))
+
+	return nil
+}
+
+// Delete 删除 LLM target（仅可编辑的）
+func (r *LLMTargetRepo) Delete(id string) error {
+	// 先查询检查是否可编辑
+	target, err := r.GetByID(id)
+	if err != nil {
+		return err
+	}
+
+	if !target.IsEditable {
+		return fmt.Errorf("target is not editable (config-sourced)")
+	}
+
+	if err := r.db.Delete(&LLMTarget{}, "id = ?", id).Error; err != nil {
+		r.logger.Error("failed to delete llm target",
+			zap.String("id", id),
+			zap.Error(err))
+		return fmt.Errorf("delete llm target: %w", err)
+	}
+
+	r.logger.Info("llm target deleted",
+		zap.String("id", id),
+		zap.String("url", target.URL))
+
+	return nil
+}
+
+// Upsert 插入或更新 LLM target（用于配置文件同步）
+func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
+	// 检查是否存在
+	existing, err := r.GetByURL(target.URL)
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+
+	if existing != nil {
+		// 更新：保留 ID，更新其他字段
+		target.ID = existing.ID
+		if err := r.db.Save(target).Error; err != nil {
+			r.logger.Error("failed to upsert (update) llm target",
+				zap.String("url", target.URL),
+				zap.Error(err))
+			return fmt.Errorf("upsert llm target: %w", err)
+		}
+		r.logger.Debug("llm target upserted (updated)",
+			zap.String("url", target.URL))
+	} else {
+		// 插入：生成新 ID
+		if target.ID == "" {
+			target.ID = uuid.NewString()
+		}
+		if err := r.db.Create(target).Error; err != nil {
+			r.logger.Error("failed to upsert (insert) llm target",
+				zap.String("url", target.URL),
+				zap.Error(err))
+			return fmt.Errorf("upsert llm target: %w", err)
+		}
+		r.logger.Debug("llm target upserted (inserted)",
+			zap.String("url", target.URL))
+	}
+
+	return nil
 }

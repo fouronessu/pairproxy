@@ -193,3 +193,184 @@ func TestLLMTargetRepo_URLExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists)
 }
+
+func TestLLMTargetRepo_Update(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create editable target
+	target := &LLMTarget{
+		ID:         uuid.NewString(),
+		URL:        "http://test.local:8080",
+		Provider:   "anthropic",
+		Name:       "Original Name",
+		Weight:     1,
+		Source:     "database",
+		IsEditable: true,
+		IsActive:   true,
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Update
+	target.Name = "Updated Name"
+	target.Weight = 5
+	err = repo.Update(target)
+	assert.NoError(t, err)
+
+	// Verify
+	found, err := repo.GetByURL(target.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Name", found.Name)
+	assert.Equal(t, 5, found.Weight)
+}
+
+func TestLLMTargetRepo_Update_NotEditable(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create non-editable target (config-sourced)
+	// Note: GORM ignores false for bool with default:true, so we need two steps
+	target := &LLMTarget{
+		ID:     uuid.NewString(),
+		URL:    "http://test.local:8080",
+		Source: "config",
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Explicitly set IsEditable to false
+	err = gormDB.Model(target).Update("is_editable", false).Error
+	require.NoError(t, err)
+
+	// Reload to get updated value
+	target, err = repo.GetByID(target.ID)
+	require.NoError(t, err)
+	require.False(t, target.IsEditable, "target should be non-editable")
+
+	// Try to update
+	target.Name = "Should Fail"
+	err = repo.Update(target)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not editable")
+}
+
+func TestLLMTargetRepo_Delete(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create editable target
+	target := &LLMTarget{
+		ID:         uuid.NewString(),
+		URL:        "http://test.local:8080",
+		Source:     "database",
+		IsEditable: true,
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Delete
+	err = repo.Delete(target.ID)
+	assert.NoError(t, err)
+
+	// Verify deleted
+	_, err = repo.GetByID(target.ID)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestLLMTargetRepo_Delete_NotEditable(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create non-editable target
+	// Note: GORM ignores false for bool with default:true, so we need two steps
+	target := &LLMTarget{
+		ID:     uuid.NewString(),
+		URL:    "http://test.local:8080",
+		Source: "config",
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Explicitly set IsEditable to false
+	err = gormDB.Model(target).Update("is_editable", false).Error
+	require.NoError(t, err)
+
+	// Try to delete
+	err = repo.Delete(target.ID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not editable")
+}
+
+func TestLLMTargetRepo_Upsert_Insert(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Upsert new target
+	target := &LLMTarget{
+		ID:       uuid.NewString(),
+		URL:      "http://test.local:8080",
+		Provider: "anthropic",
+		Name:     "Test",
+		Source:   "config",
+	}
+	err = repo.Upsert(target)
+	assert.NoError(t, err)
+
+	// Verify inserted
+	found, err := repo.GetByURL(target.URL)
+	require.NoError(t, err)
+	assert.Equal(t, target.Name, found.Name)
+}
+
+func TestLLMTargetRepo_Upsert_Update(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// Create existing target
+	target := &LLMTarget{
+		ID:       uuid.NewString(),
+		URL:      "http://test.local:8080",
+		Provider: "anthropic",
+		Name:     "Original",
+		Source:   "config",
+	}
+	err = repo.Create(target)
+	require.NoError(t, err)
+
+	// Upsert with same URL but different data
+	target.Name = "Updated"
+	target.Weight = 10
+	err = repo.Upsert(target)
+	assert.NoError(t, err)
+
+	// Verify updated
+	found, err := repo.GetByURL(target.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated", found.Name)
+	assert.Equal(t, 10, found.Weight)
+}
