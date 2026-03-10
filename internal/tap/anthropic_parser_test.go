@@ -516,6 +516,64 @@ data: {"type": "message_stop"}
 	}
 }
 
+// TestSSEParserGLMStyle_CacheCreationInDelta 验证：
+// message_delta 中含 cache_creation_input_tokens（而非 cache_read）也正确累加。
+// 与 TestSSEParserGLMStyle_WithCacheReadInDelta 对称，确保两种缓存字段均被处理。
+func TestSSEParserGLMStyle_CacheCreationInDelta(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}}
+
+event: message_delta
+data: {"type": "message_delta", "usage": {"input_tokens": 100, "output_tokens": 40, "cache_creation_input_tokens": 600}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput int
+	parser := NewAnthropicSSEParser(func(in, _ int) { gotInput = in })
+	parser.Feed([]byte(sse))
+
+	// 100 + 600 cache_creation = 700
+	if gotInput != 700 {
+		t.Errorf("inputTokens = %d, want 700 (100 + 600 cache_creation from delta)", gotInput)
+	}
+}
+
+// TestSSEParserGLMStyle_NoUsageInMessageStart 验证：
+// message_start 中完全缺失 usage 字段（event.Message.Usage == nil）时，
+// 解析器不崩溃，inputTokens 保持 0，由 message_delta 正常回填。
+func TestSSEParserGLMStyle_NoUsageInMessageStart(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"id": "msg_abc", "model": "some-model"}}
+
+event: message_delta
+data: {"type": "message_delta", "usage": {"input_tokens": 300, "output_tokens": 20}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput, gotOutput int
+	var called bool
+	parser := NewAnthropicSSEParser(func(in, out int) {
+		gotInput = in
+		gotOutput = out
+		called = true
+	})
+	parser.Feed([]byte(sse))
+
+	if !called {
+		t.Fatal("OnComplete callback was not called")
+	}
+	if gotInput != 300 {
+		t.Errorf("inputTokens = %d, want 300 (no usage in message_start, filled from delta)", gotInput)
+	}
+	if gotOutput != 20 {
+		t.Errorf("outputTokens = %d, want 20", gotOutput)
+	}
+}
+
 // splitLines 按换行符分割字符串（辅助函数）。
 func splitLines(s string) []string {
 	var lines []string
