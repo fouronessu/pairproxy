@@ -156,8 +156,16 @@ func (p *AnthropicSSEParser) parseSSEData(payload []byte) {
 
 	case "message_delta":
 		// {"type":"message_delta","usage":{"output_tokens":50}}
+		// 部分 OpenAI 兼容模型（如 GLM-5.0）在 message_start 中上报 input_tokens=0，
+		// 真实值延迟到 message_delta.usage.input_tokens。仅当 message_start 未给出有效
+		// 值（等于 0）时才回填，避免覆盖标准 Anthropic API 的正确值。
 		if event.Usage != nil {
 			p.outputTokens = event.Usage.OutputTokens
+			if p.inputTokens == 0 {
+				p.inputTokens = event.Usage.InputTokens +
+					event.Usage.CacheReadInputTokens +
+					event.Usage.CacheCreationInputTokens
+			}
 		}
 
 	case "message_stop":

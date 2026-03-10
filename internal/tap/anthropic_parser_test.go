@@ -359,6 +359,163 @@ func TestNonStreamingCacheTokens(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// GLM-5.0 / OpenAI 兼容模型：input_tokens 延迟到 message_delta 上报
+// debug.txt 实测：message_start.usage.input_tokens=0，
+//   message_delta.usage = {input_tokens:20953, output_tokens:141, cache_read_input_tokens:0}
+// ---------------------------------------------------------------------------
+
+// TestSSEParserGLMStyle_InputTokensInMessageDelta 验证：
+// message_start 中 input_tokens=0 时，从 message_delta.usage.input_tokens 回填。
+func TestSSEParserGLMStyle_InputTokensInMessageDelta(t *testing.T) {
+	// 精确还原 debug.txt 中请求 2 的首尾 SSE chunk 模式
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"id": "msg_0b43f8fc5a224b6cb8d695c9", "type": "message", "role": "assistant", "model": "GLM-5.0", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 0, "output_tokens": 0}}}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+
+event: ping
+data: {"type": "ping"}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}
+
+event: content_block_stop
+data: {"type": "content_block_stop", "index": 0}
+
+event: message_delta
+data: {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"input_tokens": 20953, "output_tokens": 141, "cache_read_input_tokens": 0}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput, gotOutput int
+	var called bool
+	parser := NewAnthropicSSEParser(func(in, out int) {
+		gotInput = in
+		gotOutput = out
+		called = true
+	})
+	parser.Feed([]byte(sse))
+
+	if !called {
+		t.Fatal("OnComplete callback was not called")
+	}
+	// 修复前：gotInput=0（bug）；修复后：gotInput=20953
+	if gotInput != 20953 {
+		t.Errorf("inputTokens = %d, want 20953 (from message_delta fallback)", gotInput)
+	}
+	if gotOutput != 141 {
+		t.Errorf("outputTokens = %d, want 141", gotOutput)
+	}
+}
+
+// TestSSEParserGLMStyle_ChunkedFeed 同上，按 1 字节逐块喂入，验证行缓冲边界鲁棒性。
+func TestSSEParserGLMStyle_ChunkedFeed(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}}
+
+event: message_delta
+data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 500, "output_tokens": 30, "cache_read_input_tokens": 0}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput, gotOutput int
+	parser := NewAnthropicSSEParser(func(in, out int) {
+		gotInput = in
+		gotOutput = out
+	})
+	for i := 0; i < len(sse); i++ {
+		parser.Feed([]byte{sse[i]})
+	}
+	if gotInput != 500 {
+		t.Errorf("chunked: inputTokens = %d, want 500", gotInput)
+	}
+	if gotOutput != 30 {
+		t.Errorf("chunked: outputTokens = %d, want 30", gotOutput)
+	}
+}
+
+// TestSSEParserGLMStyle_DoesNotOverrideNonZeroInput 验证：
+// 当 message_start 已有非零 input_tokens 时，message_delta 中的 input_tokens 不应覆盖。
+// 这保护了标准 Anthropic API（message_start 即给出正确值）的行为不变。
+func TestSSEParserGLMStyle_DoesNotOverrideNonZeroInput(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"usage": {"input_tokens": 100, "output_tokens": 0}}}
+
+event: message_delta
+data: {"type": "message_delta", "usage": {"input_tokens": 999, "output_tokens": 50}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput int
+	parser := NewAnthropicSSEParser(func(in, _ int) { gotInput = in })
+	parser.Feed([]byte(sse))
+
+	// message_start 已报告 100，不应被 message_delta 的 999 覆盖
+	if gotInput != 100 {
+		t.Errorf("inputTokens = %d, want 100 (message_start value must not be overridden)", gotInput)
+	}
+}
+
+// TestSSEParserGLMStyle_ZeroStartZeroDelta 验证：
+// 两处均为 0 时，回调仍正常触发，结果为 0（非崩溃）。
+func TestSSEParserGLMStyle_ZeroStartZeroDelta(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}}
+
+event: message_delta
+data: {"type": "message_delta", "usage": {"input_tokens": 0, "output_tokens": 0}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var called bool
+	var gotInput int
+	parser := NewAnthropicSSEParser(func(in, _ int) {
+		gotInput = in
+		called = true
+	})
+	parser.Feed([]byte(sse))
+
+	if !called {
+		t.Fatal("OnComplete callback was not called")
+	}
+	if gotInput != 0 {
+		t.Errorf("inputTokens = %d, want 0", gotInput)
+	}
+}
+
+// TestSSEParserGLMStyle_WithCacheReadInDelta 验证：
+// message_delta 中含 cache_read_input_tokens 时也要累加进总输入。
+func TestSSEParserGLMStyle_WithCacheReadInDelta(t *testing.T) {
+	sse := `event: message_start
+data: {"type": "message_start", "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}}
+
+event: message_delta
+data: {"type": "message_delta", "usage": {"input_tokens": 200, "output_tokens": 60, "cache_read_input_tokens": 800}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+	var gotInput int
+	parser := NewAnthropicSSEParser(func(in, _ int) { gotInput = in })
+	parser.Feed([]byte(sse))
+
+	// 200 + 800 cache_read = 1000
+	if gotInput != 1000 {
+		t.Errorf("inputTokens = %d, want 1000 (200 + 800 cache_read from delta)", gotInput)
+	}
+}
+
 // splitLines 按换行符分割字符串（辅助函数）。
 func splitLines(s string) []string {
 	var lines []string
