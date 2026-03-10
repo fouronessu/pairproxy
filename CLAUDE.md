@@ -194,6 +194,42 @@ curl -H "Authorization: Bearer <user-jwt>" \
 
 ### 统计与审计
 ```bash
+
+### 批量导入分组和用户
+```bash
+./sproxy admin import users.txt                            # 从文件批量导入
+./sproxy admin import --dry-run users.txt                  # 预览（不实际写入）
+```
+
+**模板格式（`users.txt`）**：
+```
+# 注释以 # 开头，空行忽略
+#
+# [分组名]              — 声明分组区块
+# [分组名 llm=URL]      — 声明分组区块并绑定组级 LLM
+# 用户名 密码           — 在当前分组下创建用户
+# 用户名 密码 llm=URL   — 用户级 LLM 覆盖组默认值
+# [-]                   — 无分组区块
+
+[engineering llm=https://api.anthropic.com]
+alice  Password123
+bob    Password456 llm=https://api.openai.com
+
+[marketing]
+charlie  Marketing789
+
+[-]
+dave  NoGroup_Pass
+```
+
+**导入规则**：
+- 已存在的分组/用户跳过（保留原有数据，仅创建新增）
+- 组已存在时不会重置其 LLM 绑定
+- 用户级 `llm=URL` 覆盖该用户绑定，不影响同组其他用户
+- 模板文件含明文密码，导入完成后应妥善保管或删除
+
+### 统计与审计
+```bash
 ./sproxy admin stats                                       # 全局统计（最近 7 天）
 ./sproxy admin stats --user <username>                     # 指定用户统计
 ./sproxy admin stats --days 30                             # 最近 30 天

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -837,7 +838,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd, adminTrackCmd)
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd, adminTrackCmd, adminImportCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。
@@ -3301,4 +3302,265 @@ func createAdminToken(cfg *config.SProxyFullConfig) (string, error) {
 		return "", fmt.Errorf("sign token: %w", err)
 	}
 	return token, nil
+}
+
+// ---------------------------------------------------------------------------
+// sproxy admin import
+// ---------------------------------------------------------------------------
+
+// importUser 代表导入文件中的一个用户条目。
+type importUser struct {
+	Username    string
+	Password    string
+	LLMOverride string // "" = 使用所在组的默认 LLM 绑定
+}
+
+// importSection 代表导入文件中的一个分组区块（含该组下的用户列表）。
+type importSection struct {
+	GroupName string // "" = 无分组
+	LLMTarget string // "" = 不设置组级 LLM 绑定
+	Users     []importUser
+}
+
+// parseImportFile 解析批量导入文件，返回各分组区块及其用户列表。
+//
+// 文件格式（类 INI）：
+//
+//	# 注释行（# 或 ; 开头）和空行忽略
+//	[分组名]              — 声明分组区块
+//	[分组名 llm=URL]      — 声明分组区块并指定组级 LLM 绑定
+//	[-]                   — 声明无分组区块（文件头部无 [] 时隐式创建）
+//	用户名 密码            — 在当前区块下创建用户
+//	用户名 密码 llm=URL    — 在当前区块下创建用户，并为该用户指定不同的 LLM
+func parseImportFile(path string) ([]importSection, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	var sections []importSection
+	// 文件头部（无分组头之前）隐式属于无分组区块
+	current := importSection{GroupName: "", LLMTarget: ""}
+
+	scanner := bufio.NewScanner(f)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+
+		// 跳过空行和注释
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+
+		// 分组头：[...]
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			// 保存当前区块（即使无用户也要保留，支持空分组）
+			sections = append(sections, current)
+
+			inner := line[1 : len(line)-1]
+			parts := strings.Fields(inner)
+
+			groupName := ""
+			llmTarget := ""
+			if len(parts) > 0 && parts[0] != "-" {
+				groupName = parts[0]
+			}
+			for _, p := range parts[1:] {
+				if strings.HasPrefix(p, "llm=") {
+					llmTarget = strings.TrimPrefix(p, "llm=")
+				}
+			}
+			current = importSection{GroupName: groupName, LLMTarget: llmTarget}
+			continue
+		}
+
+		// 用户行：用户名 密码 [llm=URL]
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("line %d: expected 'username password [llm=URL]', got %q", lineNo, line)
+		}
+		u := importUser{
+			Username: fields[0],
+			Password: fields[1],
+		}
+		for _, f := range fields[2:] {
+			if strings.HasPrefix(f, "llm=") {
+				u.LLMOverride = strings.TrimPrefix(f, "llm=")
+			}
+		}
+		current.Users = append(current.Users, u)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+
+	// 追加最后一个区块
+	sections = append(sections, current)
+	return sections, nil
+}
+
+var adminImportCmd = &cobra.Command{
+	Use:   "import <file>",
+	Short: "从文件批量导入分组和用户",
+	Long: `从纯文本文件批量创建分组和用户。
+
+文件格式示例（users.txt）：
+
+  # PairProxy 批量用户导入模板
+  # 注释以 # 开头，空行忽略
+
+  [engineering llm=https://api.anthropic.com]
+  alice  Password123
+  bob    Password456 llm=https://api.openai.com
+
+  [marketing]
+  charlie  Marketing789
+
+  [-]
+  dave  NoGroup_Pass
+
+冲突策略：已存在的分组和用户将被跳过（保留原有数据）。`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		filePath := args[0]
+
+		sections, err := parseImportFile(filePath)
+		if err != nil {
+			return fmt.Errorf("parse import file: %w", err)
+		}
+
+		userRepo, groupRepo, _, _, logger, database, err := openAdminDB()
+		if err != nil {
+			return err
+		}
+		defer closeGormDB(logger, database)
+		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
+
+		// 统计计数
+		var (
+			groupsCreated int
+			groupsSkipped int
+			usersCreated  int
+			usersSkipped  int
+			bindingsSet   int
+			skipDetails   []string
+		)
+
+		for _, sec := range sections {
+			var groupID *string // nil = 无分组
+
+			if sec.GroupName != "" {
+				existing, err := groupRepo.GetByName(sec.GroupName)
+				if err != nil {
+					return fmt.Errorf("lookup group %q: %w", sec.GroupName, err)
+				}
+				if existing != nil {
+					// 分组已存在，跳过（不修改其 LLM 绑定）
+					groupsSkipped++
+					skipDetails = append(skipDetails, fmt.Sprintf("分组 %q 已存在，跳过", sec.GroupName))
+					id := existing.ID
+					groupID = &id
+				} else {
+					// 创建新分组
+					g := &db.Group{Name: sec.GroupName}
+					if !dryRun {
+						if err := groupRepo.Create(g); err != nil {
+							return fmt.Errorf("create group %q: %w", sec.GroupName, err)
+						}
+						// 设置组级 LLM 绑定
+						if sec.LLMTarget != "" {
+							if err := llmBindingRepo.Set(sec.LLMTarget, nil, &g.ID); err != nil {
+								logger.Warn("set group LLM binding failed",
+									zap.String("group", sec.GroupName),
+									zap.String("llm", sec.LLMTarget),
+									zap.Error(err),
+								)
+							} else {
+								bindingsSet++
+							}
+						}
+					}
+					groupsCreated++
+					if sec.LLMTarget != "" && dryRun {
+						bindingsSet++ // dry-run 也计入预览数字
+					}
+					id := g.ID
+					groupID = &id
+				}
+			}
+
+			for _, u := range sec.Users {
+				existing, err := userRepo.GetByUsername(u.Username)
+				if err != nil {
+					return fmt.Errorf("lookup user %q: %w", u.Username, err)
+				}
+				if existing != nil {
+					usersSkipped++
+					skipDetails = append(skipDetails, fmt.Sprintf("用户 %q 已存在，跳过", u.Username))
+					continue
+				}
+
+				if !dryRun {
+					hash, err := auth.HashPassword(logger, u.Password)
+					if err != nil {
+						return fmt.Errorf("hash password for %q: %w", u.Username, err)
+					}
+					newUser := &db.User{
+						Username:     u.Username,
+						PasswordHash: hash,
+						GroupID:      groupID,
+						IsActive:     true,
+					}
+					if err := userRepo.Create(newUser); err != nil {
+						return fmt.Errorf("create user %q: %w", u.Username, err)
+					}
+					// 用户级 LLM 绑定（覆盖组默认）
+					if u.LLMOverride != "" {
+						if err := llmBindingRepo.Set(u.LLMOverride, &newUser.ID, nil); err != nil {
+							logger.Warn("set user LLM binding failed",
+								zap.String("user", u.Username),
+								zap.String("llm", u.LLMOverride),
+								zap.Error(err),
+							)
+						} else {
+							bindingsSet++
+						}
+					}
+				} else if u.LLMOverride != "" {
+					bindingsSet++ // dry-run 预览
+				}
+				usersCreated++
+			}
+		}
+
+		// 打印汇总报告
+		if dryRun {
+			fmt.Println("导入预览（dry-run 模式，未实际写入）:")
+		} else {
+			fmt.Println("导入完成:")
+		}
+		fmt.Printf("  分组: %d 创建, %d 跳过（已存在）\n", groupsCreated, groupsSkipped)
+		fmt.Printf("  用户: %d 创建, %d 跳过（已存在）\n", usersCreated, usersSkipped)
+		fmt.Printf("  LLM 绑定: %d 设置\n", bindingsSet)
+		if len(skipDetails) > 0 {
+			fmt.Println("\n跳过详情:")
+			for _, d := range skipDetails {
+				fmt.Printf("  - %s\n", d)
+			}
+		}
+
+		if !dryRun {
+			summary := fmt.Sprintf("groups_created=%d groups_skipped=%d users_created=%d users_skipped=%d bindings=%d",
+				groupsCreated, groupsSkipped, usersCreated, usersSkipped, bindingsSet)
+			auditCLI(database, logger, "import", filePath, summary)
+		}
+		return nil
+	},
+}
+
+func init() {
+	adminImportCmd.Flags().Bool("dry-run", false, "预览导入结果，不实际写入")
 }
