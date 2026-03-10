@@ -1536,3 +1536,49 @@ func TestConvertOpenAIErrorResponse(t *testing.T) {
 		assert.Equal(t, body, converted)
 	})
 }
+
+func TestThinkingRejection(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("thinking field present → ErrThinkingNotSupported", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"thinking":   map[string]interface{}{"type": "enabled", "budget_tokens": 5000},
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Think deeply"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-thinking")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrThinkingNotSupported)
+	})
+
+	t.Run("thinking field nil → no error", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"thinking":   nil,
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Hello"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-thinking-nil")
+		require.NoError(t, err)
+	})
+
+	t.Run("no thinking field → no error", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Hello"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-no-thinking")
+		require.NoError(t, err)
+	})
+}

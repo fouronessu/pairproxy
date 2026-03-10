@@ -15,6 +15,10 @@ import (
 // OpenAI/Ollama エンドポイントは prefill をサポートしないため、HTTP 400 を返す。
 var ErrPrefillNotSupported = errors.New("OpenAI/Ollama endpoints do not support assistant prefill")
 
+// ErrThinkingNotSupported は Anthropic 拡張思考（thinking パラメータ）が検出された場合に返されるエラー。
+// OpenAI/Ollama エンドポイントは thinking をサポートしないため、HTTP 400 を返す。
+var ErrThinkingNotSupported = errors.New("Extended thinking (thinking parameter) is not supported for OpenAI/Ollama targets")
+
 // ---------------------------------------------------------------------------
 // Protocol Conversion: Anthropic Messages API ↔ OpenAI Chat Completions API
 //
@@ -54,6 +58,14 @@ func convertAnthropicToOpenAIRequest(body []byte, logger *zap.Logger, reqID stri
 	}
 
 	openaiReq := make(map[string]interface{})
+
+	// thinking 参数检测：OpenAI/Ollama 不支持扩展思考，直接返回 400
+	if thinking, exists := anthropicReq["thinking"]; exists && thinking != nil {
+		logger.Warn("thinking parameter rejected for OpenAI/Ollama target",
+			zap.String("request_id", reqID),
+		)
+		return body, newPath, ErrThinkingNotSupported
+	}
 
 	// 1. 基础字段
 	if model, ok := anthropicReq["model"].(string); ok {
