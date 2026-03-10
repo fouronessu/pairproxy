@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -1096,6 +1097,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					zap.String("new_path", newPath),
 					zap.Int("converted_size", len(converted)),
 				)
+			} else if errors.Is(convErr, ErrPrefillNotSupported) {
+				sp.logger.Warn("protocol conversion rejected: prefill not supported",
+					zap.String("request_id", reqID),
+				)
+				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", convErr.Error())
+				return
 			} else {
 				sp.logger.Warn("protocol conversion failed, forwarding original request",
 					zap.String("request_id", reqID),

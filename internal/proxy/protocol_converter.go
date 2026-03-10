@@ -3,12 +3,17 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"go.uber.org/zap"
 )
+
+// ErrPrefillNotSupported は末尾 assistant メッセージ（prefill）が検出された場合に返されるエラー。
+// OpenAI/Ollama エンドポイントは prefill をサポートしないため、HTTP 400 を返す。
+var ErrPrefillNotSupported = errors.New("OpenAI/Ollama endpoints do not support assistant prefill")
 
 // ---------------------------------------------------------------------------
 // Protocol Conversion: Anthropic Messages API ↔ OpenAI Chat Completions API
@@ -101,6 +106,23 @@ func convertAnthropicToOpenAIRequest(body []byte, logger *zap.Logger, reqID stri
 		}
 	}
 	openaiReq["messages"] = openaiMessages
+
+	// Prefill 检测：若最后一条消息 role 为 assistant 且无 tool_calls，则为 prefill。
+	// OpenAI/Ollama 不支持 prefill（以纯文本抢占 assistant 开头），拒绝请求。
+	// 注意：assistant 消息含 tool_calls 时是合法的对话历史，不视为 prefill。
+	if len(openaiMessages) > 0 {
+		last := openaiMessages[len(openaiMessages)-1]
+		if last["role"] == "assistant" {
+			_, hasToolCalls := last["tool_calls"]
+			if !hasToolCalls {
+				logger.Warn("prefill detected: trailing assistant message rejected",
+					zap.String("request_id", reqID),
+					zap.Int("message_count", len(openaiMessages)),
+				)
+				return body, newPath, ErrPrefillNotSupported
+			}
+		}
+	}
 
 	// 4. tools 定义：input_schema → parameters，包裹 {type: function, function: {...}}
 	if tools, ok := anthropicReq["tools"].([]interface{}); ok && len(tools) > 0 {
@@ -877,4 +899,70 @@ func (c *OpenAIToAnthropicStreamConverter) writeEvent(eventType string, data int
 	if flusher, ok := c.writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+// ─── 错误响应处理 ─────────────────────────────────────────────────────────────
+
+// convertOpenAIErrorResponse 将 OpenAI 格式错误响应体转换为 Anthropic 格式。
+// 若 body 不是 OpenAI 错误格式（无 error.message），原样返回。
+// HTTP 状态码由调用方保留不变。
+func convertOpenAIErrorResponse(body []byte, logger *zap.Logger, reqID string) []byte {
+	var openaiErr struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &openaiErr); err != nil || openaiErr.Error.Message == "" {
+		return body // 不是 OpenAI 错误格式，原样返回
+	}
+
+	errType := openaiErr.Error.Type
+	if errType == "" {
+		errType = "api_error"
+	}
+	// error.type 映射（按设计文档 §5.1）
+	switch errType {
+	case "insufficient_quota":
+		errType = "rate_limit_error"
+	case "server_error":
+		errType = "api_error"
+	}
+
+	resp := map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    errType,
+			"message": openaiErr.Error.Message,
+		},
+	}
+	converted, err := json.Marshal(resp)
+	if err != nil {
+		logger.Warn("failed to marshal Anthropic error response",
+			zap.String("request_id", reqID),
+			zap.Error(err),
+		)
+		return body
+	}
+	logger.Debug("converted OpenAI error to Anthropic format",
+		zap.String("request_id", reqID),
+		zap.String("error_type", errType),
+	)
+	return converted
+}
+
+// writeAnthropicError は Anthropic 形式のエラー JSON を HTTP レスポンスに書き込む。
+// 協議転換レイヤーが自分でエラーを返す（上流に転送しない）場合に使用する。
+func writeAnthropicError(w http.ResponseWriter, statusCode int, errorType, message string) {
+	resp := map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    errorType,
+			"message": message,
+		},
+	}
+	body, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(body) //nolint:errcheck
 }

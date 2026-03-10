@@ -1377,3 +1377,69 @@ func TestConvertAnthropicImageBlock(t *testing.T) {
 		assert.Nil(t, result)
 	})
 }
+
+func TestPrefillRejection(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("assistant as last message → ErrPrefillNotSupported", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Hello"},
+				map[string]interface{}{"role": "assistant", "content": "I will"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-prefill")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrPrefillNotSupported)
+	})
+
+	t.Run("normal conversation → no error", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Hello"},
+				map[string]interface{}{"role": "assistant", "content": "Hi there!"},
+				map[string]interface{}{"role": "user", "content": "How are you?"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-normal")
+		require.NoError(t, err)
+	})
+
+	t.Run("single user message → no error", func(t *testing.T) {
+		anthropicReq := map[string]interface{}{
+			"model":      "claude-3-5-sonnet-20241022",
+			"max_tokens": 1024,
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "Hi"},
+			},
+		}
+		body, _ := json.Marshal(anthropicReq)
+
+		_, _, err := convertAnthropicToOpenAIRequest(body, logger, "req-single")
+		require.NoError(t, err)
+	})
+}
+
+func TestWriteAnthropicError(t *testing.T) {
+	t.Run("writes correct JSON structure", func(t *testing.T) {
+		w := newMockResponseWriter()
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "prefill not supported")
+
+		assert.Equal(t, http.StatusBadRequest, w.statusCode)
+
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.buf.Bytes(), &body))
+		assert.Equal(t, "error", body["type"])
+		errObj := body["error"].(map[string]interface{})
+		assert.Equal(t, "invalid_request_error", errObj["type"])
+		assert.Equal(t, "prefill not supported", errObj["message"])
+	})
+}
