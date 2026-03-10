@@ -124,8 +124,8 @@ func init() {
 	llmTargetAddCmd.Flags().IntVar(&addWeight, "weight", 1, "Load balancing weight")
 	llmTargetAddCmd.Flags().StringVar(&addHealthCheckPath, "health-check-path", "", "Health check path")
 
-	llmTargetAddCmd.MarkFlagRequired("url")
-	llmTargetAddCmd.MarkFlagRequired("api-key-id")
+	_ = llmTargetAddCmd.MarkFlagRequired("url")
+	_ = llmTargetAddCmd.MarkFlagRequired("api-key-id")
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +134,6 @@ func init() {
 
 var (
 	// Update command flags
-	updateURL             string
 	updateProvider        string
 	updateAPIKeyID        string
 	updateName            string

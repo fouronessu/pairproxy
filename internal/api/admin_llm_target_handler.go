@@ -68,7 +68,7 @@ func (h *AdminLLMTargetHandler) handleListTargets(w http.ResponseWriter, r *http
 	h.logger.Info("listed llm targets", zap.Int("count", len(targets)))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"targets": targets,
 	})
 }
@@ -76,12 +76,12 @@ func (h *AdminLLMTargetHandler) handleListTargets(w http.ResponseWriter, r *http
 // handleCreateTarget POST /api/admin/llm/targets - 创建新的 LLM target
 func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL             string  `json:"url"`
-		APIKeyID        string  `json:"api_key_id"`
-		Provider        string  `json:"provider"`
-		Name            string  `json:"name"`
-		Weight          int     `json:"weight"`
-		HealthCheckPath string  `json:"health_check_path"`
+		URL             string `json:"url"`
+		APIKeyID        string `json:"api_key_id"`
+		Provider        string `json:"provider"`
+		Name            string `json:"name"`
+		Weight          int    `json:"weight"`
+		HealthCheckPath string `json:"health_check_path"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -142,7 +142,7 @@ func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *htt
 	}
 
 	// 记录审计日志
-	h.auditRepo.Create("admin", "llm_target.create", req.URL,
+	_ = h.auditRepo.Create("admin", "llm_target.create", req.URL,
 		fmt.Sprintf("provider=%s name=%s", req.Provider, req.Name))
 
 	h.logger.Info("llm target created",
@@ -152,7 +152,7 @@ func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *htt
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(target)
+	_ = json.NewEncoder(w).Encode(target)
 }
 
 // handleGetTarget GET /api/admin/llm/targets/:id - 获取单个 LLM target 详情
@@ -175,7 +175,7 @@ func (h *AdminLLMTargetHandler) handleGetTarget(w http.ResponseWriter, r *http.R
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(target)
+	_ = json.NewEncoder(w).Encode(target)
 }
 
 // handleUpdateTarget PUT /api/admin/llm/targets/:id - 更新 LLM target
@@ -253,7 +253,7 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 
 	if len(changes) == 0 {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "No changes detected",
 			"target":  target,
 		})
@@ -278,7 +278,7 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 		}
 		changesSummary += change
 	}
-	h.auditRepo.Create("admin", "llm_target.update", target.URL, changesSummary)
+	_ = h.auditRepo.Create("admin", "llm_target.update", target.URL, changesSummary)
 
 	h.logger.Info("llm target updated",
 		zap.String("id", target.ID),
@@ -286,7 +286,7 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 		zap.Strings("changes", changes))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Target updated successfully",
 		"target":  target,
 		"changes": changes,
@@ -327,7 +327,7 @@ func (h *AdminLLMTargetHandler) handleDeleteTarget(w http.ResponseWriter, r *htt
 	}
 
 	// 记录审计日志
-	h.auditRepo.Create("admin", "llm_target.delete", target.URL,
+	_ = h.auditRepo.Create("admin", "llm_target.delete", target.URL,
 		fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
 
 	h.logger.Info("llm target deleted",
@@ -335,7 +335,7 @@ func (h *AdminLLMTargetHandler) handleDeleteTarget(w http.ResponseWriter, r *htt
 		zap.String("url", target.URL))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Target deleted successfully",
 		"id":      id,
 	})
@@ -364,7 +364,7 @@ func (h *AdminLLMTargetHandler) handleEnableTarget(w http.ResponseWriter, r *htt
 	// 检查当前状态
 	if target.IsActive {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "Target is already enabled",
 			"target":  target,
 		})
@@ -382,7 +382,7 @@ func (h *AdminLLMTargetHandler) handleEnableTarget(w http.ResponseWriter, r *htt
 	}
 
 	// 记录审计日志
-	h.auditRepo.Create("admin", "llm_target.enable", target.URL,
+	_ = h.auditRepo.Create("admin", "llm_target.enable", target.URL,
 		fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
 
 	h.logger.Info("llm target enabled",
@@ -390,7 +390,7 @@ func (h *AdminLLMTargetHandler) handleEnableTarget(w http.ResponseWriter, r *htt
 		zap.String("url", target.URL))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Target enabled successfully",
 		"target":  target,
 	})
@@ -419,7 +419,7 @@ func (h *AdminLLMTargetHandler) handleDisableTarget(w http.ResponseWriter, r *ht
 	// 检查当前状态
 	if !target.IsActive {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "Target is already disabled",
 			"target":  target,
 		})
@@ -437,7 +437,7 @@ func (h *AdminLLMTargetHandler) handleDisableTarget(w http.ResponseWriter, r *ht
 	}
 
 	// 记录审计日志
-	h.auditRepo.Create("admin", "llm_target.disable", target.URL,
+	_ = h.auditRepo.Create("admin", "llm_target.disable", target.URL,
 		fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
 
 	h.logger.Info("llm target disabled",
@@ -445,7 +445,7 @@ func (h *AdminLLMTargetHandler) handleDisableTarget(w http.ResponseWriter, r *ht
 		zap.String("url", target.URL))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Target disabled successfully",
 		"target":  target,
 	})

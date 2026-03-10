@@ -455,15 +455,6 @@ func TestModelExtractedFromNonStreamingResponse(t *testing.T) {
 // newIntegrationEnv：返回 gormDB 供 token 精确验证测试使用
 // ---------------------------------------------------------------------------
 
-type integrationEnv struct {
-	sp      *SProxy
-	jwtMgr  *auth.Manager
-	writer  *db.UsageWriter
-	gormDB  interface{ /* *gorm.DB, via db.UsageRepo */ }
-	_gormDB interface{}
-	cancel  context.CancelFunc
-}
-
 // newTokenEnv 创建带真实 gormDB 访问权限的集成测试环境。
 // 与 newIntegrationSProxy 的区别：暴露 gormDB 供 UsageRepo 查询，
 // 并支持指定 targets（多 provider）。
