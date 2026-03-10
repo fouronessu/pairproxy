@@ -219,7 +219,8 @@ func processUserContent(content interface{}) []map[string]interface{} {
 		return []map[string]interface{}{{"role": "user", "content": v}}
 	case []interface{}:
 		var toolMsgs []map[string]interface{}
-		var textParts []string
+		var openaiContentItems []interface{} // ordered content items for multimodal
+		hasImage := false
 
 		for _, block := range v {
 			blockMap, ok := block.(map[string]interface{})
@@ -238,7 +239,15 @@ func processUserContent(content interface{}) []map[string]interface{} {
 				})
 			case "text":
 				if text, ok := blockMap["text"].(string); ok && text != "" {
-					textParts = append(textParts, text)
+					openaiContentItems = append(openaiContentItems, map[string]interface{}{
+						"type": "text",
+						"text": text,
+					})
+				}
+			case "image":
+				hasImage = true
+				if imgBlock := convertAnthropicImageBlock(blockMap); imgBlock != nil {
+					openaiContentItems = append(openaiContentItems, imgBlock)
 				}
 			}
 		}
@@ -246,12 +255,30 @@ func processUserContent(content interface{}) []map[string]interface{} {
 		// tool 消息在前，user 文本消息在后
 		var result []map[string]interface{}
 		result = append(result, toolMsgs...)
-		if len(textParts) > 0 {
+
+		if len(openaiContentItems) > 0 {
+			var userContent interface{}
+			if hasImage {
+				// 多模态：OpenAI array format
+				userContent = openaiContentItems
+			} else {
+				// 纯文本：拼接为字符串（向后兼容）
+				var parts []string
+				for _, item := range openaiContentItems {
+					if m, ok := item.(map[string]interface{}); ok {
+						if t, ok := m["text"].(string); ok {
+							parts = append(parts, t)
+						}
+					}
+				}
+				userContent = strings.Join(parts, "\n")
+			}
 			result = append(result, map[string]interface{}{
 				"role":    "user",
-				"content": strings.Join(textParts, "\n"),
+				"content": userContent,
 			})
 		}
+
 		if len(result) == 0 {
 			result = []map[string]interface{}{{"role": "user", "content": ""}}
 		}
@@ -274,6 +301,42 @@ func extractToolResultContent(content interface{}) string {
 		return extractTextContent(v)
 	default:
 		return fmt.Sprintf("%v", v)
+	}
+}
+
+// convertAnthropicImageBlock 将 Anthropic image 内容块转换为 OpenAI image_url 格式。
+// 返回 nil 表示不支持的 source 类型（调用方应忽略该块）。
+func convertAnthropicImageBlock(block map[string]interface{}) map[string]interface{} {
+	source, ok := block["source"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	sourceType, _ := source["type"].(string)
+	switch sourceType {
+	case "base64":
+		mediaType, _ := source["media_type"].(string)
+		data, _ := source["data"].(string)
+		if mediaType == "" {
+			mediaType = "image/jpeg"
+		}
+		return map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url":    fmt.Sprintf("data:%s;base64,%s", mediaType, data),
+				"detail": "auto",
+			},
+		}
+	case "url":
+		url, _ := source["url"].(string)
+		return map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url":    url,
+				"detail": "auto",
+			},
+		}
+	default:
+		return nil
 	}
 }
 

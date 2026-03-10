@@ -1228,3 +1228,152 @@ func TestConvertAnthropicToOpenAIRequestWithTools(t *testing.T) {
 		assert.Equal(t, false, openaiReq["parallel_tool_calls"])
 	})
 }
+
+func TestProcessUserContentWithImages(t *testing.T) {
+	t.Run("base64 image → OpenAI image_url with data URI", func(t *testing.T) {
+		content := []interface{}{
+			map[string]interface{}{"type": "text", "text": "Describe this:"},
+			map[string]interface{}{
+				"type": "image",
+				"source": map[string]interface{}{
+					"type":       "base64",
+					"media_type": "image/jpeg",
+					"data":       "abc123",
+				},
+			},
+		}
+		msgs := processUserContent(content)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "user", msgs[0]["role"])
+
+		arr, ok := msgs[0]["content"].([]interface{})
+		require.True(t, ok, "content must be []interface{} for multimodal")
+		require.Len(t, arr, 2)
+
+		textBlock := arr[0].(map[string]interface{})
+		assert.Equal(t, "text", textBlock["type"])
+		assert.Equal(t, "Describe this:", textBlock["text"])
+
+		imgBlock := arr[1].(map[string]interface{})
+		assert.Equal(t, "image_url", imgBlock["type"])
+		imgURL := imgBlock["image_url"].(map[string]interface{})
+		assert.Equal(t, "data:image/jpeg;base64,abc123", imgURL["url"])
+		assert.Equal(t, "auto", imgURL["detail"])
+	})
+
+	t.Run("url image → OpenAI image_url", func(t *testing.T) {
+		content := []interface{}{
+			map[string]interface{}{
+				"type": "image",
+				"source": map[string]interface{}{
+					"type": "url",
+					"url":  "https://example.com/photo.png",
+				},
+			},
+		}
+		msgs := processUserContent(content)
+		require.Len(t, msgs, 1)
+		arr := msgs[0]["content"].([]interface{})
+		require.Len(t, arr, 1)
+		imgBlock := arr[0].(map[string]interface{})
+		assert.Equal(t, "image_url", imgBlock["type"])
+		imgURL := imgBlock["image_url"].(map[string]interface{})
+		assert.Equal(t, "https://example.com/photo.png", imgURL["url"])
+	})
+
+	t.Run("image-only → no text block added", func(t *testing.T) {
+		content := []interface{}{
+			map[string]interface{}{
+				"type": "image",
+				"source": map[string]interface{}{
+					"type": "base64", "media_type": "image/png", "data": "XYZ",
+				},
+			},
+		}
+		msgs := processUserContent(content)
+		require.Len(t, msgs, 1)
+		arr := msgs[0]["content"].([]interface{})
+		require.Len(t, arr, 1)
+		assert.Equal(t, "image_url", arr[0].(map[string]interface{})["type"])
+	})
+
+	t.Run("text-only still returns string content (backward compat)", func(t *testing.T) {
+		content := []interface{}{
+			map[string]interface{}{"type": "text", "text": "Hello"},
+		}
+		msgs := processUserContent(content)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "Hello", msgs[0]["content"]) // string, not array
+	})
+
+	t.Run("preserves order: text first then image", func(t *testing.T) {
+		content := []interface{}{
+			map[string]interface{}{"type": "text", "text": "Look at this:"},
+			map[string]interface{}{
+				"type": "image",
+				"source": map[string]interface{}{"type": "url", "url": "https://img.example.com/a.jpg"},
+			},
+		}
+		msgs := processUserContent(content)
+		arr := msgs[0]["content"].([]interface{})
+		require.Len(t, arr, 2)
+		assert.Equal(t, "text", arr[0].(map[string]interface{})["type"])
+		assert.Equal(t, "image_url", arr[1].(map[string]interface{})["type"])
+	})
+}
+
+func TestConvertAnthropicImageBlock(t *testing.T) {
+	t.Run("base64 jpeg", func(t *testing.T) {
+		block := map[string]interface{}{
+			"type": "image",
+			"source": map[string]interface{}{
+				"type": "base64", "media_type": "image/jpeg", "data": "AABB",
+			},
+		}
+		result := convertAnthropicImageBlock(block)
+		require.NotNil(t, result)
+		assert.Equal(t, "image_url", result["type"])
+		iu := result["image_url"].(map[string]interface{})
+		assert.Equal(t, "data:image/jpeg;base64,AABB", iu["url"])
+		assert.Equal(t, "auto", iu["detail"])
+	})
+
+	t.Run("base64 png", func(t *testing.T) {
+		block := map[string]interface{}{
+			"type": "image",
+			"source": map[string]interface{}{
+				"type": "base64", "media_type": "image/png", "data": "CCDD",
+			},
+		}
+		result := convertAnthropicImageBlock(block)
+		iu := result["image_url"].(map[string]interface{})
+		assert.Equal(t, "data:image/png;base64,CCDD", iu["url"])
+	})
+
+	t.Run("url type", func(t *testing.T) {
+		block := map[string]interface{}{
+			"type": "image",
+			"source": map[string]interface{}{
+				"type": "url", "url": "https://example.com/pic.webp",
+			},
+		}
+		result := convertAnthropicImageBlock(block)
+		iu := result["image_url"].(map[string]interface{})
+		assert.Equal(t, "https://example.com/pic.webp", iu["url"])
+	})
+
+	t.Run("nil source → nil", func(t *testing.T) {
+		block := map[string]interface{}{"type": "image"}
+		result := convertAnthropicImageBlock(block)
+		assert.Nil(t, result)
+	})
+
+	t.Run("unknown source type → nil", func(t *testing.T) {
+		block := map[string]interface{}{
+			"type":   "image",
+			"source": map[string]interface{}{"type": "s3_presigned"},
+		}
+		result := convertAnthropicImageBlock(block)
+		assert.Nil(t, result)
+	})
+}
