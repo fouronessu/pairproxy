@@ -1443,3 +1443,96 @@ func TestWriteAnthropicError(t *testing.T) {
 		assert.Equal(t, "prefill not supported", errObj["message"])
 	})
 }
+
+func TestConvertOpenAIErrorResponse(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("standard OpenAI error → Anthropic error", func(t *testing.T) {
+		openaiErr := map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": "The model does not exist",
+				"type":    "invalid_request_error",
+				"param":   nil,
+				"code":    "model_not_found",
+			},
+		}
+		body, _ := json.Marshal(openaiErr)
+
+		converted := convertOpenAIErrorResponse(body, logger, "req-err")
+
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(converted, &resp))
+		assert.Equal(t, "error", resp["type"])
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "invalid_request_error", errObj["type"])
+		assert.Equal(t, "The model does not exist", errObj["message"])
+		// param and code must NOT appear in output
+		_, hasParam := errObj["param"]
+		_, hasCode := errObj["code"]
+		assert.False(t, hasParam)
+		assert.False(t, hasCode)
+	})
+
+	t.Run("rate_limit_error → rate_limit_error", func(t *testing.T) {
+		openaiErr := map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": "Rate limit exceeded",
+				"type":    "rate_limit_error",
+			},
+		}
+		body, _ := json.Marshal(openaiErr)
+		converted := convertOpenAIErrorResponse(body, logger, "req-rl")
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(converted, &resp))
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "rate_limit_error", errObj["type"])
+	})
+
+	t.Run("insufficient_quota → rate_limit_error", func(t *testing.T) {
+		openaiErr := map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": "Quota exceeded",
+				"type":    "insufficient_quota",
+			},
+		}
+		body, _ := json.Marshal(openaiErr)
+		converted := convertOpenAIErrorResponse(body, logger, "req-quota")
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(converted, &resp))
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "rate_limit_error", errObj["type"])
+	})
+
+	t.Run("server_error → api_error", func(t *testing.T) {
+		openaiErr := map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": "Internal server error",
+				"type":    "server_error",
+			},
+		}
+		body, _ := json.Marshal(openaiErr)
+		converted := convertOpenAIErrorResponse(body, logger, "req-srv")
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(converted, &resp))
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "api_error", errObj["type"])
+	})
+
+	t.Run("non-error JSON → returned unchanged", func(t *testing.T) {
+		body := []byte(`{"result":"ok"}`)
+		converted := convertOpenAIErrorResponse(body, logger, "req-ok")
+		assert.Equal(t, body, converted)
+	})
+
+	t.Run("invalid JSON → returned unchanged", func(t *testing.T) {
+		body := []byte(`not json`)
+		converted := convertOpenAIErrorResponse(body, logger, "req-bad")
+		assert.Equal(t, body, converted)
+	})
+
+	t.Run("empty error message → returned unchanged", func(t *testing.T) {
+		body := []byte(`{"error":{}}`)
+		converted := convertOpenAIErrorResponse(body, logger, "req-empty")
+		assert.Equal(t, body, converted)
+	})
+}

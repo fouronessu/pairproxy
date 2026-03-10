@@ -1293,24 +1293,34 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					)
 				}
 
-				// 协议转换：OpenAI → Anthropic（非流式响应）
+				// 协议转换：OpenAI → Anthropic（非流式响应，含错误响应）
 				if needsConversion && readErr == nil && len(body) > 0 {
 					sp.logger.Debug("converting non-streaming response",
 						zap.String("request_id", reqID),
 						zap.Int("original_size", len(body)),
+						zap.Int("status_code", resp.StatusCode),
 					)
-					converted, convErr := convertOpenAIToAnthropicResponse(body, sp.logger, reqID)
-					if convErr == nil {
-						body = converted
-						sp.logger.Info("non-streaming response converted successfully",
+					if resp.StatusCode >= 400 {
+						// 上游返回错误：转换 OpenAI 错误格式为 Anthropic 格式
+						body = convertOpenAIErrorResponse(body, sp.logger, reqID)
+						sp.logger.Info("error response converted to Anthropic format",
 							zap.String("request_id", reqID),
-							zap.Int("converted_size", len(converted)),
+							zap.Int("status_code", resp.StatusCode),
 						)
 					} else {
-						sp.logger.Warn("response conversion failed, forwarding original",
-							zap.String("request_id", reqID),
-							zap.Error(convErr),
-						)
+						converted, convErr := convertOpenAIToAnthropicResponse(body, sp.logger, reqID)
+						if convErr == nil {
+							body = converted
+							sp.logger.Info("non-streaming response converted successfully",
+								zap.String("request_id", reqID),
+								zap.Int("converted_size", len(converted)),
+							)
+						} else {
+							sp.logger.Warn("response conversion failed, forwarding original",
+								zap.String("request_id", reqID),
+								zap.Error(convErr),
+							)
+						}
 					}
 				}
 
