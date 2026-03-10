@@ -179,24 +179,19 @@ func TestSProxy_BindingRoutesCorrectly(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // TestSProxy_BindingFallbackOnUnhealthy
-// 绑定 target 不健康 → 回退到 LB 选其他健康 target。
+// 绑定 target 不健康 → 拒绝请求（503），不 fall through 到其他 target。
+// 设计说明：LLM 分配必须由管理员明确配置；当绑定的 target 不可用时，应通知管理员
+// 而非静默切换到其他 LLM（那会改变用户实际使用的模型）。
 // ---------------------------------------------------------------------------
 
 func TestSProxy_BindingFallbackOnUnhealthy(t *testing.T) {
-	var gotHost string
 	mt := &mockTransport{}
-	recordingTransport := &recordingRoundTripper{
-		inner: mt,
-		onRequest: func(req *http.Request) {
-			gotHost = req.URL.Host
-		},
-	}
 
 	targets := []LLMTarget{
 		{URL: "http://target-a.local", APIKey: "keyA"},
 		{URL: "http://target-b.local", APIKey: "keyB"},
 	}
-	sp, token := newReliabilityTestSProxy(t, targets, recordingTransport)
+	sp, token := newReliabilityTestSProxy(t, targets, mt)
 
 	lbTargets := []lb.Target{
 		{ID: "http://target-a.local", Addr: "http://target-a.local", Weight: 1, Healthy: false}, // 不健康
@@ -219,9 +214,9 @@ func TestSProxy_BindingFallbackOnUnhealthy(t *testing.T) {
 
 	sp.Handler().ServeHTTP(rr, req)
 
-	// 应回退到唯一健康的 target-b
-	if gotHost != "target-b.local" {
-		t.Errorf("expected fallback to target-b.local, got %q", gotHost)
+	// 应拒绝请求（503），不 fall through 到 target-b
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (bound target unavailable should reject, not fallback)", rr.Code)
 	}
 }
 

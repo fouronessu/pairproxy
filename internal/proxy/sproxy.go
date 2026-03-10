@@ -37,6 +37,14 @@ import (
 	"github.com/l17728/pairproxy/internal/version"
 )
 
+// ErrNoLLMBinding は LLM ターゲットが割り当てられていない場合に返される。
+// 管理者が明示的な割り当てを設定するまでリクエストは拒否される。
+var ErrNoLLMBinding = errors.New("no LLM target assigned for this user/group")
+
+// ErrBoundTargetUnavailable は割り当て済みの LLM ターゲットが利用不可の場合に返される。
+// ターゲットが unhealthy か既にリトライ済みの場合に発生する。
+var ErrBoundTargetUnavailable = errors.New("assigned LLM target is currently unavailable")
+
 // LLMTarget 代表一个 LLM 后端（含 API Key 和 provider 类型）。
 type LLMTarget struct {
 	URL          string
@@ -171,7 +179,8 @@ func (sp *SProxy) SetLLMHealthChecker(bal *lb.WeightedRandomBalancer, hc *lb.Hea
 }
 
 // SetBindingResolver 设置用户/分组 LLM 绑定解析器（可选）。
-// fn 根据 userID + groupID 返回绑定的 target URL；未绑定时 found=false，回退到负载均衡。
+// fn 根据 userID + groupID 返回绑定的 target URL；未绑定时 found=false，请求将被拒绝（403）。
+// 未设置 bindingResolver 时（如单元测试），回退到负载均衡自动选取。
 func (sp *SProxy) SetBindingResolver(fn func(userID, groupID string) (string, bool)) {
 	sp.bindingResolver = fn
 }
@@ -743,10 +752,20 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID string, tried []string) (*
 		triedSet[u] = true
 	}
 
-	// 1. 用户/分组绑定优先
+	// 1. 用户/分组绑定优先（当 bindingResolver 已设置时必须有绑定，否则拒绝）
 	if sp.bindingResolver != nil {
 		boundURL, found := sp.bindingResolver(userID, groupID)
-		if found && !triedSet[boundURL] {
+		if !found {
+			// 无绑定 → 直接拒绝，不 fall through 到负载均衡
+			sp.logger.Warn("request rejected: no LLM binding configured for user/group",
+				zap.String("user_id", userID),
+				zap.String("group_id", groupID),
+			)
+			return nil, ErrNoLLMBinding
+		}
+
+		// 有绑定 → 必须使用该 target，不允许 fall through
+		if !triedSet[boundURL] {
 			healthy := true
 			if sp.llmBalancer != nil {
 				healthy = false
@@ -765,11 +784,14 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID string, tried []string) (*
 				)
 				return sp.llmTargetInfoForURL(boundURL), nil
 			}
-			sp.logger.Warn("bound LLM target unhealthy, falling back to load balancer",
-				zap.String("bound_url", boundURL),
-				zap.String("user_id", userID),
-			)
 		}
+
+		// 绑定 target 不健康或已试过 → 报错，不 fall through
+		sp.logger.Warn("assigned LLM target is unhealthy or already tried, request rejected",
+			zap.String("bound_url", boundURL),
+			zap.String("user_id", userID),
+		)
+		return nil, ErrBoundTargetUnavailable
 	}
 
 	// 2. 加权随机均衡（支持 tried 过滤 + provider 过滤）
@@ -1084,13 +1106,32 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, nil)
 	if pickErr != nil {
-		sp.logger.Error("no LLM target available",
-			zap.String("request_id", reqID),
-			zap.String("user_id", claims.UserID),
-			zap.Error(pickErr),
-		)
-		span.SetStatus(codes.Error, "no upstream available")
-		writeJSONError(w, http.StatusBadGateway, "no_upstream", "no healthy LLM target available")
+		switch {
+		case errors.Is(pickErr, ErrNoLLMBinding):
+			sp.logger.Warn("request rejected: no LLM binding for user",
+				zap.String("request_id", reqID),
+				zap.String("user_id", claims.UserID),
+			)
+			span.SetStatus(codes.Error, "no LLM binding")
+			writeJSONError(w, http.StatusForbidden, "no_llm_assigned",
+				"no LLM target is assigned to your account; contact an administrator")
+		case errors.Is(pickErr, ErrBoundTargetUnavailable):
+			sp.logger.Error("assigned LLM target unavailable",
+				zap.String("request_id", reqID),
+				zap.String("user_id", claims.UserID),
+			)
+			span.SetStatus(codes.Error, "assigned LLM target unavailable")
+			writeJSONError(w, http.StatusServiceUnavailable, "upstream_unavailable",
+				"your assigned LLM target is currently unavailable; contact an administrator")
+		default:
+			sp.logger.Error("no LLM target available",
+				zap.String("request_id", reqID),
+				zap.String("user_id", claims.UserID),
+				zap.Error(pickErr),
+			)
+			span.SetStatus(codes.Error, "no upstream available")
+			writeJSONError(w, http.StatusBadGateway, "no_upstream", "no healthy LLM target available")
+		}
 		return
 	}
 	targetURL, err := url.Parse(firstInfo.URL)

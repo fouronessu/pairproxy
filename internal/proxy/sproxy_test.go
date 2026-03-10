@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -457,3 +458,77 @@ func TestSProxyOpenAICompatE2E(t *testing.T) {
 		t.Errorf("Model = %q, want %q", record.Model, "gpt-4")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// LLM 绑定强制要求测试
+// ---------------------------------------------------------------------------
+
+// TestSProxyRejectsRequestWithNoLLMBinding 验证当 bindingResolver 返回 found=false 时，
+// sproxy 以 403 拒绝请求，不 fall through 到负载均衡。
+func TestSProxyRejectsRequestWithNoLLMBinding(t *testing.T) {
+	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("LLM backend should not be called when user has no binding")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockLLM.Close()
+
+	sp, jwtMgr := newTestSProxy(t, mockLLM.URL)
+	// 配置 bindingResolver，模拟未绑定场景
+	sp.SetBindingResolver(func(userID, groupID string) (string, bool) {
+		return "", false // 无绑定
+	})
+
+	tok, err := jwtMgr.Sign(auth.JWTClaims{UserID: "user1", Username: "user1"}, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-4-6","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PairProxy-Auth", tok)
+	rr := httptest.NewRecorder()
+
+	sp.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 Forbidden", rr.Code)
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["error"] != "no_llm_assigned" {
+		t.Errorf("error code = %q, want \"no_llm_assigned\"", body["error"])
+	}
+}
+
+// TestSProxyRejectsRequestWhenBoundTargetUnhealthy 验证当绑定 target 处于 unhealthy 状态时，
+// sproxy 以 503 拒绝请求，不 fall through 到其他 target。
+func TestSProxyRejectsRequestWhenBoundTargetUnhealthy(t *testing.T) {
+	// 启动一个 mock LLM，但不会被调用（unhealthy target 应直接拒绝）
+	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("LLM backend should not be called when bound target is unhealthy")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockLLM.Close()
+
+	sp, _ := newTestSProxy(t, mockLLM.URL)
+
+	// 绑定到 mockLLM.URL，但让 tried 包含该 URL 来触发 unavailable 路径。
+	// 由于没有 llmBalancer（healthy 默认 true），我们直接测试 tried 路径：
+	// 手动调用 pickLLMTarget，传入 tried=[]string{boundURL}
+	boundURL := mockLLM.URL
+	sp.SetBindingResolver(func(userID, groupID string) (string, bool) {
+		return boundURL, true
+	})
+
+	// 直接测试 pickLLMTarget 在 tried 包含 boundURL 时返回 ErrBoundTargetUnavailable
+	_, err := sp.pickLLMTarget("/v1/messages", "user1", "", []string{boundURL})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrBoundTargetUnavailable) {
+		t.Errorf("error = %v, want ErrBoundTargetUnavailable", err)
+	}
+}
+

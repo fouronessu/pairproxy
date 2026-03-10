@@ -22,7 +22,7 @@ package e2e_test
 //     backends produces ~25% / ~75% hit distribution (statistical validation).
 //
 //  6. TestE2EGroupLLMBindingRouting       — users in a group are routed exclusively
-//     to the group-bound LLM; users outside the group use the default balancer.
+//     to the group-bound LLM; users without a binding are rejected with 403.
 //
 //  7. TestE2ERollingUpgradeTwoNodes       — full rolling-upgrade sequence:
 //     nodeA drains → traffic shifts to nodeB → nodeA undrains → both serve.
@@ -631,20 +631,25 @@ func TestE2EGroupLLMBindingRouting(t *testing.T) {
 		t.Errorf("llm2 got %d hits from engineering user, want 10", llm2Hits.Load())
 	}
 
-	// Free user: 20 requests — LB picks randomly, both llm1 and llm2 may serve.
-	llm1BeforeFree, llm2BeforeFree := llm1Hits.Load(), llm2Hits.Load()
+	// Free user: 20 requests — no binding, all should be rejected with 403.
+	var freeRejected int
 	for range 20 {
-		send(freeToken)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages",
+			bytes.NewBufferString(`{"model":"claude","messages":[]}`))
+		req.Header.Set("X-PairProxy-Auth", freeToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			freeRejected++
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
-	llm1FreeHits := llm1Hits.Load() - llm1BeforeFree
-	llm2FreeHits := llm2Hits.Load() - llm2BeforeFree
-	t.Logf("free user (no binding): llm1=%d llm2=%d (both should get traffic)", llm1FreeHits, llm2FreeHits)
-	if llm1FreeHits+llm2FreeHits != 20 {
-		t.Errorf("total free-user hits = %d, want 20", llm1FreeHits+llm2FreeHits)
-	}
-	// With equal weights and 20 requests, probability of either getting 0 is extremely low.
-	if llm1FreeHits == 0 {
-		t.Error("free user: llm1 got 0 hits — LB may not be balancing correctly")
+	t.Logf("free user (no binding): rejected=%d/20 (all should be 403)", freeRejected)
+	if freeRejected != 20 {
+		t.Errorf("free user rejections = %d, want 20 (no binding should yield 403)", freeRejected)
 	}
 }
 
