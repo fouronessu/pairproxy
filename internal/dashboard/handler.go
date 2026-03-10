@@ -1,11 +1,15 @@
 package dashboard
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +119,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// 排水控制（可选，需设置 drainFn）
 	mux.Handle("POST /dashboard/drain/enter", h.requireSession(http.HandlerFunc(h.handleDrainEnter)))
 	mux.Handle("POST /dashboard/drain/exit", h.requireSession(http.HandlerFunc(h.handleDrainExit)))
+
+	// 批量导入
+	mux.Handle("GET /dashboard/import", h.requireSession(http.HandlerFunc(h.handleImportPage)))
+	mux.Handle("POST /dashboard/import", h.requireSession(http.HandlerFunc(h.handleImportSubmit)))
 
 	// Trends API（F-10 WebUI 增强）
 	mux.Handle("GET /api/dashboard/trends", h.requireSession(http.HandlerFunc(h.handleTrendsAPI)))
@@ -957,4 +965,245 @@ func (h *Handler) handleUserStats(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		h.logger.Error("failed to encode user stats", zap.Error(err))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 批量导入
+// ---------------------------------------------------------------------------
+
+// dashImportUser 代表导入文件中的一个用户条目。
+type dashImportUser struct {
+	Username    string
+	Password    string
+	LLMOverride string // "" = 使用所在组的默认 LLM 绑定
+}
+
+// dashImportSection 代表导入文件中的一个分组区块。
+type dashImportSection struct {
+	GroupName string // "" = 无分组
+	LLMTarget string // "" = 不设置组级 LLM 绑定
+	Users     []dashImportUser
+}
+
+// dashImportResult 保存一次批量导入的执行结果。
+type dashImportResult struct {
+	GroupsCreated int
+	GroupsSkipped int
+	UsersCreated  int
+	UsersSkipped  int
+	BindingsSet   int
+	SkipDetails   []string
+	ParseError    string
+	DryRun        bool
+	Done          bool // true = 已执行导入（区分初始表单 vs 结果展示）
+}
+
+// importPageData 是批量导入页面的模板数据。
+type importPageData struct {
+	baseData
+	Content string           // 回填原始文本，方便修改重试
+	Result  dashImportResult
+}
+
+// parseImportContent 解析批量导入文本内容，返回各分组区块及其用户列表。
+// 与 CLI parseImportFile 逻辑一致，但接受字符串而非文件路径。
+func parseImportContent(content string) ([]dashImportSection, error) {
+	var sections []dashImportSection
+	// 文件头部（无分组头之前）隐式属于无分组区块
+	current := dashImportSection{}
+
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+
+		// 跳过空行和注释
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+
+		// 分组头：[...]
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			sections = append(sections, current)
+			inner := line[1 : len(line)-1]
+			parts := strings.Fields(inner)
+			groupName := ""
+			llmTarget := ""
+			if len(parts) > 0 && parts[0] != "-" {
+				groupName = parts[0]
+			}
+			for _, p := range parts[1:] {
+				if strings.HasPrefix(p, "llm=") {
+					llmTarget = strings.TrimPrefix(p, "llm=")
+				}
+			}
+			current = dashImportSection{GroupName: groupName, LLMTarget: llmTarget}
+			continue
+		}
+
+		// 用户行：用户名 密码 [llm=URL]
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("第 %d 行格式错误：需要 '用户名 密码 [llm=URL]'，实际内容：%q", lineNo, line)
+		}
+		u := dashImportUser{
+			Username: fields[0],
+			Password: fields[1],
+		}
+		for _, f := range fields[2:] {
+			if strings.HasPrefix(f, "llm=") {
+				u.LLMOverride = strings.TrimPrefix(f, "llm=")
+			}
+		}
+		current.Users = append(current.Users, u)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("读取内容失败：%w", err)
+	}
+	sections = append(sections, current)
+	return sections, nil
+}
+
+func (h *Handler) handleImportPage(w http.ResponseWriter, r *http.Request) {
+	h.renderPage(w, "import.html", importPageData{
+		baseData: baseData{Flash: r.URL.Query().Get("flash")},
+	})
+}
+
+func (h *Handler) handleImportSubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		// 普通 form 也 OK
+		_ = r.ParseForm()
+	}
+
+	// 优先读上传文件，无则读 textarea
+	content := ""
+	if file, _, err := r.FormFile("file"); err == nil {
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err == nil {
+			content = string(data)
+		}
+	}
+	if content == "" {
+		content = r.FormValue("content")
+	}
+	if strings.TrimSpace(content) == "" {
+		h.renderPage(w, "import.html", importPageData{
+			baseData: baseData{Error: "请上传文件或粘贴导入内容"},
+			Content:  content,
+			Result:   dashImportResult{Done: true},
+		})
+		return
+	}
+
+	dryRun := r.FormValue("dry_run") == "on"
+
+	sections, err := parseImportContent(content)
+	if err != nil {
+		h.renderPage(w, "import.html", importPageData{
+			baseData: baseData{},
+			Content:  content,
+			Result:   dashImportResult{Done: true, DryRun: dryRun, ParseError: err.Error()},
+		})
+		return
+	}
+
+	result := dashImportResult{DryRun: dryRun, Done: true}
+
+	for _, sec := range sections {
+		var groupID *string
+
+		if sec.GroupName != "" {
+			existing, err := h.groupRepo.GetByName(sec.GroupName)
+			if err != nil {
+				h.logger.Warn("import: lookup group failed", zap.String("group", sec.GroupName), zap.Error(err))
+			}
+			if existing != nil {
+				result.GroupsSkipped++
+				result.SkipDetails = append(result.SkipDetails, fmt.Sprintf("分组 %q 已存在，跳过", sec.GroupName))
+				id := existing.ID
+				groupID = &id
+			} else {
+				g := &db.Group{Name: sec.GroupName}
+				if !dryRun {
+					if err := h.groupRepo.Create(g); err != nil {
+						h.logger.Warn("import: create group failed", zap.String("group", sec.GroupName), zap.Error(err))
+						result.SkipDetails = append(result.SkipDetails, fmt.Sprintf("分组 %q 创建失败：%v", sec.GroupName, err))
+						continue
+					}
+					if sec.LLMTarget != "" && h.llmBindingRepo != nil {
+						if err := h.llmBindingRepo.Set(sec.LLMTarget, nil, &g.ID); err != nil {
+							h.logger.Warn("import: set group LLM binding failed",
+								zap.String("group", sec.GroupName), zap.Error(err))
+						} else {
+							result.BindingsSet++
+						}
+					}
+				} else if sec.LLMTarget != "" {
+					result.BindingsSet++ // dry-run 预览计数
+				}
+				result.GroupsCreated++
+				id := g.ID
+				groupID = &id
+			}
+		}
+
+		for _, u := range sec.Users {
+			existing, err := h.userRepo.GetByUsername(u.Username)
+			if err != nil {
+				h.logger.Warn("import: lookup user failed", zap.String("user", u.Username), zap.Error(err))
+			}
+			if existing != nil {
+				result.UsersSkipped++
+				result.SkipDetails = append(result.SkipDetails, fmt.Sprintf("用户 %q 已存在，跳过", u.Username))
+				continue
+			}
+
+			if !dryRun {
+				hash, err := auth.HashPassword(h.logger, u.Password)
+				if err != nil {
+					h.logger.Warn("import: hash password failed", zap.String("user", u.Username), zap.Error(err))
+					result.SkipDetails = append(result.SkipDetails, fmt.Sprintf("用户 %q 密码处理失败：%v", u.Username, err))
+					continue
+				}
+				newUser := &db.User{
+					Username:     u.Username,
+					PasswordHash: hash,
+					GroupID:      groupID,
+					IsActive:     true,
+				}
+				if err := h.userRepo.Create(newUser); err != nil {
+					h.logger.Warn("import: create user failed", zap.String("user", u.Username), zap.Error(err))
+					result.SkipDetails = append(result.SkipDetails, fmt.Sprintf("用户 %q 创建失败：%v", u.Username, err))
+					continue
+				}
+				if u.LLMOverride != "" && h.llmBindingRepo != nil {
+					if err := h.llmBindingRepo.Set(u.LLMOverride, &newUser.ID, nil); err != nil {
+						h.logger.Warn("import: set user LLM binding failed",
+							zap.String("user", u.Username), zap.Error(err))
+					} else {
+						result.BindingsSet++
+					}
+				}
+			} else if u.LLMOverride != "" {
+				result.BindingsSet++ // dry-run 预览计数
+			}
+			result.UsersCreated++
+		}
+	}
+
+	if !dryRun {
+		summary := fmt.Sprintf("groups_created=%d groups_skipped=%d users_created=%d users_skipped=%d bindings=%d",
+			result.GroupsCreated, result.GroupsSkipped, result.UsersCreated, result.UsersSkipped, result.BindingsSet)
+		if aerr := h.auditRepo.Create("admin", "import", "bulk", summary); aerr != nil {
+			h.logger.Warn("import: audit log failed", zap.Error(aerr))
+		}
+	}
+
+	h.renderPage(w, "import.html", importPageData{
+		Content: content,
+		Result:  result,
+	})
 }

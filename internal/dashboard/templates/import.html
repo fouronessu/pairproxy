@@ -1,0 +1,263 @@
+{{template "layout" .}}
+{{define "content"}}
+<div class="max-w-3xl mx-auto">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-gray-800">批量导入分组和用户</h2>
+  </div>
+
+  <!-- 格式说明（折叠） -->
+  <details class="bg-white rounded-xl shadow-sm border border-gray-100 mb-6 group">
+    <summary class="px-6 py-4 cursor-pointer text-sm font-semibold text-gray-700 select-none list-none flex items-center justify-between">
+      <span>📄 导入文件格式说明</span>
+      <span class="text-gray-400 text-xs group-open:hidden">展开</span>
+      <span class="text-gray-400 text-xs hidden group-open:inline">收起</span>
+    </summary>
+    <div class="px-6 pb-5 border-t border-gray-100 pt-4">
+      <p class="text-sm text-gray-600 mb-3">每行一条记录，支持两种行格式：</p>
+      <ul class="text-sm text-gray-600 space-y-1 mb-4 list-disc list-inside">
+        <li><code class="bg-gray-100 px-1 rounded">[分组名]</code> — 声明分组区块（下方用户归入该组）</li>
+        <li><code class="bg-gray-100 px-1 rounded">[分组名 llm=URL]</code> — 同上，并绑定该组的默认 LLM</li>
+        <li><code class="bg-gray-100 px-1 rounded">用户名 密码</code> — 在当前分组下创建用户</li>
+        <li><code class="bg-gray-100 px-1 rounded">用户名 密码 llm=URL</code> — 用户级 LLM 覆盖组的默认值</li>
+        <li><code class="bg-gray-100 px-1 rounded">[-]</code> — 声明"无分组"区块</li>
+        <li><code class="bg-gray-100 px-1 rounded">#</code> 或 <code class="bg-gray-100 px-1 rounded">;</code> 开头 — 注释行，忽略</li>
+      </ul>
+      <p class="text-sm font-medium text-gray-700 mb-2">示例文件：</p>
+      <pre class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs text-gray-700 overflow-x-auto leading-relaxed"># 工程团队，绑定到 Anthropic
+[engineering llm=https://api.anthropic.com]
+alice  Password123
+bob    Password456 llm=https://api.openai.com
+
+# 市场团队（不绑定 LLM，后续手动配置）
+[marketing]
+charlie  Marketing789
+
+# 无分组用户
+[-]
+dave  NoGroup_Pass</pre>
+      <p class="text-xs text-amber-600 mt-3">⚠️ 文件含明文密码，导入完成后请妥善保管或删除模板文件。</p>
+    </div>
+  </details>
+
+  <!-- 导入表单 -->
+  {{if not .Result.Done}}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">上传或粘贴导入内容</h3>
+    <form id="importForm" method="POST" action="/dashboard/import" enctype="multipart/form-data">
+
+      <!-- 文件上传区 -->
+      <div class="mb-4">
+        <label class="block text-xs text-gray-500 mb-2">选择 .txt 文件（可选）</label>
+        <div class="flex items-center gap-3">
+          <label class="cursor-pointer bg-gray-50 hover:bg-gray-100 border border-gray-300 border-dashed rounded-lg px-4 py-3 text-sm text-gray-600 transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span id="fileLabel">点击选择文件…</span>
+            <input type="file" name="file" id="fileInput" accept=".txt,text/plain" class="hidden">
+          </label>
+          <button type="button" id="clearFile" class="hidden text-xs text-gray-400 hover:text-gray-600">✕ 清除</button>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3 my-4">
+        <div class="flex-1 border-t border-gray-200"></div>
+        <span class="text-xs text-gray-400">或直接粘贴内容</span>
+        <div class="flex-1 border-t border-gray-200"></div>
+      </div>
+
+      <!-- Textarea -->
+      <div class="mb-5">
+        <label class="block text-xs text-gray-500 mb-2">导入内容</label>
+        <textarea name="content" id="contentArea" rows="12"
+          placeholder="# 粘贴导入内容，例如：&#10;[engineering]&#10;alice  Password123&#10;bob    Password456&#10;&#10;[-]&#10;dave  NoGroup_Pass"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 resize-y placeholder-gray-300">{{.Content}}</textarea>
+      </div>
+
+      <!-- Dry-run 选项 -->
+      <div class="flex items-center gap-2 mb-5">
+        <input type="checkbox" name="dry_run" id="dryRun" value="on"
+          class="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+        <label for="dryRun" class="text-sm text-gray-700">
+          仅预览，不实际写入
+          <span class="text-xs text-gray-400 ml-1">（查看将要创建的内容，不修改数据库）</span>
+        </label>
+      </div>
+
+      <button type="submit"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-6 py-2 rounded-lg transition-colors">
+        开始导入
+      </button>
+    </form>
+  </div>
+  {{else}}
+  <!-- 导入已完成，显示表单供再次导入 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">修改内容并重新导入</h3>
+    <form id="importForm" method="POST" action="/dashboard/import" enctype="multipart/form-data">
+      <div class="mb-4">
+        <label class="block text-xs text-gray-500 mb-2">选择 .txt 文件（可选）</label>
+        <div class="flex items-center gap-3">
+          <label class="cursor-pointer bg-gray-50 hover:bg-gray-100 border border-gray-300 border-dashed rounded-lg px-4 py-3 text-sm text-gray-600 transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span id="fileLabel">点击选择文件…</span>
+            <input type="file" name="file" id="fileInput" accept=".txt,text/plain" class="hidden">
+          </label>
+          <button type="button" id="clearFile" class="hidden text-xs text-gray-400 hover:text-gray-600">✕ 清除</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 my-4">
+        <div class="flex-1 border-t border-gray-200"></div>
+        <span class="text-xs text-gray-400">或直接粘贴内容</span>
+        <div class="flex-1 border-t border-gray-200"></div>
+      </div>
+      <div class="mb-5">
+        <label class="block text-xs text-gray-500 mb-2">导入内容</label>
+        <textarea name="content" id="contentArea" rows="12"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 resize-y">{{.Content}}</textarea>
+      </div>
+      <div class="flex items-center gap-2 mb-5">
+        <input type="checkbox" name="dry_run" id="dryRun" value="on"
+          {{if .Result.DryRun}}checked{{end}}
+          class="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+        <label for="dryRun" class="text-sm text-gray-700">
+          仅预览，不实际写入
+          <span class="text-xs text-gray-400 ml-1">（查看将要创建的内容，不修改数据库）</span>
+        </label>
+      </div>
+      <button type="submit"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-6 py-2 rounded-lg transition-colors">
+        再次导入
+      </button>
+    </form>
+  </div>
+  {{end}}
+
+  <!-- 结果面板 -->
+  {{if .Result.Done}}
+  <div class="bg-white rounded-xl shadow-sm border {{if .Result.ParseError}}border-red-200{{else if .Result.DryRun}}border-yellow-200{{else}}border-green-200{{end}} p-6">
+
+    <!-- 标题 -->
+    <h3 class="text-sm font-semibold mb-5 flex items-center gap-2
+      {{if .Result.ParseError}}text-red-700{{else if .Result.DryRun}}text-yellow-700{{else}}text-green-700{{end}}">
+      {{if .Result.ParseError}}
+        <span class="text-lg">❌</span> 解析失败
+      {{else if .Result.DryRun}}
+        <span class="text-lg">🔍</span> 预览结果（未实际写入）
+      {{else}}
+        <span class="text-lg">✅</span> 导入完成
+      {{end}}
+    </h3>
+
+    {{if .Result.ParseError}}
+    <div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+      <strong>错误：</strong>{{.Result.ParseError}}
+    </div>
+    {{else}}
+
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-3 gap-4 mb-5">
+      <div class="bg-gray-50 rounded-lg p-4 text-center">
+        <div class="text-2xl font-bold text-indigo-600">{{.Result.GroupsCreated}}</div>
+        <div class="text-xs text-gray-500 mt-1">分组{{if .Result.DryRun}}将创建{{else}}已创建{{end}}</div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-4 text-center">
+        <div class="text-2xl font-bold text-indigo-600">{{.Result.UsersCreated}}</div>
+        <div class="text-xs text-gray-500 mt-1">用户{{if .Result.DryRun}}将创建{{else}}已创建{{end}}</div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-4 text-center">
+        <div class="text-2xl font-bold text-indigo-600">{{.Result.BindingsSet}}</div>
+        <div class="text-xs text-gray-500 mt-1">LLM 绑定{{if .Result.DryRun}}将设置{{else}}已设置{{end}}</div>
+      </div>
+    </div>
+
+    <!-- 跳过统计 -->
+    {{if or .Result.GroupsSkipped .Result.UsersSkipped}}
+    <div class="flex gap-4 mb-4">
+      {{if .Result.GroupsSkipped}}
+      <span class="inline-flex items-center gap-1 text-xs bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-full px-3 py-1">
+        ↷ {{.Result.GroupsSkipped}} 个分组已存在，跳过
+      </span>
+      {{end}}
+      {{if .Result.UsersSkipped}}
+      <span class="inline-flex items-center gap-1 text-xs bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-full px-3 py-1">
+        ↷ {{.Result.UsersSkipped}} 个用户已存在，跳过
+      </span>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- 跳过详情 -->
+    {{if .Result.SkipDetails}}
+    <details class="mt-2">
+      <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-700">
+        查看跳过详情（{{len .Result.SkipDetails}} 条）
+      </summary>
+      <ul class="mt-2 space-y-1">
+        {{range .Result.SkipDetails}}
+        <li class="text-xs text-gray-500 flex items-start gap-1.5">
+          <span class="text-yellow-400 mt-0.5">▸</span>{{.}}
+        </li>
+        {{end}}
+      </ul>
+    </details>
+    {{end}}
+
+    {{end}}{{/* end if not ParseError */}}
+
+    {{if and (not .Result.DryRun) (not .Result.ParseError)}}
+    <div class="mt-5 pt-4 border-t border-gray-100 flex gap-3">
+      <a href="/dashboard/users" class="text-sm text-indigo-600 hover:underline">查看用户列表 →</a>
+      <a href="/dashboard/groups" class="text-sm text-indigo-600 hover:underline">查看分组列表 →</a>
+    </div>
+    {{end}}
+  </div>
+  {{end}}{{/* end if Result.Done */}}
+
+</div>
+
+<script>
+  // 文件选择后，读取内容填入 textarea，并更新按钮文字
+  var fileInput = document.getElementById('fileInput');
+  var contentArea = document.getElementById('contentArea');
+  var fileLabel = document.getElementById('fileLabel');
+  var clearBtn = document.getElementById('clearFile');
+
+  if (fileInput) {
+    fileInput.addEventListener('change', function() {
+      var file = this.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        contentArea.value = e.target.result;
+        fileLabel.textContent = file.name;
+        clearBtn.classList.remove('hidden');
+      };
+      reader.readAsText(file, 'UTF-8');
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      fileInput.value = '';
+      fileLabel.textContent = '点击选择文件…';
+      clearBtn.classList.add('hidden');
+    });
+  }
+
+  // 防止重复提交
+  var form = document.getElementById('importForm');
+  if (form) {
+    form.addEventListener('submit', function() {
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '处理中…';
+      }
+    });
+  }
+</script>
+{{end}}
