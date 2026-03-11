@@ -47,11 +47,11 @@ func TestValidateAndGetUser_Match(t *testing.T) {
 }
 
 func TestValidateAndGetUser_NoMatch(t *testing.T) {
-	aliceKey, _ := keygen.GenerateKey("alice")
-	users := []keygen.UserEntry{{ID: "u2", Username: "xyz99", IsActive: true}}
-	u, err := keygen.ValidateAndGetUser(aliceKey, users)
-	_ = u
-	_ = err
+	// 格式不合法的 key → 直接返回 (nil, nil)
+	users := []keygen.UserEntry{{ID: "u1", Username: "alice", IsActive: true}}
+	u, err := keygen.ValidateAndGetUser("invalid-key", users)
+	assert.NoError(t, err)
+	assert.Nil(t, u, "invalid format key should not match any user")
 }
 
 func TestValidateAndGetUser_InactiveSkipped(t *testing.T) {
@@ -91,16 +91,18 @@ func TestValidateAndGetUser_RepeatedChars(t *testing.T) {
 }
 
 func TestValidateAndGetUser_Collision(t *testing.T) {
-	key := "sk-pp-aabbccddeeffgghhiijjkkllmmnnooaabbccddeeffgghhii"
+	// "abcd" 和 "dcba" 的字母数字字符集完全相同（各 1 个 a/b/c/d）
+	// 任何包含这 4 个字符的 key 都会同时匹配这两个用户名 → collision
+	// 构造一个明确包含 a, b, c, d 的 key
+	key := "sk-pp-abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd" // 6+48=54 chars, body all lowercase abcd×12
 	users := []keygen.UserEntry{
-		{ID: "u1", Username: "abcde", IsActive: true},
-		{ID: "u2", Username: "abcdf", IsActive: true},
+		{ID: "u1", Username: "abcd", IsActive: true},
+		{ID: "u2", Username: "dcba", IsActive: true},
 	}
 	u, err := keygen.ValidateAndGetUser(key, users)
-	if err != nil {
-		assert.Contains(t, err.Error(), "collision")
-		assert.Nil(t, u)
-	}
+	assert.Error(t, err, "same fingerprint length should return collision error")
+	assert.Contains(t, err.Error(), "collision")
+	assert.Nil(t, u)
 }
 
 // ---- ValidateUsername ----
