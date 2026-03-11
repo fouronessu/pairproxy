@@ -53,3 +53,12 @@ chat.txt
 plan.md
 spec/
 extglob
+
+# Test output logs
+test-output-*.log
+
+# Test routing cache directories
+*.db.routing/
+
+# Session/debug text files
+2026-*-*.txt
