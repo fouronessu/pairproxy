@@ -78,6 +78,10 @@ func (h *KeygenHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Username == "" || req.Password == "" {
+		h.logger.Warn("keygen login: missing required fields",
+			zap.Bool("has_username", req.Username != ""),
+			zap.Bool("has_password", req.Password != ""),
+		)
 		writeKeygenError(w, http.StatusBadRequest, "missing_fields", "username and password required")
 		return
 	}
@@ -145,6 +149,9 @@ func (h *KeygenHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (h *KeygenHandler) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
+		h.logger.Warn("keygen regenerate: missing or malformed Authorization header",
+			zap.String("remote_addr", r.RemoteAddr),
+		)
 		writeKeygenError(w, http.StatusUnauthorized, "missing_token", "Authorization: Bearer <token> required")
 		return
 	}
