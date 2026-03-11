@@ -58,7 +58,15 @@ func TestFullChainWithMockProcesses(t *testing.T) {
 
 	// Create test user
 	userRepo := db.NewUserRepo(gormDB, logger)
-	userRepo.Create(&db.User{ID: "test-user", Username: "testuser", IsActive: true})
+	_ = userRepo.Create(&db.User{ID: "test-user", Username: "testuser", IsActive: true})
+
+	// Bind test user to mockllm so sproxy (which enforces mandatory bindings) routes correctly
+	bindingRepo := db.NewLLMBindingRepo(gormDB, logger)
+	mockllmURL := fmt.Sprintf("http://127.0.0.1:%d", mockllmPort)
+	userID := "test-user"
+	if err := bindingRepo.Set(mockllmURL, &userID, nil); err != nil {
+		t.Fatalf("bindingRepo.Set: %v", err)
+	}
 
 	// Generate JWT token
 	jwtMgr, err := auth.NewManager(logger, "test-secret-for-integration-testing-32chars")
