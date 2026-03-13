@@ -229,24 +229,28 @@ func (sp *SProxy) resolveAPIKeyID(apiKey, provider string) (*string, error) {
 		return nil, nil // API Key 可选
 	}
 
+	obfuscated := obfuscateKey(apiKey)
+
 	// 查询是否已存在（按 provider 查找第一个）
 	var existingKey db.APIKey
 	err := sp.db.Where("provider = ?", provider).First(&existingKey).Error
 	if err == nil {
-		// 找到了，返回 ID
+		// 已存在：更新混淆值（自动迁移旧明文记录）
+		if err2 := sp.db.Model(&existingKey).Update("encrypted_value", obfuscated).Error; err2 != nil {
+			return nil, fmt.Errorf("update api key: %w", err2)
+		}
 		return &existingKey.ID, nil
 	}
 	if err != gorm.ErrRecordNotFound {
 		return nil, fmt.Errorf("query api key: %w", err)
 	}
 
-	// 不存在，创建新记录
-	// 注意：这里暂时存储明文，实际生产环境应该加密
+	// 不存在，创建新记录（混淆存储）
 	newKey := &db.APIKey{
 		ID:             uuid.NewString(),
 		Name:           fmt.Sprintf("Auto-created for %s", provider),
 		Provider:       provider,
-		EncryptedValue: apiKey, // TODO: 应该加密存储
+		EncryptedValue: obfuscated,
 		IsActive:       true,
 		CreatedAt:      time.Now(),
 	}
@@ -417,8 +421,31 @@ func (sp *SProxy) resolveAPIKey(apiKeyID *string) (string, error) {
 		return "", fmt.Errorf("query api key: %w", err)
 	}
 
-	// TODO: 解密 EncryptedValue（当前暂时直接返回）
-	return apiKey.EncryptedValue, nil
+	return obfuscateKey(apiKey.EncryptedValue), nil
+}
+
+// swapFirstLast 交换字符串的首尾字符（对称操作）。
+// 长度 <= 1 时原样返回。
+func swapFirstLast(s string) string {
+	if len(s) <= 1 {
+		return s
+	}
+	b := []byte(s)
+	b[0], b[len(b)-1] = b[len(b)-1], b[0]
+	return string(b)
+}
+
+// obfuscateKey 混淆 API Key，保留前缀（最后一个 "-" 之前的部分），
+// 仅对 body 部分（最后一个 "-" 之后）执行 swapFirstLast。
+// 例如 "sk-ant-api03-XXXX" → "sk-ant-api03-" + swapFirstLast("XXXX")。
+// 无 "-" 时对整个字符串执行 swapFirstLast（如纯随机 token）。
+// 对称操作：obfuscateKey(obfuscateKey(s)) == s。
+func obfuscateKey(key string) string {
+	idx := strings.LastIndex(key, "-")
+	if idx < 0 || idx == len(key)-1 {
+		return swapFirstLast(key)
+	}
+	return key[:idx+1] + swapFirstLast(key[idx+1:])
 }
 
 // ptrToString 辅助函数：将 *string 转为 string（用于日志）

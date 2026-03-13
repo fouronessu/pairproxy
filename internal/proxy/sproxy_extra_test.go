@@ -481,3 +481,86 @@ func TestNewSProxyWithCluster_NilClusterManager(t *testing.T) {
 		t.Fatal("NewSProxyWithCluster returned nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// swapFirstLast 混淆函数测试
+// ---------------------------------------------------------------------------
+
+func TestSwapFirstLast(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty string", input: "", expected: ""},
+		{name: "single char", input: "a", expected: "a"},
+		{name: "two chars", input: "ab", expected: "ba"},
+		{name: "normal key body", input: "abcdefgh", expected: "hbcdefga"},
+		{name: "sk-pp- style", input: "sk-pp-abcdefghijklmnopqrstuvwxyz012345678901234567", expected: "7k-pp-abcdefghijklmnopqrstuvwxyz01234567890123456s"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := swapFirstLast(tc.input)
+			if got != tc.expected {
+				t.Errorf("swapFirstLast(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestSwapFirstLast_Symmetric 验证函数是自己的逆（加解密使用同一函数）
+func TestSwapFirstLast_Symmetric(t *testing.T) {
+	samples := []string{
+		"",
+		"x",
+		"ab",
+		"sk-pp-abcdefghijklmnopqrstuvwxyz012345678901234567",
+		"sk-pp-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678901234567",
+	}
+	for _, s := range samples {
+		if got := swapFirstLast(swapFirstLast(s)); got != s {
+			t.Errorf("double swapFirstLast(%q) = %q, want original", s, got)
+		}
+	}
+}
+
+func TestObfuscateKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: ""},
+		{name: "no dash", input: "ollama", expected: "allamo"},
+		{name: "sk-pp- key", input: "sk-pp-abcdefghijklmnopqrstuvwxyz012345678901234567", expected: "sk-pp-7bcdefghijklmnopqrstuvwxyz01234567890123456a"},
+		{name: "anthropic key", input: "sk-ant-api03-AAABBBCCC", expected: "sk-ant-api03-CAABBBCCA"},
+		{name: "openai key", input: "sk-XYZABC", expected: "sk-CYZABX"},
+		{name: "dash at end", input: "prefix-", expected: "-refixp"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := obfuscateKey(tc.input)
+			if got != tc.expected {
+				t.Errorf("obfuscateKey(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestObfuscateKey_Symmetric 验证 obfuscateKey 是自己的逆
+func TestObfuscateKey_Symmetric(t *testing.T) {
+	samples := []string{
+		"",
+		"ollama",
+		"sk-pp-abcdefghijklmnopqrstuvwxyz012345678901234567",
+		"sk-ant-api03-AAABBBCCCDDDEEE",
+		"sk-XYZABC123",
+	}
+	for _, s := range samples {
+		if got := obfuscateKey(obfuscateKey(s)); got != s {
+			t.Errorf("double obfuscateKey(%q) = %q, want original", s, got)
+		}
+	}
+}
