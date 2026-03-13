@@ -33,3 +33,15 @@ func (d *DBUserLister) ListActive() ([]keygen.UserEntry, error) {
 	}
 	return entries, nil
 }
+
+// IsUserActive 实现 ActiveUserLister 接口，校验单个用户的 is_active 状态。
+func (d *DBUserLister) IsUserActive(userID string) (bool, error) {
+	user, err := d.repo.GetByID(userID)
+	if err != nil {
+		return false, err
+	}
+	if user == nil {
+		return false, nil
+	}
+	return user.IsActive, nil
+}

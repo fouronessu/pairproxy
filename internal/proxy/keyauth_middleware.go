@@ -15,6 +15,9 @@ import (
 // 由 *db.UserRepo 实现（通过 DBUserLister 适配器桥接）。
 type ActiveUserLister interface {
 	ListActive() ([]keygen.UserEntry, error)
+	// IsUserActive 查询单个用户的 is_active 状态，用于缓存命中后的二次校验。
+	// 返回 (false, nil) 表示用户存在但已被禁用；返回 (false, err) 表示查询失败。
+	IsUserActive(userID string) (bool, error)
 }
 
 // NewKeyAuthMiddleware 构建 API Key 认证中间件。
@@ -26,9 +29,8 @@ type ActiveUserLister interface {
 // 验证成功后将 *auth.JWTClaims 注入 context（与 AuthMiddleware 相同的 key），
 // 下游 serveProxy 可无感知地复用。
 //
-// 中间件链：cache.Get → (miss) ListActive + ValidateAndGetUser → cache.Set → 注入 claims → next
-// TODO: 当用户被禁用时（admin disable 操作），应调用 cache.InvalidateUser(username)
-// 以立即失效缓存条目。当前实现在 TTL 期间内仍允许被禁用用户通过。
+// 中间件链：cache.Get → (hit) IsUserActive 二次校验 → (miss) ListActive + ValidateAndGetUser → cache.Set → 注入 claims → next
+// 缓存命中后仍调用 IsUserActive 校验，确保用户被禁用后立即拒绝，不等 TTL 自然过期。
 func NewKeyAuthMiddleware(
 	logger *zap.Logger,
 	users ActiveUserLister,
@@ -68,6 +70,27 @@ func NewKeyAuthMiddleware(
 
 		if cache != nil {
 			if cached := cache.Get(token); cached != nil {
+				// 二次校验：用户可能在缓存 TTL 内被管理员禁用
+				active, activeErr := users.IsUserActive(cached.UserID)
+				if activeErr != nil {
+					log.Error("direct auth: failed to verify user active status",
+						zap.String("request_id", reqID),
+						zap.String("username", cached.Username),
+						zap.Error(activeErr),
+					)
+					writeJSONError(w, http.StatusInternalServerError, "internal_error", "user verification failed")
+					return
+				}
+				if !active {
+					cache.InvalidateUser(cached.Username)
+					log.Warn("direct auth: cached user is disabled, cache evicted",
+						zap.String("request_id", reqID),
+						zap.String("username", cached.Username),
+						zap.String("user_id", cached.UserID),
+					)
+					writeJSONError(w, http.StatusUnauthorized, "account_disabled", "user account has been disabled")
+					return
+				}
 				userID = cached.UserID
 				username = cached.Username
 				groupID = cached.GroupID
