@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.9.0**
+**版本 v2.9.1**
 
 ---
 
@@ -3596,5 +3596,93 @@ curl http://localhost:9000/v1/chat/completions \
 - 用户必须是活跃状态（`is_active=true`）才能使用 Key
 - 禁用用户（`sproxy admin user disable <name>`）后，其 Key 立即失效
 - 用量记录在同一 `usage_logs` 表，Dashboard 和统计命令均可查看
+
+---
+
+## 21. v2.9.1 更新说明（Patch）
+
+v2.9.1 是针对 v2.9.0 的 Bug Fix 小版本，无破坏性变更，直接替换二进制即可升级。
+
+### 21.1 Bug 修复
+
+#### 21.1.1 扩展思考参数静默剥离（重要）
+
+**问题**：Claude CLI 开启扩展思考（Extended Thinking）后，所有请求均携带 `thinking` 参数。当用户被路由到 OpenAI/Ollama target 时，sproxy 之前版本会直接返回 HTTP 400，导致 Claude CLI **完全无法使用**。
+
+**修复**：sproxy 现在会**静默剥离** `thinking` 参数后继续转换和转发请求。OpenAI/Ollama 不感知该参数，请求正常完成。
+
+- 用户侧：无感知，Claude CLI 无需任何配置变更
+- 日志：转换时仅记录一条 DEBUG 级别日志，不再产生 WARN
+
+```
+# 修复后的日志（DEBUG 级别，默认不显示）
+DEBUG  sproxy  thinking parameter stripped for OpenAI/Ollama target  request_id=xxx
+```
+
+#### 21.1.2 Dashboard llm.html 模板 panic 修复
+
+**问题**：在极端情况下（LLM 绑定记录的 `user_id` 和 `group_id` 均为 NULL），访问 Dashboard LLM 页面会触发 Go 模板引擎的 nil 指针解引用 panic，返回 500 错误并在日志中输出 `template execute error`。
+
+**修复**：对 `group_id` 字段增加 nil 判断（`{{else if .GroupID}}`），空绑定记录安全渲染为空白，不再 panic。
+
+#### 21.1.3 浏览器预取请求触发虚假告警
+
+**问题**：浏览器在访问 Dashboard 时自动发起 `/favicon.ico`、`/robots.txt` 等请求，这些请求会落入 LLM 代理的 catch-all 路由，触发 auth 中间件的 `WARN "missing authentication header"` 告警，污染日志。
+
+**修复**：在 catch-all 路由之前增加专属处理器拦截上述路径，返回正确响应，不再触发告警。
+
+#### 21.1.4 鉴权失败日志补充诊断字段
+
+`WARN "missing authentication header"` 日志现在额外包含 `path` 和 `method` 字段，便于定位真实鉴权失败时的请求来源。
+
+```
+# 修复前
+WARN  missing authentication header  request_id=xxx  remote_addr=1.2.3.4:5678
+
+# 修复后
+WARN  missing authentication header  request_id=xxx  path=/v1/messages  method=POST  remote_addr=1.2.3.4:5678
+```
+
+### 21.2 新功能：Dashboard 清空日志
+
+日志页（`/dashboard/logs`）新增**清空日志**功能，用于在调试或环境重置时一次性清除所有请求日志。
+
+**操作步骤**：
+
+1. 登录 Dashboard，进入「请求日志」页面
+2. 点击右上角红色 **清空日志** 按钮
+3. 在弹出的确认对话框中输入 `OK`（区分大小写）
+4. 点击 **确认清空**
+
+**注意事项**：
+
+- 此操作**不可撤销**，所有 `usage_logs` 记录将被永久删除
+- 操作会写入审计日志（`audit_logs`），记录删除条数
+- 操作成功后页面顶部显示 flash 提示，包含已删除的记录数
+- 输入非 `OK`（如 `ok`、`Ok`、带空格）均视为无效，操作不执行
+
+### 21.3 升级方法
+
+v2.9.1 与 v2.9.0 数据库 Schema 完全兼容，无需迁移：
+
+```bash
+# 1. 备份数据库（推荐）
+./sproxy admin backup --output pairproxy_before_v291.db.bak
+
+# 2. 停止服务
+pkill sproxy   # Linux/macOS
+# 或 Windows: taskkill /F /IM sproxy.exe
+
+# 3. 替换二进制
+curl -LO https://github.com/l17728/pairproxy/releases/download/v2.9.1/pairproxy-linux-amd64.tar.gz
+tar -xzf pairproxy-linux-amd64.tar.gz
+
+# 4. 重新启动
+./sproxy start --config sproxy.yaml
+
+# 5. 验证版本
+./sproxy version
+# 应输出：sproxy v2.9.1
+```
 
 ---
