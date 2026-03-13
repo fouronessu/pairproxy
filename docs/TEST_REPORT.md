@@ -600,9 +600,9 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ✅ **所有测试用例已全部执行并通过**
 
-- 顶层测试函数: 1,275（含 1 个 Unix 权限测试在 Windows 下跳过）
-- 子测试 (t.Run): 492
-- **总 RUN 条目: 1,767**，全部通过（24个包）
+- 顶层测试函数: 1,324（含 1 个 Unix 权限测试在 Windows 下跳过）
+- 子测试 (t.Run): 499
+- **总 RUN 条目: 1,823**，全部通过（24个包）
 - 集成测试: 8 测试，全部通过
 - E2E测试 (httptest): 90+ 测试，全部通过
 - E2E测试 (真实进程, -tags=integration): 4 子测试，全部通过
@@ -689,6 +689,25 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
   - ✅ `TestOpenAIToAnthropicStreamConverterTokenAccuracy` 含 input_tokens/cache_read_input_tokens 断言
 - `test/e2e/fullchain_with_processes_test.go`：修复真实进程集成测试
   - ✅ `TestFullChainWithMockProcesses/concurrent_requests` — 补齐 LLM binding，10并发全部通过
+
+**v2.9.2 新增测试（Dashboard 图表修复回归）**:
+- `internal/dashboard/handler_html_test.go`：4 个 HTML 结构回归测试
+  - ✅ `TestMyUsagePage_ChartCanvasHasWrapperDiv` — canvas 外有固定高度 wrapper div
+  - ✅ `TestMyUsagePage_ChartCanvasNoInlineHeight` — canvas 无内联 height 属性
+  - ✅ `TestMyUsagePage_CanvasInsideWrapperDiv` — canvas 在 wrapper 内
+  - ✅ `TestMyUsagePage_OverviewChartsAlsoHaveWrapperDiv` — overview 图表同样有 wrapper
+
+**v2.9.3 新增测试（安全加固）**:
+- `internal/proxy/keyauth_middleware_test.go`：4 个缓存失效测试
+  - ✅ `TestKeyAuthMiddleware_CacheHit_UserDisabled` — 缓存命中但用户已禁用 → 401
+  - ✅ `TestKeyAuthMiddleware_CacheHit_UserDisabled_CacheEvicted` — 禁用后缓存条目被驱逐
+  - ✅ `TestKeyAuthMiddleware_CacheHit_ActiveUser_Passes` — 活跃用户缓存命中正常放行
+  - ✅ `TestKeyAuthMiddleware_CacheHit_IsActiveError` — IsUserActive 查询失败 → 500 (fail-closed)
+- `internal/proxy/sproxy_extra_test.go`：8 个混淆函数测试
+  - ✅ `TestSwapFirstLast` (5子测试) — 首尾交换基础行为
+  - ✅ `TestSwapFirstLast_Symmetric` — 对称性验证
+  - ✅ `TestObfuscateKey` (6子测试) — 保留前缀的混淆行为
+  - ✅ `TestObfuscateKey_Symmetric` — 对称性验证
 
 **测试质量**: 优秀
 **代码稳定性**: 高
