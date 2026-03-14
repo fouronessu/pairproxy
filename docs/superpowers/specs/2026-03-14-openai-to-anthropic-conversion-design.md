@@ -40,7 +40,7 @@ const (
 )
 ```
 
-Detection logic:
+Detection logic replaces the existing `shouldConvertProtocol` function:
 
 ```go
 func detectConversionDirection(requestPath, targetProvider string) conversionDirection {
@@ -56,20 +56,53 @@ func detectConversionDirection(requestPath, targetProvider string) conversionDir
 }
 ```
 
+The existing test `TestShouldConvertProtocol` must be renamed to `TestDetectConversionDirection` and updated to test `detectConversionDirection` returning `conversionDirection` values instead of booleans.
+
+### Target Routing Fix for OtoA
+
+`preferredProvidersByPath` in `sproxy.go` currently maps `/v1/chat/completions` → `{openai: true, ollama: true}`, which excludes Anthropic targets. For OtoA conversion, the physical upstream path is `/v1/messages`, not `/v1/chat/completions`.
+
+**Fix**: When `convDir == conversionOtoA`, compute `effectivePath = "/v1/messages"` and pass it to both the initial `pickLLMTarget` call AND to `buildRetryTransport`'s `PickNext` closure. Concretely:
+
+```go
+// In serveProxy, after detecting convDir:
+effectivePath := r.URL.Path
+if convDir == conversionOtoA {
+    effectivePath = "/v1/messages"  // use for both initial pick and retries
+}
+target := pickLLMTarget(effectivePath, ...)
+// Later, pass effectivePath to buildRetryTransport so the PickNext closure
+// uses it rather than r.URL.Path (which is /v1/chat/completions before Director fires).
+rt := buildRetryTransport(effectivePath, ...)
+```
+
+This ensures `preferredProvidersByPath["/v1/messages"]` matches Anthropic targets correctly for both the first attempt and any retries. Note: during retries `req.URL.Path` has already been rewritten by the Director to `/v1/messages`, so using `effectivePath` is consistent with what the Director produces.
+
 ### Data Flow
 
 **New direction (OtoA):**
 ```
 OpenAI client
   → [/v1/chat/completions] → sproxy
-  → convertOpenAIToAnthropicRequest() → [/v1/messages] → Anthropic
+  → (target selected via effective path /v1/messages → Anthropic target chosen)
+  → convertOpenAIToAnthropicRequest() → Director rewrites path to [/v1/messages] → Anthropic
   ← Anthropic SSE/JSON response
-  → TeeResponseWriter (AnthropicSSEParser, token counting)
+  → TeeResponseWriter wraps AnthropicToOpenAIStreamConverter
+    (TeeResponseWriter sees raw Anthropic bytes → AnthropicSSEParser for token counting)
   → AnthropicToOpenAIStreamConverter (SSE: Anthropic events → OpenAI chunks)
   ← OpenAI SSE/JSON → client
 ```
 
-Token counting is correct without changes: `targetProvider="anthropic"` causes TeeResponseWriter to use `AnthropicSSEParser` on the raw upstream response.
+**Streaming chain layout** (same pattern as existing AtoO chain):
+- `AnthropicToOpenAIStreamConverter` implements `http.ResponseWriter`, wraps the real client writer `w`
+- `TeeResponseWriter` wraps the stream converter: `tw = NewTeeResponseWriter(streamConverter, parser, ...)`
+- `proxy.ServeHTTP(tw)` — upstream writes raw Anthropic bytes to `tw`; `tw` tees to token parser AND forwards to `streamConverter` which translates to OpenAI format for the client
+
+Token counting requires no changes: `targetProvider="anthropic"` causes `NewResponseParser` to select `AnthropicSSEParser` on the raw upstream bytes inside `TeeResponseWriter`.
+
+### Model Extraction (requestedModel)
+
+The existing `extractModel(r)` / `extractModelFromBody(bodyBytes)` mechanism already handles model extraction for both AtoO and OtoA: it checks the `X-PairProxy-Model` header and falls back to parsing `{"model":"..."}` from the body. Since both OpenAI and Anthropic formats use a top-level `model` field, no new extraction logic is needed. The `requestedModel` variable populated by the existing code is available for use in `convertAnthropicToOpenAIResponseReverse` for OtoA without modification.
 
 ---
 
@@ -88,6 +121,10 @@ func convertOpenAIToAnthropicRequest(
 
 Returns `newPath = "/v1/messages"`.
 
+### stream_options Handling
+
+`injectOpenAIStreamOptions` runs unconditionally on `/v1/chat/completions` bodies before conversion detection. The `stream_options` field it injects must be discarded inside `convertOpenAIToAnthropicRequest` (it is an OpenAI-specific field not recognized by Anthropic). It is included in the discard list alongside `n`, `logprobs`, `presence_penalty`, `frequency_penalty`, `user`, etc.
+
 ### Field Mapping
 
 | OpenAI field | Anthropic field | Notes |
@@ -104,7 +141,7 @@ Returns `newPath = "/v1/messages"`.
 | `stream` | `stream` | Pass through |
 | `tools` | `tools` | Unwrap function wrapper; `parameters` → `input_schema` |
 | `tool_choice` | `tool_choice` | See mapping table below |
-| `n`, `logprobs`, `presence_penalty`, `frequency_penalty`, `user`, etc. | Discard | Anthropic does not support |
+| `n`, `logprobs`, `presence_penalty`, `frequency_penalty`, `user`, `stream_options`, etc. | Discard | Anthropic does not support |
 
 ### tool_choice Mapping
 
@@ -131,7 +168,7 @@ Returns `newPath = "/v1/messages"`.
 - `tool_calls[]` → `{type:"tool_use","id":"...","name":"...","input":{...}}` blocks (arguments JSON string → parsed object)
 - Content + tool_calls → text block + tool_use blocks in same content array
 
-**tool messages** (role=tool): Consecutive tool role messages following an assistant message are merged into a single Anthropic user message containing multiple `tool_result` content blocks:
+**tool messages** (role=tool): Consecutive tool role messages following an assistant message are merged into a single Anthropic user message containing multiple `tool_result` content blocks. The `content` field of a tool message may be either a string or an array of content objects; both forms are normalized to a string for the Anthropic `tool_result.content` field (array items of type `text` are joined with `\n`):
 ```json
 {"role":"user","content":[
   {"type":"tool_result","tool_use_id":"call_id","content":"result text"},
@@ -160,6 +197,8 @@ func convertAnthropicToOpenAIResponseReverse(
     requestedModel string,
 ) ([]byte, error)
 ```
+
+`requestedModel` is the OpenAI model name extracted from the original request body before conversion. It is used as the `model` field in the response so the client sees the model it originally requested.
 
 ### Field Mapping
 
@@ -206,11 +245,11 @@ func convertAnthropicToOpenAIResponseReverse(
 
 ### AnthropicToOpenAIStreamConverter
 
-Implements `http.ResponseWriter`. Sits between TeeResponseWriter and the client.
+Implements `http.ResponseWriter` **and `http.Flusher`**. Wraps the real client `http.ResponseWriter` `w`. The `Flush()` method delegates to `w.(http.Flusher).Flush()` so SSE chunks are pushed to the client immediately. `TeeResponseWriter` wraps this converter so the raw Anthropic bytes are visible to the token parser before being translated.
 
 **Internal state:**
 - `messageID string` — extracted from `message_start`, used in all output chunks
-- `model string` — from constructor (original model requested by client)
+- `model string` — from constructor (original OpenAI model name requested by client)
 - `inputTokens int` — from `message_start.message.usage.input_tokens`
 - `outputTokens int` — from `message_delta.usage.output_tokens`
 - `toolCallIndex map[int]int` — Anthropic block index → OpenAI tool_calls index
@@ -234,7 +273,13 @@ All output chunks include the full envelope: `{"id":"chatcmpl-...","object":"cha
 
 ## Error Response Conversion
 
-Anthropic errors → OpenAI format:
+When the upstream returns an HTTP error status (>= 400), conversion branching is:
+
+- `convDir == conversionOtoA`: call `convertAnthropicErrorResponseToOpenAI()` — converts Anthropic error format to OpenAI format
+- `convDir == conversionAtoO`: call existing `convertOpenAIErrorResponse()` — converts OpenAI error format to Anthropic format
+- `convDir == conversionNone`: pass through unchanged
+
+Anthropic → OpenAI error format conversion:
 
 ```json
 // Anthropic: {"type":"error","error":{"type":"authentication_error","message":"..."}}
@@ -247,33 +292,46 @@ New function `convertAnthropicErrorResponseToOpenAI()` — inverse of existing `
 
 ## Changes to sproxy.go
 
-1. Replace `needsConversion bool` with `convDir conversionDirection` at line 1190
-2. Request conversion block: branch on `convDir == conversionOtoA` to call `convertOpenAIToAnthropicRequest()`
-3. Stream converter: `conversionOtoA` → `NewAnthropicToOpenAIStreamConverter(w, ...)`; `conversionAtoO` → existing
-4. Director path rewrite: apply for both directions
-5. Non-streaming response conversion: branch on `convDir == conversionOtoA` to call `convertAnthropicToOpenAIResponseReverse()`
-6. Error response conversion: add OtoA error conversion branch
+1. Replace `needsConversion bool` with `convDir conversionDirection` at line ~1190
+2. Replace `shouldConvertProtocol(...)` call with `detectConversionDirection(path, targetProvider)`
+3. **Target selection + retry**: compute `effectivePath = "/v1/messages"` when `convDir == conversionOtoA`; pass to both `pickLLMTarget` and `buildRetryTransport` (so the `PickNext` closure uses the effective path, not `r.URL.Path`)
+4. **Request conversion**: branch on `convDir == conversionOtoA` to call `convertOpenAIToAnthropicRequest()`; if it fails, return HTTP 400 to the client (do not degrade silently — the original path `/v1/chat/completions` would 404 on Anthropic). The existing AtoO graceful degradation behavior is unchanged.
+5. **Stream converter setup**: `conversionOtoA` → `NewAnthropicToOpenAIStreamConverter(w, requestedModel, ...)`; `conversionAtoO` → existing `NewOpenAIToAnthropicStreamConverter`; wrap with `TeeResponseWriter` in both cases
+6. **Director path rewrite**: apply for both directions (already done for AtoO; add OtoA branch rewriting `/v1/chat/completions` → `/v1/messages`)
+7. **Non-streaming response conversion and token counting**: for OtoA, token counting (`tw.RecordNonStreaming`) must be called with the **pre-conversion raw Anthropic response body** before calling `convertAnthropicToOpenAIResponseReverse`. The `AnthropicSSEParser` (selected because `targetProvider="anthropic"`) must see the Anthropic JSON, not the already-converted OpenAI JSON. Sequence: read raw body → call `tw.RecordNonStreaming(rawBody)` → call `convertAnthropicToOpenAIResponseReverse(rawBody, ...)` → write converted body to client.
+8. **Error response conversion**: branch on `convDir` — OtoA calls `convertAnthropicErrorResponseToOpenAI()`, AtoO calls existing `convertOpenAIErrorResponse()`, None passes through unchanged
+9. **`requestedModel`**: the existing `extractModel(r)` / `extractModelFromBody(bodyBytes)` already populates this correctly for OtoA (both formats use a top-level `model` field); no additional extraction needed
 
 ---
 
 ## Testing
 
-New test cases in `internal/proxy/protocol_converter_test.go`:
+New and updated test cases in `internal/proxy/protocol_converter_test.go`:
+
+### Direction detection (replaces TestShouldConvertProtocol)
+Rename `TestShouldConvertProtocol` → `TestDetectConversionDirection`:
+- `/v1/chat/completions` + `anthropic` → `conversionOtoA`
+- `/v1/messages` + `openai` → `conversionAtoO`
+- `/v1/messages` + `anthropic` → `conversionNone`
+- `/v1/chat/completions` + `openai` → `conversionNone`
 
 ### Request conversion
 - Basic text messages with system
-- Multiple consecutive tool role messages merged
+- Multiple consecutive tool role messages merged (string content)
+- tool role message with array-typed content (text items joined with `\n`)
 - assistant message with tool_calls history
 - user message with image_url (data URI + https URL)
 - tools array conversion (unwrap function wrapper)
 - tool_choice all variants
 - stop field normalization (string → array)
+- stream_options field is discarded
 
 ### Non-streaming response conversion
 - Text response
 - Tool use response
 - stop_reason all variants
 - usage fields
+- requestedModel propagated to response model field
 
 ### Streaming conversion (AnthropicToOpenAIStreamConverter)
 - Text streaming
@@ -281,8 +339,8 @@ New test cases in `internal/proxy/protocol_converter_test.go`:
 - Empty response
 - finish_reason mapping
 
-### Integration (shouldConvert / direction detection)
-- `/v1/chat/completions` + `anthropic` → `conversionOtoA`
-- `/v1/messages` + `openai` → `conversionAtoO`
-- `/v1/messages` + `anthropic` → `conversionNone`
-- `/v1/chat/completions` + `openai` → `conversionNone`
+### Error conversion
+- Anthropic error → OpenAI format (conversionOtoA path)
+
+### OtoA failure path
+- Malformed/invalid OpenAI request body → `convertOpenAIToAnthropicRequest` fails → return HTTP 400 to client (not silent degradation)
