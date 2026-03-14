@@ -1186,9 +1186,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		targetProvider = "openai"
 	}
 
-	// 协议转换前提前提取 requestedModel（原始 Anthropic 模型名）：
-	// 转换后 bodyBytes 会变成 OpenAI 格式，模型名可能已被 mapping 替换，
-	// 在响应时需要用原始 Anthropic 模型名覆盖 OpenAI 响应的 model 字段。
+	// 协议转换前提前提取 requestedModel（客户端发送的原始模型名）：
+	// AtoO 场景：此值为客户端发送的 Anthropic 模型名（如 "claude-3-5-sonnet-20241022"），
+	//   转换后 bodyBytes 会变成 OpenAI 格式，模型名可能已被 mapping 替换，
+	//   在响应时需要用原始 Anthropic 模型名覆盖 OpenAI 响应的 model 字段。
+	// OtoA 场景：此值为 OpenAI 客户端发送的模型名（如 "gpt-4o"），
+	//   不是 Anthropic 模型名，响应时用于日志记录和 UsageRecord.Model 字段。
 	requestedModel := extractModel(r)
 	if requestedModel == "" && len(bodyBytes) > 0 {
 		requestedModel = extractModelFromBody(bodyBytes)
@@ -1321,7 +1324,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 预填充 UsageRecord 模板（除 token 数/状态码/时长外的字段）
 	// model 优先从 X-PairProxy-Model 头取（cproxy 注入），其次从请求 body 取（OpenAI 格式客户端）
-	// 注意：requestedModel 在协议转换前已提取，含原始 Anthropic 模型名（非 mapped 名）
+	// 注意：requestedModel 在协议转换前已提取，含客户端发送的原始模型名：
+	//   AtoO 场景为 Anthropic 模型名（非 mapped 名）；OtoA 场景为 OpenAI 模型名（如 "gpt-4o"）
 	model := requestedModel
 	usageRecord := db.UsageRecord{
 		RequestID:   reqID,
