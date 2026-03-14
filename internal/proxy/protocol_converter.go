@@ -1146,3 +1146,282 @@ func writeAnthropicError(w http.ResponseWriter, statusCode int, errorType, messa
 	w.WriteHeader(statusCode)
 	w.Write(body) //nolint:errcheck
 }
+
+// ─── リクエスト変換：OpenAI → Anthropic ───────────────────────────────────────
+
+// convertOpenAIToAnthropicRequest はOpenAI Chat Completions リクエストを Anthropic Messages API 形式に変換する。
+// Returns (converted body, "/v1/messages", nil) on success.
+// Returns (nil, "/v1/messages", error) on JSON parse failure — caller must return HTTP 400.
+func convertOpenAIToAnthropicRequest(body []byte, logger *zap.Logger, reqID string, modelMapping map[string]string) ([]byte, string, error) {
+	const newPath = "/v1/messages"
+	if len(body) == 0 {
+		return body, newPath, nil
+	}
+
+	var openaiReq map[string]interface{}
+	if err := json.Unmarshal(body, &openaiReq); err != nil {
+		logger.Warn("failed to parse OpenAI request for OtoA conversion",
+			zap.String("request_id", reqID),
+			zap.Error(err),
+		)
+		return nil, newPath, err
+	}
+
+	anthropicReq := make(map[string]interface{})
+
+	// 1. model (with mapping)
+	if model, ok := openaiReq["model"].(string); ok {
+		anthropicReq["model"] = mapModelName(model, modelMapping)
+	}
+
+	// 2. Pass-through scalars
+	for _, key := range []string{"max_tokens", "temperature", "top_p", "stream"} {
+		if v, ok := openaiReq[key]; ok {
+			anthropicReq[key] = v
+		}
+	}
+
+	// 3. stop → stop_sequences (normalize to array)
+	if stop, ok := openaiReq["stop"]; ok {
+		switch s := stop.(type) {
+		case string:
+			anthropicReq["stop_sequences"] = []string{s}
+		case []interface{}:
+			anthropicReq["stop_sequences"] = s
+		}
+	}
+
+	// 4. tools → Anthropic format
+	if tools, ok := openaiReq["tools"].([]interface{}); ok {
+		anthropicTools := make([]map[string]interface{}, 0, len(tools))
+		for _, t := range tools {
+			tm, ok := t.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			fn, ok := tm["function"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			at := map[string]interface{}{
+				"name": fn["name"],
+			}
+			if desc, ok := fn["description"]; ok {
+				at["description"] = desc
+			}
+			if params, ok := fn["parameters"]; ok {
+				at["input_schema"] = params
+			}
+			anthropicTools = append(anthropicTools, at)
+		}
+		if len(anthropicTools) > 0 {
+			anthropicTools2 := make([]interface{}, len(anthropicTools))
+			for i, at := range anthropicTools {
+				anthropicTools2[i] = at
+			}
+			anthropicReq["tools"] = anthropicTools2
+		}
+	}
+
+	// 5. tool_choice
+	if tc, ok := openaiReq["tool_choice"]; ok {
+		anthropicReq["tool_choice"] = convertOpenAIToolChoice(tc)
+	}
+
+	// 6. messages: extract system, convert roles
+	rawMessages, _ := openaiReq["messages"].([]interface{})
+	var systemParts []string
+	var anthropicMessages []interface{}
+
+	i := 0
+	for i < len(rawMessages) {
+		msg, ok := rawMessages[i].(map[string]interface{})
+		if !ok {
+			i++
+			continue
+		}
+		role, _ := msg["role"].(string)
+		switch role {
+		case "system":
+			if text, ok := msg["content"].(string); ok {
+				systemParts = append(systemParts, text)
+			}
+			i++
+		case "user":
+			anthropicMessages = append(anthropicMessages, convertOpenAIUserMessage(msg))
+			i++
+		case "assistant":
+			anthropicMessages = append(anthropicMessages, convertOpenAIAssistantMessage(msg))
+			i++
+			// Collect consecutive tool messages that follow
+			var toolResults []interface{}
+			for i < len(rawMessages) {
+				next, ok := rawMessages[i].(map[string]interface{})
+				if !ok || next["role"] != "tool" {
+					break
+				}
+				toolResults = append(toolResults, map[string]interface{}{
+					"type":        "tool_result",
+					"tool_use_id": next["tool_call_id"],
+					"content":     extractToolResultContent(next["content"]),
+				})
+				i++
+			}
+			if len(toolResults) > 0 {
+				anthropicMessages = append(anthropicMessages, map[string]interface{}{
+					"role":    "user",
+					"content": toolResults,
+				})
+			}
+		default:
+			i++
+		}
+	}
+
+	if len(systemParts) > 0 {
+		anthropicReq["system"] = strings.Join(systemParts, "\n\n")
+	}
+	if len(anthropicMessages) > 0 {
+		anthropicReq["messages"] = anthropicMessages
+	}
+
+	converted, err := json.Marshal(anthropicReq)
+	if err != nil {
+		logger.Warn("failed to marshal Anthropic request",
+			zap.String("request_id", reqID),
+			zap.Error(err),
+		)
+		return nil, newPath, err
+	}
+	logger.Debug("OpenAI request converted to Anthropic format",
+		zap.String("request_id", reqID),
+		zap.Int("original_size", len(body)),
+		zap.Int("converted_size", len(converted)),
+	)
+	return converted, newPath, nil
+}
+
+// convertOpenAIToolChoice はOpenAI tool_choice 値を Anthropic 形式に変換する。
+func convertOpenAIToolChoice(tc interface{}) map[string]interface{} {
+	switch v := tc.(type) {
+	case string:
+		switch v {
+		case "auto":
+			return map[string]interface{}{"type": "auto"}
+		case "none":
+			return map[string]interface{}{"type": "none"}
+		case "required":
+			return map[string]interface{}{"type": "any"}
+		}
+	case map[string]interface{}:
+		if fn, ok := v["function"].(map[string]interface{}); ok {
+			return map[string]interface{}{
+				"type": "tool",
+				"name": fn["name"],
+			}
+		}
+	}
+	return map[string]interface{}{"type": "auto"}
+}
+
+// convertOpenAIUserMessage は user ロールのメッセージを変換する。
+func convertOpenAIUserMessage(msg map[string]interface{}) map[string]interface{} {
+	content := msg["content"]
+	switch c := content.(type) {
+	case string:
+		return map[string]interface{}{"role": "user", "content": c}
+	case []interface{}:
+		anthropicContent := make([]interface{}, 0, len(c))
+		for _, item := range c {
+			im, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch im["type"] {
+			case "text":
+				anthropicContent = append(anthropicContent, map[string]interface{}{
+					"type": "text",
+					"text": im["text"],
+				})
+			case "image_url":
+				if iu, ok := im["image_url"].(map[string]interface{}); ok {
+					if block := convertOpenAIImageURL(iu); block != nil {
+						anthropicContent = append(anthropicContent, block)
+					}
+				}
+			}
+		}
+		return map[string]interface{}{"role": "user", "content": anthropicContent}
+	default:
+		return map[string]interface{}{"role": "user", "content": ""}
+	}
+}
+
+// convertOpenAIImageURL は OpenAI image_url 項目を Anthropic image ブロックに変換する。
+func convertOpenAIImageURL(iu map[string]interface{}) map[string]interface{} {
+	rawURL, _ := iu["url"].(string)
+	if strings.HasPrefix(rawURL, "data:") {
+		// data:TYPE;base64,DATA
+		rest := strings.TrimPrefix(rawURL, "data:")
+		parts := strings.SplitN(rest, ";base64,", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		return map[string]interface{}{
+			"type": "image",
+			"source": map[string]interface{}{
+				"type":       "base64",
+				"media_type": parts[0],
+				"data":       parts[1],
+			},
+		}
+	}
+	return map[string]interface{}{
+		"type": "image",
+		"source": map[string]interface{}{
+			"type": "url",
+			"url":  rawURL,
+		},
+	}
+}
+
+// convertOpenAIAssistantMessage は assistant ロールのメッセージを変換する。
+func convertOpenAIAssistantMessage(msg map[string]interface{}) map[string]interface{} {
+	var blocks []interface{}
+
+	if text, ok := msg["content"].(string); ok && text != "" {
+		blocks = append(blocks, map[string]interface{}{"type": "text", "text": text})
+	}
+
+	if toolCalls, ok := msg["tool_calls"].([]interface{}); ok {
+		for _, tc := range toolCalls {
+			tm, ok := tc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			fn, ok := tm["function"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// arguments is a JSON string → parse to object
+			var input interface{}
+			if args, ok := fn["arguments"].(string); ok {
+				if err := json.Unmarshal([]byte(args), &input); err != nil {
+					input = map[string]interface{}{}
+				}
+			}
+			blocks = append(blocks, map[string]interface{}{
+				"type":  "tool_use",
+				"id":    tm["id"],
+				"name":  fn["name"],
+				"input": input,
+			})
+		}
+	}
+
+	if len(blocks) == 0 {
+		blocks = []interface{}{map[string]interface{}{"type": "text", "text": ""}}
+	}
+
+	return map[string]interface{}{"role": "assistant", "content": blocks}
+}

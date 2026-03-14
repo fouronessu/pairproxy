@@ -93,6 +93,305 @@ func TestDetectConversionDirection(t *testing.T) {
 	}
 }
 
+func TestConvertOpenAIToAnthropicRequest(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("basic text message with system", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hello"}
+            ],
+            "max_tokens": 100,
+            "temperature": 0.7
+        }`
+		out, path, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req1", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "/v1/messages", path)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		assert.Equal(t, "gpt-4o", got["model"])
+		assert.Equal(t, "You are helpful.", got["system"])
+		msgs := got["messages"].([]interface{})
+		assert.Len(t, msgs, 1)
+		m0 := msgs[0].(map[string]interface{})
+		assert.Equal(t, "user", m0["role"])
+		assert.Equal(t, "Hello", m0["content"])
+		assert.Equal(t, float64(100), got["max_tokens"])
+		assert.Equal(t, float64(0.7), got["temperature"])
+	})
+
+	t.Run("multiple system messages joined", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": "Part 1."},
+                {"role": "system", "content": "Part 2."},
+                {"role": "user", "content": "Hi"}
+            ]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req2", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		assert.Equal(t, "Part 1.\n\nPart 2.", got["system"])
+		msgs := got["messages"].([]interface{})
+		assert.Len(t, msgs, 1) // system removed from messages array
+	})
+
+	t.Run("tool role messages merged into user message", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Call the tool"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Tokyo\"}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 25°C"},
+                {"role": "tool", "tool_call_id": "call_2", "content": "Done"}
+            ]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req3", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		// Expect: user, assistant (with tool_use), user (merged tool_results)
+		assert.Len(t, msgs, 3)
+		last := msgs[2].(map[string]interface{})
+		assert.Equal(t, "user", last["role"])
+		content := last["content"].([]interface{})
+		assert.Len(t, content, 2) // two tool_result blocks
+		tr0 := content[0].(map[string]interface{})
+		assert.Equal(t, "tool_result", tr0["type"])
+		assert.Equal(t, "call_1", tr0["tool_use_id"])
+		assert.Equal(t, "Sunny, 25°C", tr0["content"])
+		tr1 := content[1].(map[string]interface{})
+		assert.Equal(t, "tool_result", tr1["type"])
+		assert.Equal(t, "call_2", tr1["tool_use_id"])
+		assert.Equal(t, "Done", tr1["content"])
+	})
+
+	t.Run("tool role message with array content joined", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Go"},
+                {"role": "assistant", "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "c1", "content": [
+                    {"type": "text", "text": "Line 1"},
+                    {"type": "text", "text": "Line 2"}
+                ]}
+            ]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req4", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		last := msgs[len(msgs)-1].(map[string]interface{})
+		content := last["content"].([]interface{})
+		tr := content[0].(map[string]interface{})
+		assert.Equal(t, "Line 1\nLine 2", tr["content"])
+	})
+
+	t.Run("assistant message with tool_calls converted to tool_use", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Use tool"},
+                {"role": "assistant", "content": "Calling tool", "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{\"q\":\"go\"}"}}
+                ]}
+            ]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req5", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		asst := msgs[1].(map[string]interface{})
+		assert.Equal(t, "assistant", asst["role"])
+		blocks := asst["content"].([]interface{})
+		// text block + tool_use block
+		assert.Len(t, blocks, 2)
+		text := blocks[0].(map[string]interface{})
+		assert.Equal(t, "text", text["type"])
+		assert.Equal(t, "Calling tool", text["text"])
+		tu := blocks[1].(map[string]interface{})
+		assert.Equal(t, "tool_use", tu["type"])
+		assert.Equal(t, "c1", tu["id"])
+		assert.Equal(t, "search", tu["name"])
+		inp := tu["input"].(map[string]interface{})
+		assert.Equal(t, "go", inp["q"])
+	})
+
+	t.Run("user message with image_url data URI", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
+            ]}]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req6", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		content := msgs[0].(map[string]interface{})["content"].([]interface{})
+		img := content[1].(map[string]interface{})
+		assert.Equal(t, "image", img["type"])
+		src := img["source"].(map[string]interface{})
+		assert.Equal(t, "base64", src["type"])
+		assert.Equal(t, "image/png", src["media_type"])
+		assert.Equal(t, "abc123", src["data"])
+	})
+
+	t.Run("user message with image_url https URL", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+            ]}]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req7", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		content := msgs[0].(map[string]interface{})["content"].([]interface{})
+		img := content[0].(map[string]interface{})
+		src := img["source"].(map[string]interface{})
+		assert.Equal(t, "url", src["type"])
+		assert.Equal(t, "https://example.com/img.png", src["url"])
+	})
+
+	t.Run("tools array conversion — unwrap function wrapper", func(t *testing.T) {
+		input := `{
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+            }}]
+        }`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req8", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		tools := got["tools"].([]interface{})
+		assert.Len(t, tools, 1)
+		tool := tools[0].(map[string]interface{})
+		assert.Equal(t, "get_weather", tool["name"])
+		assert.Equal(t, "Get weather", tool["description"])
+		schema := tool["input_schema"].(map[string]interface{})
+		assert.Equal(t, "object", schema["type"])
+		// No "type":"function" wrapper in Anthropic format
+		assert.Nil(t, tool["type"])
+	})
+
+	t.Run("tool_choice mapping — all variants", func(t *testing.T) {
+		cases := []struct {
+			openai   string
+			wantType string
+		}{
+			{`"auto"`, "auto"},
+			{`"none"`, "none"},
+			{`"required"`, "any"},
+		}
+		for _, c := range cases {
+			input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"tool_choice":` + c.openai + `}`
+			out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req9", nil)
+			require.NoError(t, err)
+			var got map[string]interface{}
+			require.NoError(t, json.Unmarshal(out, &got))
+			tc := got["tool_choice"].(map[string]interface{})
+			assert.Equal(t, c.wantType, tc["type"], "tool_choice=%s", c.openai)
+		}
+		// object form: {"type":"function","function":{"name":"X"}}
+		input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"tool_choice":{"type":"function","function":{"name":"search"}}}`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req9b", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		tc := got["tool_choice"].(map[string]interface{})
+		assert.Equal(t, "tool", tc["type"])
+		assert.Equal(t, "search", tc["name"])
+	})
+
+	t.Run("stop string normalized to array", func(t *testing.T) {
+		input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stop":"STOP"}`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req10", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		seqs := got["stop_sequences"].([]interface{})
+		assert.Equal(t, []interface{}{"STOP"}, seqs)
+		// stop array case
+		input2 := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stop":["END","STOP"]}`
+		out2, _, err := convertOpenAIToAnthropicRequest([]byte(input2), logger, "req10b", nil)
+		require.NoError(t, err)
+		var got2 map[string]interface{}
+		require.NoError(t, json.Unmarshal(out2, &got2))
+		seqs2 := got2["stop_sequences"].([]interface{})
+		assert.Len(t, seqs2, 2)
+	})
+
+	t.Run("stream_options discarded", func(t *testing.T) {
+		input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req11", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		assert.Nil(t, got["stream_options"], "stream_options must be discarded")
+		assert.Equal(t, true, got["stream"]) // stream itself kept
+	})
+
+	t.Run("model mapping applied", func(t *testing.T) {
+		input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+		mapping := map[string]string{"gpt-4o": "claude-opus-4-6"}
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req12", mapping)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		assert.Equal(t, "claude-opus-4-6", got["model"])
+	})
+
+	t.Run("tool message without preceding assistant is silently dropped", func(t *testing.T) {
+		// Per spec: tool messages are only merged when consecutive after an assistant.
+		// An orphaned tool message (e.g. at start, or after user) is dropped — document this behavior.
+		input := `{"model":"gpt-4o","messages":[
+            {"role": "tool", "tool_call_id": "c1", "content": "orphan"},
+            {"role": "user", "content": "hi"}
+        ]}`
+		out, _, err := convertOpenAIToAnthropicRequest([]byte(input), logger, "req_orphan", nil)
+		require.NoError(t, err)
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(out, &got))
+		msgs := got["messages"].([]interface{})
+		// Only the user message remains; orphaned tool is dropped
+		assert.Len(t, msgs, 1)
+		assert.Equal(t, "user", msgs[0].(map[string]interface{})["role"])
+	})
+
+	t.Run("malformed JSON returns error", func(t *testing.T) {
+		_, _, err := convertOpenAIToAnthropicRequest([]byte(`{invalid`), logger, "req13", nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("empty body returned as-is", func(t *testing.T) {
+		out, path, err := convertOpenAIToAnthropicRequest(nil, logger, "req14", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "/v1/messages", path)
+		assert.Nil(t, out)
+	})
+}
+
 func TestConvertAnthropicToOpenAIRequest(t *testing.T) {
 	logger := zap.NewNop()
 
