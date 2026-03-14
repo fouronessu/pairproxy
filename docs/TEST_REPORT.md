@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
 **生成时间**: 2026-03-14
-**测试版本**: v2.9.4 (Dockerfile 修复 · Docker 版本号注入 · builder 基础镜像更正)
+**测试版本**: v2.10.0 (OtoA 协议转换 — OpenAI 客户端透明访问 Anthropic 端点)
 **测试环境**: Windows 11, Go 1.23
 
 ---
@@ -12,14 +12,14 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 跳过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,324 | 1,323 | 1 | 0 | 24个包全量单元测试（v2.9.3 +12：缓存失效4+混淆8） |
-| 子测试 (subtests) | ✅ PASS | 499 | 499 | 0 | 0 | t.Run 表驱动子测试 |
+| 单元测试 (UT) | ✅ PASS | 1,326 | 1,325 | 1 | 0 | 24个包全量单元测试（v2.10.0 +5：OtoA 协议转换） |
+| 子测试 (subtests) | ✅ PASS | 542 | 542 | 0 | 0 | t.Run 表驱动子测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | 0 | integration_by_GLM5_test.go |
 | E2E测试 (httptest) | ✅ PASS | 90+ | 90+ | 0 | 0 | 含 Direct Proxy E2E + 用户流量 + LLM Target |
 | E2E测试 (integration) | ✅ PASS | 4 | 4 | 0 | 0 | TestFullChainWithMockProcesses 真实进程测试 |
-| 协议转换测试 | ✅ PASS | 35+ | 35+ | 0 | 0 | 含 content_filter→end_turn、流式 input_tokens |
+| 协议转换测试 | ✅ PASS | 80+ | 80+ | 0 | 0 | 含 OtoA 请求/响应/流式/错误转换（v2.10.0 +45 RUN） |
 
-**总计**: 1,823 RUN 条目（1,324 顶层测试 + 499 子测试），全部通过
+**总计**: 1,868 RUN 条目（1,326 顶层测试 + 542 子测试），全部通过
 
 ---
 
@@ -600,9 +600,9 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ✅ **所有测试用例已全部执行并通过**
 
-- 顶层测试函数: 1,324（含 1 个 Unix 权限测试在 Windows 下跳过）
-- 子测试 (t.Run): 499
-- **总 RUN 条目: 1,823**，全部通过（24个包）
+- 顶层测试函数: 1,326（含 1 个 Unix 权限测试在 Windows 下跳过）
+- 子测试 (t.Run): 542
+- **总 RUN 条目: 1,868**，全部通过（24个包）
 - 集成测试: 8 测试，全部通过
 - E2E测试 (httptest): 90+ 测试，全部通过
 - E2E测试 (真实进程, -tags=integration): 4 子测试，全部通过
@@ -712,6 +712,15 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 **v2.9.4 变更（Dockerfile 修复）**:
 - 无新增测试（纯构建配置修复，不涉及 Go 代码逻辑变更）
 - 修复内容：Dockerfile ldflags 模块路径错误（`github.com/pairproxy/pairproxy` → `github.com/l17728/pairproxy`）；builder 基础镜像 `golang:1.25-alpine` → `golang:1.24-alpine`
+
+**v2.10.0 新增测试（OtoA 协议转换）**:
+- `internal/proxy/protocol_converter_test.go`：5 个新顶层测试函数，+45 RUN 条目
+  - ✅ `TestDetectConversionDirection` (6子测试) — `conversionDirection` 枚举检测，含 OtoA 方向
+  - ✅ `TestConvertOpenAIToAnthropicRequest` (15子测试) — 消息转换：system/user/assistant/tool role、图片块、工具调用、模型映射、stop_sequences
+  - ✅ `TestConvertAnthropicToOpenAIResponseReverse` (7子测试) — 响应转换：id前缀替换、finish_reason、usage、tool_use→tool_calls、zero cache 省略
+  - ✅ `TestConvertAnthropicErrorResponseToOpenAI` (3子测试) — 错误格式转换、非 Anthropic 错误透传
+  - ✅ `TestAnthropicToOpenAIStreamConverter` (7子测试) — 流式转换：文本/工具/finish_reason/usage/Flush 委托
+  - ✅ `TestOtoARequestConversionFailurePath` — 畸形 JSON 返回 error（非静默降级合约）
 
 **测试质量**: 优秀
 **代码稳定性**: 高
