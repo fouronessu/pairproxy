@@ -41,48 +41,53 @@ func (m *mockResponseWriter) String() string {
 	return m.buf.String()
 }
 
-func TestShouldConvertProtocol(t *testing.T) {
+func TestDetectConversionDirection(t *testing.T) {
 	tests := []struct {
 		name           string
 		requestPath    string
 		targetProvider string
-		want           bool
+		want           conversionDirection
 	}{
 		{
-			name:           "anthropic path + ollama target → convert",
+			name:           "anthropic path + ollama target → AtoO",
 			requestPath:    "/v1/messages",
 			targetProvider: "ollama",
-			want:           true,
+			want:           conversionAtoO,
 		},
 		{
-			name:           "anthropic path + openai target → convert",
+			name:           "anthropic path + openai target → AtoO",
 			requestPath:    "/v1/messages",
 			targetProvider: "openai",
-			want:           true,
+			want:           conversionAtoO,
 		},
 		{
-			name:           "anthropic path + anthropic target → no convert",
+			name:           "anthropic path + anthropic target → None",
 			requestPath:    "/v1/messages",
 			targetProvider: "anthropic",
-			want:           false,
+			want:           conversionNone,
 		},
 		{
-			name:           "openai path + ollama target → no convert",
+			name:           "openai path + anthropic target → OtoA",
 			requestPath:    "/v1/chat/completions",
-			targetProvider: "ollama",
-			want:           false,
+			targetProvider: "anthropic",
+			want:           conversionOtoA,
 		},
 		{
-			name:           "empty provider → no convert",
+			name:           "openai path + openai target → None",
+			requestPath:    "/v1/chat/completions",
+			targetProvider: "openai",
+			want:           conversionNone,
+		},
+		{
+			name:           "empty provider → None",
 			requestPath:    "/v1/messages",
 			targetProvider: "",
-			want:           false,
+			want:           conversionNone,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldConvertProtocol(tt.requestPath, tt.targetProvider)
+			got := detectConversionDirection(tt.requestPath, tt.targetProvider)
 			assert.Equal(t, tt.want, got)
 		})
 	}

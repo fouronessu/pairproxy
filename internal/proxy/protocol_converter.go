@@ -29,12 +29,31 @@ var ErrThinkingNotSupported = errors.New("Extended thinking (thinking parameter)
 //   - 目标 provider 为 "ollama" 或 "openai"
 // ---------------------------------------------------------------------------
 
-// shouldConvertProtocol 判断是否需要进行协议转换。
-// 当请求路径为 Anthropic 格式但目标 provider 为 OpenAI 兼容时返回 true。
-func shouldConvertProtocol(requestPath, targetProvider string) bool {
-	isAnthropicPath := strings.HasPrefix(requestPath, "/v1/messages")
-	isOpenAITarget := targetProvider == "openai" || targetProvider == "ollama"
-	return isAnthropicPath && isOpenAITarget
+// conversionDirection 表示协议转换方向。
+type conversionDirection int
+
+const (
+	conversionNone conversionDirection = iota // 无需转换
+	conversionAtoO                            // Anthropic 客户端 → OpenAI/Ollama 目标（已有实现）
+	conversionOtoA                            // OpenAI 客户端 → Anthropic 目标（新增）
+)
+
+// detectConversionDirection 根据请求路径和目标 provider 判断协议转换方向。
+func detectConversionDirection(requestPath, targetProvider string) conversionDirection {
+	if strings.HasPrefix(requestPath, "/v1/messages") &&
+		(targetProvider == "openai" || targetProvider == "ollama") {
+		return conversionAtoO
+	}
+	if strings.HasPrefix(requestPath, "/v1/chat/completions") &&
+		targetProvider == "anthropic" {
+		return conversionOtoA
+	}
+	return conversionNone
+}
+
+// shouldConvertProtocol は sproxy.go との互換のため一時的に残す。Task 5 で削除する。
+func shouldConvertProtocol(path, provider string) bool {
+	return detectConversionDirection(path, provider) == conversionAtoO
 }
 
 // mapModelName 将 Anthropic 模型名映射到目标提供商的本地模型名。
