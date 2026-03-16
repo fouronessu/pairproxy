@@ -41,6 +41,8 @@ type Reporter struct {
 	lastLatencyMs     atomic.Int64 // 最近一次心跳的延迟（毫秒），-1 表示从未成功
 	usageReportFails  atomic.Int64 // 用量上报失败累计次数（改进项2）
 	pendingRecords    atomic.Int64 // 当前待上报记录数（改进项2）
+
+	done chan struct{} // closed when loop exits
 }
 
 // HeartbeatFailures 返回累计心跳失败次数。
@@ -93,12 +95,21 @@ func NewReporter(logger *zap.Logger, cfg ReporterConfig, usageRepo *db.UsageRepo
 		maxBatch:     maxBatch,
 	}
 	r.lastLatencyMs.Store(-1) // -1 表示从未成功
+	r.done = make(chan struct{})
 	return r
 }
 
 // Start 启动后台上报 goroutine。
 func (r *Reporter) Start(ctx context.Context) {
-	go r.loop(ctx)
+	go func() {
+		r.loop(ctx)
+		close(r.done)
+	}()
+}
+
+// Wait 阻塞直到后台 goroutine 退出（用于测试和 graceful shutdown）。
+func (r *Reporter) Wait() {
+	<-r.done
 }
 
 func (r *Reporter) loop(ctx context.Context) {

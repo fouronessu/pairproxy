@@ -48,8 +48,11 @@ func TestReporterHeartbeat(t *testing.T) {
 	}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	r.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		r.Wait()
+	})
 
 	// 等待至少 2 个心跳（启动时立即 + 50ms 后）
 	time.Sleep(150 * time.Millisecond)

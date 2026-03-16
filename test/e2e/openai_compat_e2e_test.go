@@ -86,10 +86,12 @@ func TestOpenAIAuthE2E(t *testing.T) {
 
 	// Setup sproxy with OpenAI target
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	writer := db.NewUsageWriter(gormDB, logger, 200, 30*time.Second)
 	writer.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		writer.Wait()
+	})
 
 	sp, err := proxy.NewSProxy(logger, jwtMgr, writer, []proxy.LLMTarget{
 		{URL: mockOpenAI.URL, APIKey: "real-openai-key"},
@@ -274,10 +276,12 @@ func TestOpenAIStreamOptionsInjectionE2E(t *testing.T) {
 
 	// Setup sproxy
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	writer := db.NewUsageWriter(gormDB, logger, 200, 30*time.Second)
 	writer.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		writer.Wait()
+	})
 
 	sp, err := proxy.NewSProxy(logger, jwtMgr, writer, []proxy.LLMTarget{
 		{URL: mockOpenAI.URL, APIKey: "real-openai-key"},
