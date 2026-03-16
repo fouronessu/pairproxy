@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
-**生成时间**: 2026-03-14
-**测试版本**: v2.10.0 (OtoA 协议转换 — OpenAI 客户端透明访问 Anthropic 端点)
+**生成时间**: 2026-03-16
+**测试版本**: v2.10.1 (lint 修复 + 文档刷新)
 **测试环境**: Windows 11, Go 1.23
 
 ---
@@ -12,14 +12,14 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 跳过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,326 | 1,325 | 1 | 0 | 24个包全量单元测试（v2.10.0 +5：OtoA 协议转换） |
+| 单元测试 (UT) | ✅ PASS | 1,328 | 1,327 | 1 | 0 | 24个包全量单元测试（v2.10.1 累计） |
 | 子测试 (subtests) | ✅ PASS | 542 | 542 | 0 | 0 | t.Run 表驱动子测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | 0 | integration_by_GLM5_test.go |
 | E2E测试 (httptest) | ✅ PASS | 90+ | 90+ | 0 | 0 | 含 Direct Proxy E2E + 用户流量 + LLM Target |
 | E2E测试 (integration) | ✅ PASS | 4 | 4 | 0 | 0 | TestFullChainWithMockProcesses 真实进程测试 |
 | 协议转换测试 | ✅ PASS | 80+ | 80+ | 0 | 0 | 含 OtoA 请求/响应/流式/错误转换（v2.10.0 +45 RUN） |
 
-**总计**: 1,868 RUN 条目（1,326 顶层测试 + 542 子测试），全部通过
+**总计**: 1,870 RUN 条目（1,328 顶层测试 + 542 子测试），全部通过
 
 ---
 
@@ -587,12 +587,28 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 根据之前的覆盖率分析：
 - **总体覆盖率**: ~70%
-- **核心模块覆盖率**: 80%+
-  - internal/auth: 85%
-  - internal/db: 82%
-  - internal/proxy: 78%
-  - internal/quota: 88%
-  - internal/lb: 80%
+- **核心模块覆盖率**（v2.10.1 实测）:
+  - internal/alert: 89.9%
+  - internal/api: 69.5%
+  - internal/auth: 85.0%
+  - internal/cluster: 80.9%
+  - internal/config: 97.1%
+  - internal/dashboard: 62.8%
+  - internal/db: 80.3%
+  - internal/eventlog: 93.0%
+  - internal/keygen: 94.5%
+  - internal/lb: 93.6%
+  - internal/metrics: 94.7%
+  - internal/otel: 66.7%
+  - internal/preflight: 89.6%
+  - internal/proxy: 81.3%
+  - internal/quota: 94.4%
+  - internal/tap: 98.5%
+  - internal/track: 84.7%
+  - internal/version: 100.0%
+  - cmd/mockllm: 62.4%
+  - cmd/cproxy: 32.4%（CLI main 入口，正常）
+  - cmd/sproxy: 10.8%（CLI main 入口，正常）
 
 ---
 
@@ -600,9 +616,9 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ✅ **所有测试用例已全部执行并通过**
 
-- 顶层测试函数: 1,326（含 1 个 Unix 权限测试在 Windows 下跳过）
+- 顶层测试函数: 1,328（含 1 个 Unix 权限测试在 Windows 下跳过）
 - 子测试 (t.Run): 542
-- **总 RUN 条目: 1,868**，全部通过（24个包）
+- **总 RUN 条目: 1,870**，全部通过（24个包）
 - 集成测试: 8 测试，全部通过
 - E2E测试 (httptest): 90+ 测试，全部通过
 - E2E测试 (真实进程, -tags=integration): 4 子测试，全部通过

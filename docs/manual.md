@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.10.0**
+**版本 v2.10.1**
 
 ---
 
@@ -3960,6 +3960,38 @@ const (
 # 验证版本
 ./sproxy version
 # 应输出：sproxy v2.10.0 (...)
+```
+
+## §26 v2.10.1 更新说明
+
+**版本**: v2.10.1 — lint 修复 + 文档刷新
+
+### 26.1 变更内容
+
+此为 patch 版本，无新功能，无数据库变更。
+
+#### Bug 修复
+
+- **lint: singleCaseSwitch**（`internal/proxy/protocol_converter.go`）：`AnthropicToOpenAIStreamConverter` 中 `content_block_start` handler 的单 case switch 改写为 if，消除 gocritic 告警，CI 全绿。
+
+#### 文档刷新
+
+- `docs/manual.md`：版本号更新至 v2.10.1，新增本节
+- `docs/TEST_REPORT.md`：测试数更新（1,870 RUN），覆盖率按包精确列出
+- `docs/ACCEPTANCE_REPORT.md`：版本号、代码规模（57,579 行）、测试数、覆盖率表全量更新
+- `README.md`：版本号、测试数、代码规模同步更新
+
+### 26.2 升级指南
+
+无数据库变更，直接替换二进制即可：
+
+```bash
+# https://github.com/l17728/pairproxy/releases/tag/v2.10.1
+
+./sproxy start --config sproxy.yaml
+
+./sproxy version
+# 应输出：sproxy v2.10.1 (...)
 ```
 
 OtoA 功能自动生效，无需任何配置变更。现有 AtoO 配置不受影响。

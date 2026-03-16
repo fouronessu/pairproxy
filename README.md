@@ -54,6 +54,7 @@
 | **告警页面** | Dashboard 实时 WARN/ERROR 日志查看器，通过 SSE 推送，无需刷新 |
 | **批量导入** | `sproxy admin import <file>` 从模板文件批量创建分组/用户，支持 `--dry-run` 预览和 WebUI 操作 |
 | **协议转换进阶** | 图片内容块转换（Anthropic→OpenAI）、OpenAI 错误响应转 Anthropic 格式、model_mapping 配置、prefill/thinking 拒绝（HTTP 400） |
+| **OtoA 双向协议转换（v2.10.0）** | OpenAI 格式客户端（Cursor、Continue.dev 等）透明访问 Anthropic 端点，请求路径 `/v1/chat/completions` + target `provider: anthropic` 自动触发 |
 | **Direct Proxy（v2.9.0）** | `sk-pp-` API Key 直连，无需 cproxy；访问 `/keygen/` 自助生成 Key；同时支持 OpenAI (`/v1/`) 和 Anthropic (`/anthropic/`) 两种头格式 |
 
 ---

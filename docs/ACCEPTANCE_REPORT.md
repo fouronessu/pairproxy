@@ -1,10 +1,10 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.10.0 (OtoA 协议转换 — OpenAI 客户端透明访问 Anthropic 端点)
-**提交日期**: 2026-03-14
+**版本**: v2.10.1 (lint 修复 + 文档刷新)
+**提交日期**: 2026-03-16
 **开发语言**: Go 1.23
-**代码规模**: 75,000+ 行 (新增约 1,500 行)
+**代码规模**: 57,579 行非空非注释 Go 代码（含测试）
 
 ---
 
@@ -72,18 +72,20 @@ Anthropic  OpenAI
 
 | 模块 | 代码行数 | 核心功能 |
 |------|---------|---------|
-| 认证授权 (auth) | ~2,500 | JWT、Token管理、密码加密 |
-| 数据库 (db) | ~5,200 | 用户/分组/配额/日志/LLM Target 管理 |
-| 代理核心 (proxy) | ~5,500 | HTTP代理、流式处理、OpenAI兼容、协议转换（v2.8.0增强） |
-| 负载均衡 (lb) | ~1,800 | 加权随机、健康检查、熔断 |
-| 配额管理 (quota) | ~1,500 | 日/月配额、RPM限流、并发控制 |
-| 集群管理 (cluster) | ~1,200 | 路由表、心跳、节点管理 |
-| 监控指标 (metrics) | ~800 | Prometheus指标、延迟统计 |
-| 告警 (alert) | ~600 | Webhook通知 |
-| 流量分析 (tap) | ~800 | Token统计、SSE解析 |
-| 对话追踪 (track) | ~500 | 按用户记录对话内容、JSON持久化 |
-| API接口 (api) | ~4,800 | REST API、管理接口、LLM Target API |
-| Dashboard | ~2,800 | Web界面、图表 |
+| 认证授权 (auth) | 2,042 | JWT、Token管理、密码加密 |
+| 数据库 (db) | 5,236 | 用户/分组/配额/日志/LLM Target 管理 |
+| 代理核心 (proxy) | 10,416 | HTTP代理、流式处理、OpenAI兼容、协议转换（双向） |
+| 负载均衡 (lb) | 1,622 | 加权随机、健康检查、熔断 |
+| 配额管理 (quota) | 1,514 | 日/月配额、RPM限流、并发控制 |
+| 集群管理 (cluster) | 1,591 | 路由表、心跳、节点管理 |
+| 监控指标 (metrics) | 1,368 | Prometheus指标、延迟统计 |
+| 告警 (alert) | 914 | Webhook通知 |
+| 流量分析 (tap) | 1,595 | Token统计、SSE解析 |
+| 对话追踪 (track) | 648 | 按用户记录对话内容、JSON持久化 |
+| API Key生成 (keygen) | 507 | sk-pp- Key生成、验证、LRU缓存 |
+| 事件日志 (eventlog) | 365 | SSE告警日志Hub |
+| API接口 (api) | 6,804 | REST API、管理接口、LLM Target API |
+| Dashboard | 5,772 | Web界面、图表 |
 
 **v2.8.0 新增功能 (协议转换进阶 + 告警页面 + 批量导入)**:
 - **告警页面**: Dashboard `/dashboard/alerts` 页面，实时展示 WARN/ERROR 日志，通过 SSE (`/api/admin/alerts/stream`) 推送
@@ -97,7 +99,7 @@ Anthropic  OpenAI
   - 强制 LLM 绑定（未绑定用户返回 HTTP 403）
   - model_mapping 配置（模型名映射，支持通配符 `*` 回退）
 - **GLM 风格 SSE 修复**: `message_start.input_tokens=0` 时从 `message_delta` 回填 input_tokens
-- **测试覆盖**: 45+ 新测试用例（OtoA），总计 1,868 RUN 条目（含全版本累计）全部通过
+- **测试覆盖**: 总计 1,870 RUN 条目（1,328 顶层 + 542 子测试）全部通过
 
 **v2.7.0 新增功能 (LLM Target 动态管理)**:
 - **配置文件 + 数据库双来源**: 配置文件中的 targets 自动同步到数据库，支持数据库动态增删改查
@@ -163,10 +165,16 @@ pairproxy/
 
 | 类别 | 行数 | 占比 | 说明 |
 |------|------|------|------|
-| 业务代码 (internal) | 37,200 | 66.8% | 核心业务逻辑（含 track 包） |
-| 命令行工具 (cmd) | 9,100 | 16.3% | CLI和入口程序 |
-| 测试代码 (test) | 9,352 | 16.8% | 单元/集成/E2E测试 |
-| **总计** | **55,652** | **100%** | 纯Go代码 |
+| 代理核心 (internal/proxy) | 10,416 | 18.1% | HTTP代理、流式处理、协议转换 |
+| API 层 (internal/api) | 6,804 | 11.8% | REST API 处理器 |
+| E2E 测试 (test/e2e) | 6,111 | 10.6% | 端到端测试 |
+| CLI 入口 (cmd/sproxy) | 5,846 | 10.2% | sproxy 命令行 |
+| Dashboard (internal/dashboard) | 5,772 | 10.0% | Web 管理界面 |
+| 数据库层 (internal/db) | 5,236 | 9.1% | SQLite ORM 操作 |
+| 客户端 (cmd/cproxy) | 1,848 | 3.2% | cproxy 命令行 |
+| 其他 internal 包 | 11,972 | 20.8% | auth/lb/quota/metrics/track 等 |
+| 其他 | 3,574 | 6.2% | config/cluster/otel/version 等 |
+| **总计** | **57,579** | **100%** | 非空非注释 Go 代码（含测试）|
 
 ---
 
@@ -232,17 +240,43 @@ sproxy admin track disable alice   # 关闭追踪
 
 | 测试类型 | 测试数量 | 通过 | 失败 | 覆盖率 | 状态 |
 |---------|---------|------|------|--------|------|
-| 单元测试 (UT) | 1,326 | 1,325 | 0 | ~75% | ✅ PASS |
+| 单元测试 (UT) | 1,328 | 1,327 | 0 | 见下表 | ✅ PASS |
 | 子测试 (subtests) | 542 | 542 | 0 | N/A | ✅ PASS |
 | 集成测试 | 8 | 8 | 0 | N/A | ✅ PASS |
 | E2E测试 (httptest) | 90+ | 90+ | 0 | N/A | ✅ PASS |
 | E2E测试 (integration) | 4 | 4 | 0 | N/A | ✅ PASS |
 | 协议转换测试 | 80+ | 80+ | 0 | 83.2% | ✅ PASS |
-| **总计** | **1,868 RUN** | **1,868 RUN** | **0** | **~75%** | **✅ PASS** |
+| **总计** | **1,870 RUN** | **1,870 RUN** | **0** | — | **✅ PASS** |
 
-**测试执行时间**: 2026-03-13
+**测试执行时间**: 2026-03-16
 **测试环境**: Windows 11, Go 1.23
 **测试结论**: 所有测试通过，系统稳定可靠
+
+### 各包覆盖率（v2.10.1 实测）
+
+| 包 | 覆盖率 |
+|----|--------|
+| internal/version | 100.0% |
+| internal/tap | 98.5% |
+| internal/keygen | 94.5% |
+| internal/metrics | 94.7% |
+| internal/quota | 94.4% |
+| internal/eventlog | 93.0% |
+| internal/lb | 93.6% |
+| internal/preflight | 89.6% |
+| internal/alert | 89.9% |
+| internal/auth | 85.0% |
+| internal/track | 84.7% |
+| internal/proxy | 81.3% |
+| internal/cluster | 80.9% |
+| internal/db | 80.3% |
+| internal/config | 97.1% |
+| internal/otel | 66.7% |
+| internal/dashboard | 62.8% |
+| internal/api | 69.5% |
+| cmd/mockllm | 62.4% |
+| cmd/cproxy | 32.4%（CLI main，正常）|
+| cmd/sproxy | 10.8%（CLI main，正常）|
 
 **v2.8.0 新增测试** (32+ 新测试用例):
 - `internal/tap/anthropic_parser_test.go`: 2个新边界用例（NoUsageInMessageStart、NilAndEmpty）
@@ -678,7 +712,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 
 ### 9.2 代码质量
 
-✅ **代码规模**: 75,000+ 行 (合理规模)
+✅ **代码规模**: 57,579 行非空非注释 Go 代码（含测试，合理规模）
 ✅ **测试覆盖**: 1,868 RUN 条目（1,326 顶层 + 542 子测试），覆盖率~75%
 ✅ **代码规范**: 通过golangci-lint检查
 ✅ **文档完整**: 用户手册、API文档、设计文档齐全
