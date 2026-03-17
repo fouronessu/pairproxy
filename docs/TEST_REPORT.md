@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
-**生成时间**: 2026-03-17
-**测试版本**: v2.12.0 (Worker 节点一致性修复)
+**生成时间**: 2026-03-18
+**测试版本**: v2.13.0 (PostgreSQL 支持 + 全面覆盖率提升)
 **测试环境**: Windows 11, Go 1.23
 
 ---
@@ -12,14 +12,14 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 跳过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,346 | 1,345 | 1 | 0 | 24个包全量单元测试（v2.12.0 累计） |
+| 单元测试 (UT) | ✅ PASS | 1,886 | 1,885 | 1 | 0 | 24个包全量单元测试（v2.13.0 累计） |
 | 子测试 (subtests) | ✅ PASS | 557 | 557 | 0 | 0 | t.Run 表驱动子测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | 0 | integration_by_GLM5_test.go |
 | E2E测试 (httptest) | ✅ PASS | 90+ | 90+ | 0 | 0 | 含 Direct Proxy E2E + 用户流量 + LLM Target |
 | E2E测试 (integration) | ✅ PASS | 4 | 4 | 0 | 0 | TestFullChainWithMockProcesses 真实进程测试 |
 | 协议转换测试 | ✅ PASS | 80+ | 80+ | 0 | 0 | 含 OtoA 请求/响应/流式/错误转换（v2.10.0 +45 RUN） |
 
-**总计**: 1,903 RUN 条目（1,346 顶层测试 + 557 子测试），全部通过
+**总计**: 2,443 RUN 条目（1,886 顶层测试 + 557 子测试），全部通过
 
 ---
 
@@ -585,28 +585,28 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ## 测试覆盖率
 
-根据之前的覆盖率分析：
-- **总体覆盖率**: ~70%
-- **核心模块覆盖率**（v2.12.0 实测）:
-  - internal/alert: 89.9%
-  - internal/api: 70.0%
-  - internal/auth: 85.0%
-  - internal/cluster: 81.3%
-  - internal/config: 97.1%
-  - internal/dashboard: 62.7%
-  - internal/db: 80.2%
-  - internal/eventlog: 93.0%
-  - internal/keygen: 94.5%
-  - internal/lb: 93.6%
-  - internal/metrics: 94.7%
-  - internal/otel: 66.7%
-  - internal/preflight: 89.6%
-  - internal/proxy: 81.3%
-  - internal/quota: 94.4%
-  - internal/tap: 98.5%
-  - internal/track: 84.7%
+根据 v2.13.0 实测（`go test -coverprofile` 全量测量）：
+- **总体覆盖率**: 76.2%（v2.12.0 基准 71.5%，+4.7 pp）
+- **核心模块覆盖率**（v2.13.0 实测）:
   - internal/version: 100.0%
-  - cmd/mockllm: 62.4%
+  - internal/tap: 100.0%（v2.12.0: 98.5%）
+  - internal/eventlog: 98.2%（v2.12.0: 93.0%）
+  - internal/metrics: 98.0%（v2.12.0: 94.7%）
+  - internal/db: 96.3%（v2.12.0: 80.2%，新增 PostgreSQL + 全量 Repo 错误路径）
+  - internal/lb: 96.1%（v2.12.0: 93.6%）
+  - internal/quota: 95.8%（v2.12.0: 94.4%）
+  - internal/keygen: 97.7%（v2.12.0: 94.5%）
+  - internal/track: 94.5%（v2.12.0: 84.7%）
+  - internal/alert: 94.2%（v2.12.0: 89.9%）
+  - internal/config: 97.1%（不变）
+  - internal/preflight: 89.6%（不变）
+  - internal/auth: 85.9%（v2.12.0: 85.0%）
+  - internal/otel: 85.7%（v2.12.0: 66.7%）
+  - internal/proxy: 83.8%（v2.12.0: 81.3%）
+  - internal/cluster: 82.8%（v2.12.0: 81.3%）
+  - internal/api: 81.2%（v2.12.0: 70.0%）
+  - cmd/mockllm: 80.0%（v2.12.0: 62.4%）
+  - internal/dashboard: 62.7%（HTML 模板渲染，正常）
   - cmd/cproxy: 32.4%（CLI main 入口，正常）
   - cmd/sproxy: 10.7%（CLI main 入口，正常）
 
@@ -616,9 +616,9 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ✅ **所有测试用例已全部执行并通过**
 
-- 顶层测试函数: 1,346（含 1 个 Unix 权限测试在 Windows 下跳过）
+- 顶层测试函数: 1,886（含 1 个 Unix 权限测试在 Windows 下跳过）
 - 子测试 (t.Run): 557
-- **总 RUN 条目: 1,903**，全部通过（24个包）
+- **总 RUN 条目: 2,443**，全部通过（24个包）
 - 集成测试: 8 测试，全部通过
 - E2E测试 (httptest): 90+ 测试，全部通过
 - E2E测试 (真实进程, -tags=integration): 4 子测试，全部通过
@@ -757,6 +757,35 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 - `internal/api/keygen_handler_test.go`：2 个新测试
   - ✅ `TestKeygenWorkerBlocked` (2子测试) — Worker 节点 POST login/regenerate 返回 403
   - ✅ `TestKeygenWorkerAllowsStaticPage` — Worker 节点 GET /keygen/ 返回 200
+
+**v2.13.0 新增测试（PostgreSQL 支持 + 全面覆盖率提升，+540 RUN）**:
+
+PostgreSQL 核心测试（`internal/db/postgres_test.go`、`internal/db/db_test.go`、`internal/config/postgres_config_test.go`）:
+- ✅ `TestBuildPostgresDSN_FromDSN` / `TestBuildPostgresDSN_FromFields` — DSN 构建逻辑
+- ✅ `TestBuildPostgresDSN_PartialFields` — 部分字段为空时仍能拼接
+- ✅ `TestMaskDSN_KVFormat` / `TestMaskDSN_URLFormat` — 密码脱敏（含 end-of-string、空密码边界）
+- ✅ `TestDriverName_Nil` / `TestDriverName_SQLite` / `TestDriverName_Postgres` — 方言识别（无需真实 PG）
+- ✅ `TestOpenWithConfig_ConnectionPoolDefaults` — :memory: MaxOpen=1，文件库 MaxOpen=25
+- ✅ `TestOpenWithConfig_CustomMaxOpenConns` — 用户自定义值不被默认值覆盖
+- ✅ `TestOpenWithConfig_MaxIdleConnsCapping` — maxIdle>maxOpen 时 WARN 日志 + 自动截断
+- ✅ `TestOpenWithConfig_CustomLifecycleParams` — 自定义生命周期参数不被覆盖
+- ✅ `TestOpenWithConfig_ErrorWrapping` — 连接失败时错误含 "open database" 前缀
+- ✅ `TestApplySProxyDefaults_PGDefaults` / `TestApplySProxyDefaults_SQLiteDefault` — 默认值填充
+- ✅ `TestValidate_PostgresDSNOK` / `TestValidate_PostgresMissingDSNAndFields` — PG DSN 校验
+- ✅ `TestValidate_PostgresFieldsOK` / `TestValidate_PostgresMissingIndividualFields` (3子测试) — 独立字段校验
+- ✅ `TestValidate_PostgresInvalidSSLMode` / `TestValidate_PostgresSSLModeValidValues` (7子测试) — SSLMode 枚举校验
+- ✅ `TestValidate_PostgresPortBoundaryValues` (5子测试) — Port 边界值（0/1/65535/−1/65536）
+- ✅ `TestValidate_PostgresDSNSetPortIgnored` — DSN 模式下 Port 越界校验跳过
+
+全包覆盖率提升（17 个 `*_coverage_test.go` 文件，共 +540 RUN）:
+- `internal/db/db_coverage_test.go`: 覆盖 UserRepo.ListAll/ListActive/GetActiveUsers/Delete/SetQuota 及全部 Repo 错误路径（db 80.2%→96.3%）
+- `internal/api/admin_auth_coverage_test.go` + `llm_keygen_cluster_coverage_test.go`: 覆盖 handleRefresh/Login/Logout/RevokeUserTokens/SetUserGroup、RegisterRoutes、GetTarget 等（api 70%→81.2%）
+- `internal/proxy/proxy_coverage_test.go`: 覆盖 db_adapter.go 全部函数、ptrToString、SetConvTracker 等（proxy 81.3%→83.8%）
+- `internal/track/track_coverage_test.go`: 覆盖 Dir()、Enable/Disable 边界、extractors（track 84.7%→94.5%）
+- `internal/eventlog/eventlog_coverage_test.go`: 覆盖 Sync/Check/Recent/环形缓冲区（eventlog 93%→98.2%）
+- `internal/otel/otel_coverage_test.go`: 覆盖 Setup disabled/stdout/gRPC/HTTP 分支（otel 66.7%→85.7%）
+- `cmd/mockllm/mockllm_coverage_test.go`: 覆盖 extractUserContent/handleMessages/estimateTokens（mockllm 62.4%→80.0%）
+- 其他 10 个包：internal/alert、internal/keygen、internal/lb、internal/metrics、internal/auth、internal/cluster、internal/quota、internal/tap、internal/preflight、internal/auth
 
 **测试质量**: 优秀
 **代码稳定性**: 高

@@ -1,7 +1,7 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.12.0 (Worker 节点一致性修复)
+**版本**: v2.13.0 (PostgreSQL 支持 + 全面覆盖率提升)
 **提交日期**: 2026-03-17
 **开发语言**: Go 1.23
 **代码规模**: 57,579 行非空非注释 Go 代码（含测试，Phase 1~3 新增约 1,800 行）
@@ -240,41 +240,41 @@ sproxy admin track disable alice   # 关闭追踪
 
 | 测试类型 | 测试数量 | 通过 | 失败 | 覆盖率 | 状态 |
 |---------|---------|------|------|--------|------|
-| 单元测试 (UT) | 1,346 | 1,345 | 0 | 见下表 | ✅ PASS |
+| 单元测试 (UT) | 1,886 | 1,885 | 0 | 见下表 | ✅ PASS |
 | 子测试 (subtests) | 557 | 557 | 0 | N/A | ✅ PASS |
 | 集成测试 | 8 | 8 | 0 | N/A | ✅ PASS |
 | E2E测试 (httptest) | 90+ | 90+ | 0 | N/A | ✅ PASS |
 | E2E测试 (integration) | 4 | 4 | 0 | N/A | ✅ PASS |
 | 协议转换测试 | 80+ | 80+ | 0 | 83.2% | ✅ PASS |
-| **总计** | **1,903 RUN** | **1,903 RUN** | **0** | — | **✅ PASS** |
+| **总计** | **2,443 RUN** | **2,443 RUN** | **0** | — | **✅ PASS** |
 
-**测试执行时间**: 2026-03-17
+**测试执行时间**: 2026-03-18
 **测试环境**: Windows 11, Go 1.23
 **测试结论**: 所有测试通过，系统稳定可靠
 
-### 各包覆盖率（v2.12.0 实测）
+### 各包覆盖率（v2.13.0 实测）
 
 | 包 | 覆盖率 |
 |----|--------|
 | internal/version | 100.0% |
-| internal/tap | 98.5% |
+| internal/tap | 100.0% |
 | internal/config | 97.1% |
-| internal/keygen | 94.5% |
-| internal/metrics | 94.7% |
-| internal/quota | 94.4% |
-| internal/eventlog | 93.0% |
-| internal/lb | 93.6% |
+| internal/keygen | 97.7% |
+| internal/eventlog | 98.2% |
+| internal/metrics | 98.0% |
+| internal/quota | 95.8% |
+| internal/lb | 96.1% |
+| internal/db | 96.3% |
 | internal/preflight | 89.6% |
-| internal/alert | 89.9% |
-| internal/auth | 85.0% |
-| internal/track | 84.7% |
-| internal/proxy | 81.3% |
-| internal/cluster | 81.3% |
-| internal/db | 80.2% |
-| internal/api | 70.0% |
-| internal/otel | 66.7% |
+| internal/alert | 94.2% |
+| internal/track | 94.5% |
+| internal/auth | 85.9% |
+| internal/proxy | 83.8% |
+| internal/cluster | 82.8% |
+| internal/api | 81.2% |
+| internal/otel | 85.7% |
 | internal/dashboard | 62.7% |
-| cmd/mockllm | 62.4% |
+| cmd/mockllm | 80.0% |
 | cmd/cproxy | 32.4%（CLI main，正常）|
 | cmd/sproxy | 10.7%（CLI main，正常）|
 
@@ -283,6 +283,11 @@ sproxy admin track disable alice   # 关闭追踪
 - `internal/tap/openai_parser_test.go`: 1个新边界用例（NilAndEmpty）
 - `internal/proxy/protocol_converter_test.go`: 4+个新用例（MapModelName、图片转换、错误转换、prefill/thinking拒绝）
 - `test/e2e/user_traffic_e2e_test.go`: 5个新E2E测试（活跃用户查询、配额状态、权限隔离）
+
+**v2.13.0 新增测试**（PostgreSQL 支持 + 全面覆盖率提升，+540 RUN）:
+- `internal/db/postgres_test.go`、`internal/db/db_test.go`: PostgreSQL DSN 构建、驱动识别、连接池默认值、错误包装等 15 个测试
+- `internal/config/postgres_config_test.go`: PG 默认值填充、字段校验、SSLMode 枚举、Port 边界值等 10 个测试
+- 17 个 `*_coverage_test.go` 文件：覆盖率从 71.5%→76.2%，新增 ~525 个测试
 
 **v2.12.0 新增测试**（Worker 节点一致性修复，+33 RUN）:
 - `internal/cluster/config_syncer_test.go`: 8个测试（ConfigSyncer 拉取/幂等/错误容忍/LLM同步/PullFailures计数）
@@ -614,7 +619,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 | internal/cluster | 75% | 良好 |
 | internal/metrics | 72% | 良好 |
 | internal/api | 70% | 良好 |
-| **平均覆盖率** | **~70%** | **良好** |
+| **平均覆盖率** | **76.2%** | **良好** |
 
 ### 7.2 覆盖的功能特性
 
@@ -719,13 +724,13 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 ### 9.2 代码质量
 
 ✅ **代码规模**: ~59,000 行非空非注释 Go 代码（含测试；v2.11.0 基准 57,579 行，v2.12.0 新增约 1,800 行）
-✅ **测试覆盖**: 1,903 RUN 条目（1,346 顶层 + 557 子测试），覆盖率~70%
+✅ **测试覆盖**: 2,443 RUN 条目（1,886 顶层 + 557 子测试），覆盖率 76.2%
 ✅ **代码规范**: 通过golangci-lint检查
 ✅ **文档完整**: 用户手册、API文档、设计文档齐全
 
 ### 9.3 测试质量
 
-✅ **单元测试**: 1,346 顶层 + 557 子测试 = 1,903 RUN，全部通过（24包）
+✅ **单元测试**: 1,886 顶层 + 557 子测试 = 2,443 RUN，全部通过（24包）
 ✅ **集成测试**: 8 测试，全部通过
 ✅ **E2E测试**: 90+ 测试，全部通过
 ✅ **真实进程测试**: 4 子测试，全部通过（-tags=integration）
@@ -783,7 +788,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 ---
 
 **验收日期**: 2026-03-17
-**验收版本**: v2.12.0
+**验收版本**: v2.13.0
 **验收人员**: Claude Sonnet 4.6
 **验收结果**: ✅ 通过
 

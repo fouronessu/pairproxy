@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.12.0**
+**版本 v2.13.0**
 
 ---
 
@@ -43,6 +43,7 @@
     - [16.9 协议自动转换（Claude CLI + Ollama）](#169-协议自动转换claude-cli--ollama)
 16. [用户对话内容跟踪](#17-用户对话内容跟踪)
 17. [升级指南](#18-升级指南)
+- [§28 PostgreSQL 数据库支持（v2.13.0）](#28-postgresql-数据库支持v2130)
 
 ---
 
@@ -3503,6 +3504,15 @@ curl http://localhost:9000/health
 - 新增 `/anthropic/` 和 `/v1/` 直连路由（混合模式），与旧版 cproxy 路由完全兼容
 - 协议转换补全：`content_filter` finish_reason 现在正确映射为 `end_turn`；流式 `message_delta` 携带准确 `input_tokens`
 
+### v2.13.0 升级说明
+
+- **无 Breaking Change**，SQLite 配置无需任何修改
+- 如需切换到 PostgreSQL：
+  1. 在 `sproxy.yaml` 中设置 `database.driver: "postgres"` 并配置连接信息
+  2. 启动 sproxy —— AutoMigrate 自动建表，无需手动操作
+  3. PostgreSQL 模式下 ConfigSyncer 自动禁用（节点共享同一 DB）
+- 如继续使用 SQLite：配置文件无需任何修改，行为与 v2.12.0 完全一致
+
 ---
 
 ## 20. Direct Proxy — sk-pp- API Key 直连（v2.9.0）
@@ -4178,7 +4188,7 @@ Error: 403 Forbidden: worker_read_only — write operations not allowed on worke
 
 # 验证版本
 ./sproxy version
-# 应输出：sproxy v2.12.0 (...)
+# 应输出：sproxy v2.13.0 (...)
 ```
 
 **Worker 节点配置补充**（若尚未配置 `cluster.shared_secret`）：
@@ -4191,3 +4201,101 @@ cluster:
 ```
 
 Primary 节点无需修改配置，`/api/internal/config-snapshot` 端点自动注册。
+
+---
+
+## 28. PostgreSQL 数据库支持（v2.13.0）
+
+> **适用场景**：多节点集群部署、需要高并发写入、或希望所有节点实时共享同一数据库。
+
+### 28.1 为什么需要 PostgreSQL 支持
+
+SQLite 是单文件数据库，每个节点独立维护本地副本，依赖 ConfigSyncer 每 30 秒从 Primary 同步一次。这意味着：
+
+- **30 秒一致性窗口**：用户刚创建或配额刚修改，Worker 节点最多 30 秒后才知晓
+- **同步失败风险**：网络抖动时，Worker 可能使用过期配置（如已禁用用户仍能访问）
+- **写并发瓶颈**：SQLite WAL 模式写操作仍需排他锁，高并发写入时存在性能瓶颈
+
+PostgreSQL 解决方案：**所有节点共享同一个 PostgreSQL 实例**，直接读写相同数据，无一致性窗口，无需 ConfigSyncer 同步。
+
+### 28.2 配置方法
+
+在 `sproxy.yaml` 的 `database` 节新增配置：
+
+```yaml
+database:
+  # 切换到 PostgreSQL
+  driver: "postgres"
+
+  # 方案 A：完整 DSN（推荐，便于注入 Secret）
+  dsn: "${DATABASE_URL}"
+
+  # 方案 B：独立字段（若 dsn 为空则从这些字段拼接）
+  # host: "postgres.company.com"
+  # port: 5432
+  # user: "pairproxy"
+  # password: "${DB_PASSWORD}"
+  # dbname: "pairproxy"
+  # sslmode: "require"    # disable | allow | prefer | require | verify-ca | verify-full
+
+  # 连接池（可选，使用默认值即可）
+  max_open_conns: 50       # PostgreSQL 默认 50（MVCC 支持高并发）
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+```
+
+> **SQLite 默认不变**：省略 `driver` 字段或设置 `driver: "sqlite"` 则使用 SQLite，行为与旧版完全一致。
+
+### 28.3 默认值说明
+
+| 参数 | SQLite 默认 | PostgreSQL 默认 |
+|------|------------|----------------|
+| `max_open_conns` | 25（文件库）/ 1（:memory:）| 50 |
+| `max_idle_conns` | 10 | 10 |
+| `conn_max_lifetime` | 1h | 1h |
+| `conn_max_idle_time` | 10m | 10m |
+| `port` | N/A | 5432 |
+| `sslmode` | N/A | disable |
+
+### 28.4 集群模式下的行为变化
+
+**PostgreSQL 模式**：
+- 所有节点（Primary + Workers）直接读写同一 PG 实例
+- **ConfigSyncer 自动禁用**：不再需要 30 秒轮询同步
+- 日志会输出：`"shared PostgreSQL detected — ConfigSyncer disabled"`
+- **Worker 写操作封锁仍然保留**：防止多个 Worker 并发执行管理操作（如同时修改同一用户的配额）
+
+**SQLite 模式（不变）**：
+- 每个节点独立 SQLite 文件
+- ConfigSyncer 每 30 秒从 Primary 同步配置快照
+- Worker 写操作封锁（403 `worker_read_only`）
+
+### 28.5 快速验证
+
+```bash
+# 1. 设置环境变量
+export DATABASE_URL="host=localhost user=postgres password=test dbname=pairproxy port=5432 sslmode=disable"
+
+# 2. 修改 sproxy.yaml
+#    database:
+#      driver: "postgres"
+#      dsn: "${DATABASE_URL}"
+
+# 3. 启动
+./sproxy start --config sproxy.yaml
+
+# 4. 验证日志
+# 应看到：
+# INFO  db  opening PostgreSQL database  dsn=host=localhost user=postgres password=*** dbname=pairproxy port=5432 sslmode=disable
+# INFO  db  PostgreSQL database opened successfully  ...
+# INFO  sproxy  shared PostgreSQL detected — ConfigSyncer disabled  ...
+```
+
+### 28.6 注意事项
+
+- **纯 Go 驱动**：使用 `pgx/v5` 纯 Go 驱动，无 CGO 依赖，Windows 下直接可用
+- **首次启动自动建表**：AutoMigrate 自动在 PostgreSQL 中创建所有表和索引
+- **DSN 密码脱敏**：日志中 `password=***`，不会泄露真实密码
+- **PostgreSQL 版本要求**：9.5+（支持 `CREATE INDEX IF NOT EXISTS`）
+- **向后兼容**：不修改 `driver` 字段则行为与旧版完全一致

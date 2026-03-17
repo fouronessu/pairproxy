@@ -57,6 +57,7 @@
 | **OtoA 双向协议转换（v2.10.0）** | OpenAI 格式客户端（Cursor、Continue.dev 等）透明访问 Anthropic 端点，请求路径 `/v1/chat/completions` + target `provider: anthropic` 自动触发 |
 | **Direct Proxy（v2.9.0）** | `sk-pp-` API Key 直连，无需 cproxy；访问 `/keygen/` 自助生成 Key；同时支持 OpenAI (`/v1/`) 和 Anthropic (`/anthropic/`) 两种头格式 |
 | **Worker 节点一致性（v2.12.0）** | ConfigSyncer 每 30s 从 Primary 拉取配置快照同步到本地 DB；Worker 写操作全部封锁（403 `worker_read_only`）；WebUI 只读横幅；统计响应头标注；CLI Primary-only 命令标注 |
+| **PostgreSQL 支持（v2.13.0）** | 新增 `driver: postgres` 选项，所有节点共享同一 PostgreSQL 实例，彻底解决 Worker 30s 一致性窗口；SQLite 保持默认向后兼容；支持 DSN 或独立字段（host/port/user/password/dbname/sslmode）；PG 模式下 ConfigSyncer 自动禁用 |
 
 ---
 
@@ -604,7 +605,7 @@ pairproxy/
 | 组件 | 选型 | 理由 |
 |------|------|------|
 | HTTP 反向代理 | `net/http/httputil.ReverseProxy` | 标准库，SSE 天然支持 |
-| 数据库 | SQLite + GORM (`glebarez/sqlite`) | 纯 Go，无 CGO，单文件部署 |
+| 数据库 | SQLite + GORM (`glebarez/sqlite`) / PostgreSQL (`gorm.io/driver/postgres`) | 纯 Go，无 CGO；SQLite 默认单文件部署，PostgreSQL 支持多节点共享（v2.13.0） |
 | CLI | `cobra` | 标准 Go CLI 框架 |
 | 日志 | `zap` | 结构化日志，高性能 |
 | 密码 | bcrypt (`golang.org/x/crypto`) | 行业标准 |
