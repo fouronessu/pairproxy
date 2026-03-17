@@ -159,6 +159,11 @@ Workers do **not** delete local records after uploading — the local DB serves 
 | Usage record delivery | At-least-once: records uploaded by the reporter; if sp-1 is unreachable, the worker retains records locally and retries on the next interval |
 | Usage deduplication | `request_id` (UUID per request) provides idempotency in the DB insert (`INSERT OR IGNORE`) |
 | Quota accuracy | Quota checks use a 60-second in-memory cache; a user may exceed their limit by at most one request window per node |
+| **Config sync latency** | Worker pulls a full config snapshot from Primary every 30 s (default). User/group/target/binding changes made on Primary propagate to Workers within ~30 s. |
+| **Quota enforcement (multi-node)** | **Soft limit**: quota checks run against each node's local usage DB. Cross-node aggregation is not performed in real time. In the worst case, a user can exceed their quota by up to one sync interval (30 s) worth of requests across multiple workers simultaneously. This is an acceptable trade-off for request latency. |
+| **User disable propagation** | A user disabled on Primary will be marked inactive on all Workers within one sync interval (~30 s). Their refresh tokens are revoked immediately on sync. In-flight access tokens (JWT) remain valid until their TTL expires (recommended: ≤15 min). |
+| **Worker write protection** | All write operations (POST/PUT/DELETE) on the Admin API and Dashboard are blocked on Worker nodes (HTTP 403 `worker_read_only`). Configuration changes must be performed on the Primary node. |
+| **Worker stats scope** | Stats endpoints on a Worker node return only local data (`X-Node-Role: worker`, `X-Stats-Scope: local`). For global aggregated statistics, query the Primary node. |
 | Split-brain | Partially mitigated: if sp-1 becomes unreachable, c-proxy health checker detects the failure and stops routing to sp-1. Workers continue serving traffic independently. c-proxy can also maintain routes to workers directly (see §c-proxy Resilience below). Usage from the outage window will not be aggregated until sp-1 recovers. |
 
 ---

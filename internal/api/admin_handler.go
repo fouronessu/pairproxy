@@ -548,7 +548,15 @@ type statsSummaryResponse struct {
 	To                string  `json:"to"`
 }
 
+func (h *AdminHandler) setWorkerStatsHeaders(w http.ResponseWriter) {
+	if h.isWorkerNode {
+		w.Header().Set("X-Node-Role", "worker")
+		w.Header().Set("X-Stats-Scope", "local")
+	}
+}
+
 func (h *AdminHandler) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
+	h.setWorkerStatsHeaders(w)
 	days := parseDays(r, 1)
 	now := time.Now()
 	from := now.AddDate(0, 0, -days+1).Truncate(24 * time.Hour)
@@ -594,6 +602,7 @@ type userStatsResponse struct {
 }
 
 func (h *AdminHandler) handleStatsUsers(w http.ResponseWriter, r *http.Request) {
+	h.setWorkerStatsHeaders(w)
 	days := parseDays(r, 7)
 	now := time.Now()
 	from := now.AddDate(0, 0, -days+1).Truncate(24 * time.Hour)
@@ -638,6 +647,7 @@ type logEntryResponse struct {
 }
 
 func (h *AdminHandler) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
+	h.setWorkerStatsHeaders(w)
 	q := r.URL.Query()
 	userID := q.Get("user_id")
 	limit := 50
