@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
-**生成时间**: 2026-03-16
-**测试版本**: v2.10.1 (lint 修复 + 文档刷新)
+**生成时间**: 2026-03-17
+**测试版本**: v2.12.0 (Worker 节点一致性修复)
 **测试环境**: Windows 11, Go 1.23
 
 ---
@@ -12,14 +12,14 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 跳过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,328 | 1,327 | 1 | 0 | 24个包全量单元测试（v2.10.1 累计） |
-| 子测试 (subtests) | ✅ PASS | 542 | 542 | 0 | 0 | t.Run 表驱动子测试 |
+| 单元测试 (UT) | ✅ PASS | 1,346 | 1,345 | 1 | 0 | 24个包全量单元测试（v2.12.0 累计） |
+| 子测试 (subtests) | ✅ PASS | 557 | 557 | 0 | 0 | t.Run 表驱动子测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | 0 | integration_by_GLM5_test.go |
 | E2E测试 (httptest) | ✅ PASS | 90+ | 90+ | 0 | 0 | 含 Direct Proxy E2E + 用户流量 + LLM Target |
 | E2E测试 (integration) | ✅ PASS | 4 | 4 | 0 | 0 | TestFullChainWithMockProcesses 真实进程测试 |
 | 协议转换测试 | ✅ PASS | 80+ | 80+ | 0 | 0 | 含 OtoA 请求/响应/流式/错误转换（v2.10.0 +45 RUN） |
 
-**总计**: 1,870 RUN 条目（1,328 顶层测试 + 542 子测试），全部通过
+**总计**: 1,903 RUN 条目（1,346 顶层测试 + 557 子测试），全部通过
 
 ---
 
@@ -587,14 +587,14 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 根据之前的覆盖率分析：
 - **总体覆盖率**: ~70%
-- **核心模块覆盖率**（v2.10.1 实测）:
+- **核心模块覆盖率**（v2.12.0 实测）:
   - internal/alert: 89.9%
-  - internal/api: 69.5%
+  - internal/api: 70.0%
   - internal/auth: 85.0%
-  - internal/cluster: 80.9%
+  - internal/cluster: 81.3%
   - internal/config: 97.1%
-  - internal/dashboard: 62.8%
-  - internal/db: 80.3%
+  - internal/dashboard: 62.7%
+  - internal/db: 80.2%
   - internal/eventlog: 93.0%
   - internal/keygen: 94.5%
   - internal/lb: 93.6%
@@ -608,7 +608,7 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
   - internal/version: 100.0%
   - cmd/mockllm: 62.4%
   - cmd/cproxy: 32.4%（CLI main 入口，正常）
-  - cmd/sproxy: 10.8%（CLI main 入口，正常）
+  - cmd/sproxy: 10.7%（CLI main 入口，正常）
 
 ---
 
@@ -616,9 +616,9 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
 
 ✅ **所有测试用例已全部执行并通过**
 
-- 顶层测试函数: 1,328（含 1 个 Unix 权限测试在 Windows 下跳过）
-- 子测试 (t.Run): 542
-- **总 RUN 条目: 1,870**，全部通过（24个包）
+- 顶层测试函数: 1,346（含 1 个 Unix 权限测试在 Windows 下跳过）
+- 子测试 (t.Run): 557
+- **总 RUN 条目: 1,903**，全部通过（24个包）
 - 集成测试: 8 测试，全部通过
 - E2E测试 (httptest): 90+ 测试，全部通过
 - E2E测试 (真实进程, -tags=integration): 4 子测试，全部通过
@@ -737,6 +737,26 @@ mockagent → cproxy(:8080) → sproxy(:9000) → mockllm(:11434)
   - ✅ `TestConvertAnthropicErrorResponseToOpenAI` (3子测试) — 错误格式转换、非 Anthropic 错误透传
   - ✅ `TestAnthropicToOpenAIStreamConverter` (7子测试) — 流式转换：文本/工具/finish_reason/usage/Flush 委托
   - ✅ `TestOtoARequestConversionFailurePath` — 畸形 JSON 返回 error（非静默降级合约）
+
+**v2.12.0 新增测试（Worker 节点一致性修复，+33 RUN）**:
+- `internal/cluster/config_syncer_test.go`：8 个测试（ConfigSyncer 完整生命周期）
+  - ✅ `TestConfigSyncer_PullAndUpsert` — 从 Primary 拉取快照并写入本地 DB
+  - ✅ `TestConfigSyncer_UserDisabledPropagates` — 禁用用户同步 + refresh_token 删除（P0-2）
+  - ✅ `TestConfigSyncer_PrimaryUnreachable` — Primary 不可达时不崩溃 + PullFailures 计数
+  - ✅ `TestConfigSyncer_IdempotentUpsert` — 多次同步相同快照幂等（无重复数据）
+  - ✅ `TestConfigSyncer_LLMTargetsAndBindingsSynced` — LLM Targets 和 Bindings 同步（P1-4/P1-5）
+  - ✅ `TestConfigSyncer_PrimaryNon200` — Primary 返回 500 时不崩溃 + PullFailures 计数
+  - ✅ `TestConfigSyncer_MalformedJSON` — Primary 返回畸形 JSON 时不崩溃 + PullFailures 计数
+  - ✅ `TestConfigSnapshot_Endpoint` — `/api/internal/config-snapshot` 端点返回完整快照
+- `internal/api/worker_readonly_test.go`：7 个测试（Worker 读写权限隔离）
+  - ✅ `TestWorkerBlocksWriteOperations` (8子测试) — POST/PUT/DELETE 全部返回 403
+  - ✅ `TestWorkerAllowsReadOperations` (2子测试) — GET 正常返回 200
+  - ✅ `TestWorkerReadOnlyReturnsCorrectErrorBody` — 错误响应体含 `worker_read_only` 字段
+  - ✅ `TestWorkerStatsHeadersSet` (3子测试) — Worker 统计端点附加 `X-Node-Role: worker` + `X-Stats-Scope: local`
+  - ✅ `TestPrimaryNodeStatsNoWorkerHeaders` — Primary 节点不附加 Worker 响应头
+- `internal/api/keygen_handler_test.go`：2 个新测试
+  - ✅ `TestKeygenWorkerBlocked` (2子测试) — Worker 节点 POST login/regenerate 返回 403
+  - ✅ `TestKeygenWorkerAllowsStaticPage` — Worker 节点 GET /keygen/ 返回 200
 
 **测试质量**: 优秀
 **代码稳定性**: 高

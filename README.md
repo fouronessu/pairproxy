@@ -56,6 +56,7 @@
 | **协议转换进阶** | 图片内容块转换（Anthropic→OpenAI）、OpenAI 错误响应转 Anthropic 格式、model_mapping 配置、prefill/thinking 拒绝（HTTP 400） |
 | **OtoA 双向协议转换（v2.10.0）** | OpenAI 格式客户端（Cursor、Continue.dev 等）透明访问 Anthropic 端点，请求路径 `/v1/chat/completions` + target `provider: anthropic` 自动触发 |
 | **Direct Proxy（v2.9.0）** | `sk-pp-` API Key 直连，无需 cproxy；访问 `/keygen/` 自助生成 Key；同时支持 OpenAI (`/v1/`) 和 Anthropic (`/anthropic/`) 两种头格式 |
+| **Worker 节点一致性（v2.12.0）** | ConfigSyncer 每 30s 从 Primary 拉取配置快照同步到本地 DB；Worker 写操作全部封锁（403 `worker_read_only`）；WebUI 只读横幅；统计响应头标注；CLI Primary-only 命令标注 |
 
 ---
 
@@ -388,6 +389,8 @@ dashboard:
 ```
 
 worker 节点通过心跳向 primary 注册，primary 将路由表下发给所有 cproxy，实现自动感知和负载均衡。
+
+**v2.12.0 起**：Worker 节点每 30s 从 Primary 拉取配置快照（用户/分组/LLM绑定），保持数据一致性。所有写操作（用户管理、配额设置等）必须在 Primary 节点执行，Worker 节点写操作返回 `403 worker_read_only`。
 
 ---
 

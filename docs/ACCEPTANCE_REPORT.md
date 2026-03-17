@@ -1,10 +1,10 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.10.1 (lint 修复 + 文档刷新)
-**提交日期**: 2026-03-16
+**版本**: v2.12.0 (Worker 节点一致性修复)
+**提交日期**: 2026-03-17
 **开发语言**: Go 1.23
-**代码规模**: 57,579 行非空非注释 Go 代码（含测试）
+**代码规模**: 57,579 行非空非注释 Go 代码（含测试，Phase 1~3 新增约 1,800 行）
 
 ---
 
@@ -240,24 +240,25 @@ sproxy admin track disable alice   # 关闭追踪
 
 | 测试类型 | 测试数量 | 通过 | 失败 | 覆盖率 | 状态 |
 |---------|---------|------|------|--------|------|
-| 单元测试 (UT) | 1,328 | 1,327 | 0 | 见下表 | ✅ PASS |
-| 子测试 (subtests) | 542 | 542 | 0 | N/A | ✅ PASS |
+| 单元测试 (UT) | 1,346 | 1,345 | 0 | 见下表 | ✅ PASS |
+| 子测试 (subtests) | 557 | 557 | 0 | N/A | ✅ PASS |
 | 集成测试 | 8 | 8 | 0 | N/A | ✅ PASS |
 | E2E测试 (httptest) | 90+ | 90+ | 0 | N/A | ✅ PASS |
 | E2E测试 (integration) | 4 | 4 | 0 | N/A | ✅ PASS |
 | 协议转换测试 | 80+ | 80+ | 0 | 83.2% | ✅ PASS |
-| **总计** | **1,870 RUN** | **1,870 RUN** | **0** | — | **✅ PASS** |
+| **总计** | **1,903 RUN** | **1,903 RUN** | **0** | — | **✅ PASS** |
 
-**测试执行时间**: 2026-03-16
+**测试执行时间**: 2026-03-17
 **测试环境**: Windows 11, Go 1.23
 **测试结论**: 所有测试通过，系统稳定可靠
 
-### 各包覆盖率（v2.10.1 实测）
+### 各包覆盖率（v2.12.0 实测）
 
 | 包 | 覆盖率 |
 |----|--------|
 | internal/version | 100.0% |
 | internal/tap | 98.5% |
+| internal/config | 97.1% |
 | internal/keygen | 94.5% |
 | internal/metrics | 94.7% |
 | internal/quota | 94.4% |
@@ -268,21 +269,25 @@ sproxy admin track disable alice   # 关闭追踪
 | internal/auth | 85.0% |
 | internal/track | 84.7% |
 | internal/proxy | 81.3% |
-| internal/cluster | 80.9% |
-| internal/db | 80.3% |
-| internal/config | 97.1% |
+| internal/cluster | 81.3% |
+| internal/db | 80.2% |
+| internal/api | 70.0% |
 | internal/otel | 66.7% |
-| internal/dashboard | 62.8% |
-| internal/api | 69.5% |
+| internal/dashboard | 62.7% |
 | cmd/mockllm | 62.4% |
 | cmd/cproxy | 32.4%（CLI main，正常）|
-| cmd/sproxy | 10.8%（CLI main，正常）|
+| cmd/sproxy | 10.7%（CLI main，正常）|
 
 **v2.8.0 新增测试** (32+ 新测试用例):
 - `internal/tap/anthropic_parser_test.go`: 2个新边界用例（NoUsageInMessageStart、NilAndEmpty）
 - `internal/tap/openai_parser_test.go`: 1个新边界用例（NilAndEmpty）
 - `internal/proxy/protocol_converter_test.go`: 4+个新用例（MapModelName、图片转换、错误转换、prefill/thinking拒绝）
 - `test/e2e/user_traffic_e2e_test.go`: 5个新E2E测试（活跃用户查询、配额状态、权限隔离）
+
+**v2.12.0 新增测试**（Worker 节点一致性修复，+33 RUN）:
+- `internal/cluster/config_syncer_test.go`: 8个测试（ConfigSyncer 拉取/幂等/错误容忍/LLM同步/PullFailures计数）
+- `internal/api/worker_readonly_test.go`: 7个测试（写操作403封锁、读操作放行、统计响应头标注）
+- `internal/api/keygen_handler_test.go`: 2个新测试（Worker封锁、静态页放行）
 
 **v2.7.0 新增测试** (50+ LLM Target 管理测试用例):
 - `internal/db/llm_target_repo_test.go`: 17个测试（数据库层 CRUD）
@@ -702,6 +707,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 - **批量导入（v2.8.0）**: 文件模板批量创建分组/用户，CLI + WebUI + dry-run
 - **协议转换进阶（v2.8.0）**: 图片转换、错误格式转换、id前缀替换、prefill/thinking拒绝、强制绑定、model_mapping
 - **Direct Proxy（v2.9.0）**: `sk-pp-` API Key 直连，无需 cproxy，`/keygen/` 自助生成 WebUI；协议转换补全（content_filter→end_turn、流式 message_delta 含准确 input_tokens）
+- **Worker 节点一致性修复（v2.12.0）**: ConfigSyncer 定期从 Primary 拉取配置快照并同步到本地 DB；Worker 写操作封锁（所有 POST/PUT/DELETE 返回 403）；Worker WebUI 只读横幅；Key 生成封锁；统计响应头标注（X-Node-Role/X-Stats-Scope）；CLI Primary-only 标注
 
 ✅ **运维功能**: 完整实现
 - 监控指标 (Prometheus)
@@ -712,14 +718,14 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 
 ### 9.2 代码质量
 
-✅ **代码规模**: 57,579 行非空非注释 Go 代码（含测试，合理规模）
-✅ **测试覆盖**: 1,868 RUN 条目（1,326 顶层 + 542 子测试），覆盖率~75%
+✅ **代码规模**: ~59,000 行非空非注释 Go 代码（含测试；v2.11.0 基准 57,579 行，v2.12.0 新增约 1,800 行）
+✅ **测试覆盖**: 1,903 RUN 条目（1,346 顶层 + 557 子测试），覆盖率~70%
 ✅ **代码规范**: 通过golangci-lint检查
 ✅ **文档完整**: 用户手册、API文档、设计文档齐全
 
 ### 9.3 测试质量
 
-✅ **单元测试**: 1,326 顶层 + 542 子测试 = 1,868 RUN，全部通过（24包）
+✅ **单元测试**: 1,346 顶层 + 557 子测试 = 1,903 RUN，全部通过（24包）
 ✅ **集成测试**: 8 测试，全部通过
 ✅ **E2E测试**: 90+ 测试，全部通过
 ✅ **真实进程测试**: 4 子测试，全部通过（-tags=integration）
@@ -776,8 +782,8 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 
 ---
 
-**验收日期**: 2026-03-14
-**验收版本**: v2.10.0
+**验收日期**: 2026-03-17
+**验收版本**: v2.12.0
 **验收人员**: Claude Sonnet 4.6
 **验收结果**: ✅ 通过
 

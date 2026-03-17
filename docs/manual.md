@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.10.1**
+**版本 v2.12.0**
 
 ---
 
@@ -3995,3 +3995,199 @@ const (
 ```
 
 OtoA 功能自动生效，无需任何配置变更。现有 AtoO 配置不受影响。
+
+## §27 v2.12.0 更新说明
+
+**版本**: v2.12.0 — Worker 节点一致性修复
+
+本版本解决多 Worker 部署场景下的 15 个一致性缺陷，使 Worker 节点成为配置只读节点，
+并通过定期从 Primary 拉取配置快照保持数据一致性。
+
+---
+
+### 27.1 新增功能概览
+
+| 问题 | 分级 | 修复内容 |
+|------|------|---------|
+| 用户禁用后 Worker 仍可登录 | P0 | ConfigSyncer 30s 内同步 `IsActive=false`，同时删除 `refresh_tokens` |
+| Worker 用户 ID 与 Primary 不一致 | P1 | 同步时保留 Primary 的 user_id |
+| Worker 写操作未封锁 | P2 | 所有 POST/PUT/DELETE 返回 403 `worker_read_only` |
+| Worker 统计范围不明确 | P3 | 响应头 `X-Node-Role: worker` + `X-Stats-Scope: local` |
+| LLM 绑定/Target 不同步 | P1 | ConfigSyncer 同步 llm_targets 和 llm_bindings |
+| CLI 写命令在 Worker 上失败 | P2 | help-all 和 cheatsheet 标注 `[primary-only]` |
+
+---
+
+### 27.2 Worker 节点配置同步（Phase 1）
+
+#### 原理
+
+Primary 节点新增内部 API：
+
+```
+GET /api/internal/config-snapshot
+Authorization: Bearer <shared_secret>
+```
+
+响应格式：
+
+```json
+{
+  "version": "2026-03-17T10:00:00Z",
+  "users": [...],
+  "groups": [...],
+  "llm_targets": [...],
+  "llm_bindings": [...]
+}
+```
+
+Worker 节点的 `ConfigSyncer` 每 30 秒（与 reporter 同一间隔）拉取一次，
+使用 GORM `Save()` 批量 upsert 到本地 SQLite DB。
+
+#### 配置（Worker 节点 `sproxy.yaml`）
+
+```yaml
+cluster:
+  role: "worker"
+  primary: "http://sp1.company.com:9000"   # Primary 地址
+  self_addr: "http://sp2.company.com:9000"
+  shared_secret: "${CLUSTER_SECRET}"        # 与 Primary 一致
+  report_interval: 30s                      # 同步间隔
+```
+
+配置正确后 Worker 启动日志会显示：
+
+```
+INFO  config_syncer  sync completed  users=5 groups=2 llm_targets=3 llm_bindings=5
+```
+
+#### 容错行为
+
+- Primary 不可达时：Worker 继续使用本地 DB 数据提供服务，不中断请求处理
+- Primary 返回非 200：本次同步跳过，等待下一轮，本地数据不受影响
+- Primary 返回畸形 JSON：同上，计入 `PullFailures` 计数器（可通过指标观测）
+- 用户被禁用时：同步删除该用户的所有 `refresh_tokens`，强制下线
+
+---
+
+### 27.3 Worker 写操作封锁（Phase 2）
+
+#### Admin API 封锁
+
+Worker 节点上所有写 API（POST/PUT/DELETE）返回 403：
+
+```json
+{
+  "error": "worker_read_only",
+  "message": "write operations not allowed on worker nodes; perform admin operations on the primary node"
+}
+```
+
+受封锁的端点：
+
+| 端点 | 方法 |
+|------|------|
+| `/api/admin/users` | POST |
+| `/api/admin/users/:id/active` | PUT |
+| `/api/admin/users/:id/password` | PUT |
+| `/api/admin/groups` | POST |
+| `/api/admin/groups/:id` | DELETE |
+| `/api/admin/llm/bindings` | POST |
+| `/api/admin/llm/bindings/:id` | DELETE |
+| `/api/admin/llm/distribute` | POST |
+| `/api/admin/llm/targets` | POST/PUT/DELETE |
+| `/keygen/api/login` | POST |
+| `/keygen/api/regenerate` | POST |
+| 所有 Dashboard 写表单路由 | POST |
+
+**只读端点保持可用**（GET `/api/admin/users` 等）。
+
+#### Dashboard 只读横幅
+
+Worker 节点 Dashboard 顶部会显示黄色提示横幅：
+
+```
+⚠️ Worker 节点（只读模式）— 用户和配额管理请在 Primary 节点 http://sp1.company.com:9000 执行
+```
+
+#### Worker 统计响应头
+
+Worker 节点的统计端点（`/api/admin/stats/*`）会附加响应头：
+
+```
+X-Node-Role: worker
+X-Stats-Scope: local
+```
+
+Dashboard 统计页在 Worker 模式会显示：
+
+```
+ℹ️ 显示本节点统计数据。全局汇总统计请访问 Primary 节点。
+```
+
+---
+
+### 27.4 CLI Primary-only 标注（Phase 3）
+
+`sproxy admin help-all` 输出中，所有写命令已标注 `[primary-only]`：
+
+```
+user add <username>        [primary-only]  新建用户
+user disable <username>    [primary-only]  禁用用户
+group add <name>           [primary-only]  新建分组
+group set-quota <name>     [primary-only]  设置配额
+llm bind <username>        [primary-only]  绑定 LLM
+llm distribute             [primary-only]  均分用户到 LLM
+...
+```
+
+在 Worker 节点执行这些命令会收到：
+
+```
+Error: 403 Forbidden: worker_read_only — write operations not allowed on worker nodes
+```
+
+---
+
+### 27.5 新增测试（+33 RUN）
+
+| 测试文件 | 新增数量 | 覆盖场景 |
+|---------|---------|---------|
+| `internal/cluster/config_syncer_test.go` | 8 | 快照拉取、幂等性、P0-2 Token 吊销、LLM同步、不可达/非200/畸形JSON |
+| `internal/api/worker_readonly_test.go` | 7 | 写操作403、读操作200、统计响应头标注 |
+| `internal/api/keygen_handler_test.go` | 2 | Worker写端点403、静态页200 |
+| `internal/api/cluster_handler_test.go` | 补充 | `/api/internal/config-snapshot` 端点 |
+
+所有测试使用内存 SQLite，无外部依赖，可在 CI 中无差异运行。
+
+---
+
+### 27.6 升级指南
+
+此版本无数据库 Schema 变更（`config_syncer` 复用现有表），直接替换二进制即可。
+
+```bash
+# 停止旧进程
+./sproxy stop  # 或 kill $(pgrep sproxy)
+
+# 替换二进制（从 GitHub Releases 下载对应平台包）
+# https://github.com/l17728/pairproxy/releases/tag/v2.12.0
+
+# 启动
+./sproxy start --config sproxy.yaml
+
+# 验证版本
+./sproxy version
+# 应输出：sproxy v2.12.0 (...)
+```
+
+**Worker 节点配置补充**（若尚未配置 `cluster.shared_secret`）：
+
+```yaml
+cluster:
+  role: "worker"
+  primary: "http://sp1.company.com:9000"
+  shared_secret: "your-32-char-secret"   # 与 Primary 的 cluster.shared_secret 一致
+```
+
+Primary 节点无需修改配置，`/api/internal/config-snapshot` 端点自动注册。
