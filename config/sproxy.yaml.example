@@ -85,19 +85,44 @@ llm:
 
 
 # ------------------------------------------------------------------------------
-# database — SQLite 数据库配置
+# database — 数据库配置（支持 SQLite 和 PostgreSQL）
 # ------------------------------------------------------------------------------
 database:
+  # driver: 数据库驱动，"sqlite"（默认）或 "postgres"
+  # 省略时默认为 sqlite，向后兼容
+  driver: "sqlite"
+
+  # ── SQLite 配置（driver=sqlite 时使用）─────────────────────────────────────
   # path: SQLite 文件路径（绝对路径或相对于启动目录）
   path: "/var/lib/pairproxy/pairproxy.db"
   # path: "./pairproxy.db"   # 简单部署时用相对路径
 
+  # ── PostgreSQL 配置（driver=postgres 时使用，取消下方注释并删除 path 字段）──
+  # driver: "postgres"
+  #
+  # 方案A - 完整 DSN（推荐，方便注入 secret）：
+  # dsn: "${DATABASE_URL}"
+  # 方案B - 独立字段（若 DSN 为空则从这些字段拼接）：
+  # host: "postgres.company.com"
+  # port: 5432
+  # user: "pairproxy"
+  # password: "${DB_PASSWORD}"
+  # dbname: "pairproxy"
+  # sslmode: "require"    # disable | require | verify-full
+
+  # ── 连接池（SQLite & PostgreSQL 通用）──────────────────────────────────────
   # write_buffer_size: 异步写入缓冲区大小（条）
   # 达到此数量时立即批量写入 DB，否则等到 flush_interval
   write_buffer_size: 200
 
   # flush_interval: 强制 flush 间隔（即使 buffer 未满也写入）
   flush_interval: 5s
+
+  # max_open_conns: 最大连接数
+  # PostgreSQL 建议 50（利用 MVCC 高并发）
+  # SQLite 建议 25（WAL 模式上限）
+  # 0 = 使用内置默认值
+  # max_open_conns: 25
 
 
 # ------------------------------------------------------------------------------
