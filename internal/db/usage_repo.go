@@ -45,6 +45,7 @@ type CostFunc func(model string, inputTokens, outputTokens int) float64
 // UsageWriter 异步批量写入用量日志
 type UsageWriter struct {
 	db         *gorm.DB
+	driver     string       // "sqlite" 或 "postgres"，从 DriverName(db) 获取
 	logger     *zap.Logger
 	ch         chan UsageRecord
 	bufferSize int
@@ -67,6 +68,7 @@ func NewUsageWriter(db *gorm.DB, logger *zap.Logger, bufferSize int, interval ti
 	}
 	w := &UsageWriter{
 		db:         db,
+		driver:     DriverName(db), // 方言适配：记录驱动名称供将来扩展使用
 		logger:     logger.Named("usage_writer"),
 		ch:         make(chan UsageRecord, bufferSize*2), // 双倍 buffer 避免频繁阻塞
 		bufferSize: bufferSize,
@@ -282,11 +284,34 @@ func (r *UsageRecord) TotalTokens() int {
 type UsageRepo struct {
 	db     *gorm.DB
 	logger *zap.Logger
+	driver string // "sqlite" 或 "postgres"，从 DriverName(db) 获取
 }
 
 // NewUsageRepo 创建 UsageRepo
 func NewUsageRepo(db *gorm.DB, logger *zap.Logger) *UsageRepo {
-	return &UsageRepo{db: db, logger: logger.Named("usage_repo")}
+	return &UsageRepo{db: db, logger: logger.Named("usage_repo"), driver: DriverName(db)}
+}
+
+// dateExpr 返回将时间戳列截断到日期的 SQL 表达式。
+// SQLite: DATE(col)
+// PostgreSQL: DATE_TRUNC('day', col)::DATE
+func (r *UsageRepo) dateExpr(col string) string {
+	if r.driver == "postgres" {
+		return fmt.Sprintf("DATE_TRUNC('day', %s)::DATE", col)
+	}
+	return fmt.Sprintf("DATE(%s)", col)
+}
+
+// monthsActiveExpr 返回从某列最小值到现在经过月数的 SQL 表达式。
+// SQLite: CAST((julianday('now') - julianday(MIN(col))) / 30 AS INTEGER)
+// PostgreSQL: CAST(EXTRACT(EPOCH FROM (NOW() - MIN(col))) / (30 * 86400) AS INTEGER)
+func (r *UsageRepo) monthsActiveExpr(col string) string {
+	if r.driver == "postgres" {
+		return fmt.Sprintf(
+			"CAST(EXTRACT(EPOCH FROM (NOW() - MIN(%s))) / (30 * 86400) AS INTEGER)", col)
+	}
+	return fmt.Sprintf(
+		"CAST((julianday('now') - julianday(MIN(%s))) / 30 AS INTEGER)", col)
 }
 
 // Query 查询用量日志（支持多条件过滤）
@@ -552,12 +577,13 @@ type DailyTokenRow struct {
 // DailyTokens 返回指定时间段内按天聚合的 token 用量（全局或指定用户）
 // userID 为空时返回全局聚合，非空时返回该用户的聚合
 func (r *UsageRepo) DailyTokens(from, to time.Time, userID string) ([]DailyTokenRow, error) {
+	dateExpr := r.dateExpr("created_at")
 	query := r.db.Model(&UsageLog{}).
-		Select(`DATE(created_at) as date,
+		Select(fmt.Sprintf(`%s as date,
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
-			COUNT(*) as request_count`).
+			COUNT(*) as request_count`, dateExpr)).
 		Where("created_at >= ? AND created_at <= ?", from, to)
 
 	if userID != "" {
@@ -565,7 +591,7 @@ func (r *UsageRepo) DailyTokens(from, to time.Time, userID string) ([]DailyToken
 	}
 
 	var rows []DailyTokenRow
-	err := query.Group("DATE(created_at)").
+	err := query.Group(dateExpr).
 		Order("date ASC").
 		Scan(&rows).Error
 
@@ -614,14 +640,16 @@ type UserAllTimeStat struct {
 func (r *UsageRepo) GetUserAllTimeStats() ([]UserAllTimeStat, error) {
 	var stats []UserAllTimeStat
 	err := r.db.Model(&UsageLog{}).
-		Select(`user_id,
-			COALESCE(SUM(input_tokens), 0)                                      AS total_input,
-			COALESCE(SUM(output_tokens), 0)                                     AS total_output,
-			COALESCE(SUM(input_tokens + output_tokens), 0)                      AS total_tokens,
-			MIN(created_at)                                                     AS first_used_at,
-			MAX(created_at)                                                     AS last_used_at,
-			COUNT(DISTINCT DATE(created_at))                                    AS days_active,
-			CAST((julianday('now') - julianday(MIN(created_at))) / 30 AS INTEGER) AS months_active`).
+		Select(fmt.Sprintf(`user_id,
+			COALESCE(SUM(input_tokens), 0)          AS total_input,
+			COALESCE(SUM(output_tokens), 0)         AS total_output,
+			COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tokens,
+			MIN(created_at)                         AS first_used_at,
+			MAX(created_at)                         AS last_used_at,
+			COUNT(DISTINCT %s)                      AS days_active,
+			%s                                      AS months_active`,
+			r.dateExpr("created_at"),
+			r.monthsActiveExpr("created_at"))).
 		Group("user_id").
 		Order("total_tokens DESC").
 		Scan(&stats).Error
@@ -675,9 +703,10 @@ func parseFlexTime(s string) (time.Time, error) {
 
 // DailyCost 返回指定时间段内按天聚合的费用（全局或指定用户）
 func (r *UsageRepo) DailyCost(from, to time.Time, userID string) ([]DailyCostRow, error) {
+	dateExpr := r.dateExpr("created_at")
 	query := r.db.Model(&UsageLog{}).
-		Select(`DATE(created_at) as date,
-			COALESCE(SUM(cost_usd), 0) as cost_usd`).
+		Select(fmt.Sprintf(`%s as date,
+			COALESCE(SUM(cost_usd), 0) as cost_usd`, dateExpr)).
 		Where("created_at >= ? AND created_at <= ?", from, to)
 
 	if userID != "" {
@@ -685,7 +714,7 @@ func (r *UsageRepo) DailyCost(from, to time.Time, userID string) ([]DailyCostRow
 	}
 
 	var rows []DailyCostRow
-	err := query.Group("DATE(created_at)").
+	err := query.Group(dateExpr).
 		Order("date ASC").
 		Scan(&rows).Error
 
