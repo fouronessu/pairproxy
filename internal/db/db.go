@@ -2,10 +2,13 @@ package db
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
@@ -19,34 +22,90 @@ func Open(logger *zap.Logger, path string) (*gorm.DB, error) {
 	return OpenWithConfig(logger, config.DatabaseConfig{Path: path})
 }
 
-// OpenWithConfig 打开 SQLite 数据库连接，支持完整的连接池配置。
+// buildPostgresDSN 构建 PostgreSQL 连接字符串。
+// 若 cfg.DSN 非空则直接使用（优先级最高）；
+// 否则从独立字段拼接（Host/Port/User/Password/DBName/SSLMode）。
+func buildPostgresDSN(cfg config.DatabaseConfig) string {
+	if cfg.DSN != "" {
+		return cfg.DSN
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
+	)
+}
+
+// maskDSN 对 DSN 字符串进行脱敏处理，将 password= 的值替换为 ***。
+// 用于日志输出，防止密码泄露。
+// 示例：
+//
+//	"host=pg user=app password=secret dbname=db" → "host=pg user=app password=*** dbname=db"
+//	"postgres://app:secret@pg/db" → "postgres://app:***@pg/db"
+func maskDSN(dsn string) string {
+	// 处理 key=value 格式（host=... user=... password=... dbname=...）
+	kvRe := regexp.MustCompile(`(password\s*=\s*)(\S+)`)
+	result := kvRe.ReplaceAllString(dsn, "${1}***")
+	// 处理 URL 格式（postgres://user:password@host/db）
+	urlRe := regexp.MustCompile(`(://[^:@]*:)([^@]+)(@)`)
+	result = urlRe.ReplaceAllString(result, "${1}***${3}")
+	return result
+}
+
+// DriverName 返回当前 gorm.DB 使用的数据库驱动名称。
+// 返回值为 "sqlite" 或 "postgres"（与 DatabaseConfig.Driver 字段约定一致）。
+// 供 repo 层在需要方言特定 SQL 时使用。
+func DriverName(db *gorm.DB) string {
+	name := db.Dialector.Name()
+	// glebarez/sqlite 驱动返回 "sqlite"，postgres 驱动返回 "postgres"
+	if strings.HasPrefix(name, "sqlite") {
+		return "sqlite"
+	}
+	return name
+}
+
+// OpenWithConfig 打开数据库连接，支持 SQLite 和 PostgreSQL。
+//
+// 驱动选择（cfg.Driver）：
+//   - "" 或 "sqlite"：打开 SQLite 文件数据库（向后兼容）
+//   - "postgres"：打开 PostgreSQL 数据库
 //
 // 连接池默认值（cfg 字段为零值时生效）：
-//   - MaxOpenConns:    25（":memory:" 时为 1）
+//   - SQLite MaxOpenConns: 25（":memory:" 时为 1）
+//   - PostgreSQL MaxOpenConns: 50
 //   - MaxIdleConns:    10
 //   - ConnMaxLifetime: 1h
 //   - ConnMaxIdleTime: 10m
-//
-// SQLite WAL 模式允许多个并发读连接（但写操作仍需排他锁）。
-// 设置 MaxOpenConns > 1 可充分利用 WAL 并发读能力；
-// busy_timeout=5000 保证写锁争用时读操作等待而非立即报错。
 func OpenWithConfig(logger *zap.Logger, cfg config.DatabaseConfig) (*gorm.DB, error) {
 	logger = logger.Named("db")
-	path := cfg.Path
-	logger.Info("opening SQLite database", zap.String("path", path))
 
 	// 将 zap logger 适配为 gorm logger（仅输出 error 级别，减少噪音）
 	gormLog := gormlogger.Default.LogMode(gormlogger.Silent)
 
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{
+	var dialector gorm.Dialector
+	var logLabel string // 用于日志输出（不含密码）
+	isPostgres := cfg.Driver == "postgres"
+
+	if isPostgres {
+		dsn := buildPostgresDSN(cfg)
+		logLabel = maskDSN(dsn)
+		dialector = postgres.Open(dsn)
+		logger.Info("opening PostgreSQL database", zap.String("dsn", logLabel))
+	} else {
+		// SQLite（默认）
+		logLabel = cfg.Path
+		dialector = sqlite.Open(cfg.Path)
+		logger.Info("opening SQLite database", zap.String("path", logLabel))
+	}
+
+	db, err := gorm.Open(dialector, &gorm.Config{
 		Logger: gormLog,
 	})
 	if err != nil {
 		logger.Error("failed to open database",
-			zap.String("path", path),
+			zap.String("target", logLabel),
 			zap.Error(err),
 		)
-		return nil, fmt.Errorf("open database %q: %w", path, err)
+		return nil, fmt.Errorf("open database %q: %w", logLabel, err)
 	}
 
 	// 获取底层 sql.DB 以配置连接池
@@ -56,14 +115,14 @@ func OpenWithConfig(logger *zap.Logger, cfg config.DatabaseConfig) (*gorm.DB, er
 	}
 
 	// ── 连接池参数 ──────────────────────────────────────────────────────────
-	// ":memory:" 每个连接拥有独立的内存库，必须用单连接保证同一个库实例。
-	// 文件库（WAL 模式）支持多个并发读连接，MaxOpenConns 应设 > 1。
 	maxOpen := cfg.MaxOpenConns
 	if maxOpen <= 0 {
-		if path == ":memory:" {
-			maxOpen = 1
+		if isPostgres {
+			maxOpen = 50 // PG MVCC 支持高并发
+		} else if cfg.Path == ":memory:" {
+			maxOpen = 1 // 内存库：每连接独立实例，必须单连接
 		} else {
-			maxOpen = 25 // 生产默认：允许最多 25 个并发连接
+			maxOpen = 25 // SQLite WAL 模式：允许最多 25 个并发连接
 		}
 	}
 
@@ -91,31 +150,43 @@ func OpenWithConfig(logger *zap.Logger, cfg config.DatabaseConfig) (*gorm.DB, er
 	sqlDB.SetConnMaxIdleTime(connMaxIdleTime)
 	// ────────────────────────────────────────────────────────────────────────
 
-	// 配置 SQLite PRAGMA
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",   // WAL 模式：读写并发
-		"PRAGMA busy_timeout=5000",  // 锁等待超时 5s（写锁争用时读操作等待而非报错）
-		"PRAGMA synchronous=NORMAL", // WAL 模式下 NORMAL 兼顾性能与安全
-		"PRAGMA cache_size=-64000",  // 64MB 页缓存
-		"PRAGMA foreign_keys=ON",    // 启用外键约束
-	}
-	for _, pragma := range pragmas {
-		if err := db.Exec(pragma).Error; err != nil {
-			logger.Warn("failed to set pragma",
-				zap.String("pragma", pragma),
-				zap.Error(err),
-			)
+	// SQLite PRAGMA（仅 SQLite 模式下执行）
+	if !isPostgres {
+		pragmas := []string{
+			"PRAGMA journal_mode=WAL",   // WAL 模式：读写并发
+			"PRAGMA busy_timeout=5000",  // 锁等待超时 5s
+			"PRAGMA synchronous=NORMAL", // WAL 模式下 NORMAL 兼顾性能与安全
+			"PRAGMA cache_size=-64000",  // 64MB 页缓存
+			"PRAGMA foreign_keys=ON",    // 启用外键约束
+		}
+		for _, pragma := range pragmas {
+			if err := db.Exec(pragma).Error; err != nil {
+				logger.Warn("failed to set pragma",
+					zap.String("pragma", pragma),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 
-	logger.Info("SQLite database opened successfully",
-		zap.String("path", path),
-		zap.String("journal_mode", "WAL"),
-		zap.Int("max_open_conns", maxOpen),
-		zap.Int("max_idle_conns", maxIdle),
-		zap.Duration("conn_max_lifetime", connMaxLifetime),
-		zap.Duration("conn_max_idle_time", connMaxIdleTime),
-	)
+	if isPostgres {
+		logger.Info("PostgreSQL database opened successfully",
+			zap.String("dsn", logLabel),
+			zap.Int("max_open_conns", maxOpen),
+			zap.Int("max_idle_conns", maxIdle),
+			zap.Duration("conn_max_lifetime", connMaxLifetime),
+			zap.Duration("conn_max_idle_time", connMaxIdleTime),
+		)
+	} else {
+		logger.Info("SQLite database opened successfully",
+			zap.String("path", logLabel),
+			zap.String("journal_mode", "WAL"),
+			zap.Int("max_open_conns", maxOpen),
+			zap.Int("max_idle_conns", maxIdle),
+			zap.Duration("conn_max_lifetime", connMaxLifetime),
+			zap.Duration("conn_max_idle_time", connMaxIdleTime),
+		)
+	}
 	return db, nil
 }
 
