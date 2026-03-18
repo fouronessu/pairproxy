@@ -90,7 +90,7 @@ func encodeBase62HMAC(data []byte) string {
 	encoded := string(result)
 	if len(encoded) < KeyBodyLen {
 		// 右填充到 KeyBodyLen
-		encoded = encoded + strings.Repeat("0", KeyBodyLen-len(encoded))
+		encoded += strings.Repeat("0", KeyBodyLen-len(encoded))
 	} else if len(encoded) > KeyBodyLen {
 		// 截断到 KeyBodyLen（保留左侧高熵部分）
 		encoded = encoded[:KeyBodyLen]
