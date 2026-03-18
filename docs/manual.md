@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.13.0**
+**版本 v2.14.1**
 
 ---
 
@@ -44,6 +44,8 @@
 16. [用户对话内容跟踪](#17-用户对话内容跟踪)
 17. [升级指南](#18-升级指南)
 - [§28 PostgreSQL 数据库支持（v2.13.0）](#28-postgresql-数据库支持v2130)
+- [§29 PostgreSQL 对等节点模式（v2.14.0）](#29-postgresql-对等节点模式v2140)
+- [§30 已知问题与修复](#30-已知问题与修复)
 
 ---
 
@@ -4188,7 +4190,7 @@ Error: 403 Forbidden: worker_read_only — write operations not allowed on worke
 
 # 验证版本
 ./sproxy version
-# 应输出：sproxy v2.13.0 (...)
+# 应输出：sproxy v2.14.1 (...)
 ```
 
 **Worker 节点配置补充**（若尚未配置 `cluster.shared_secret`）：
@@ -4531,3 +4533,117 @@ ANTHROPIC_API_KEY=sk-ant-... ./sproxy start --config sproxy-2.yaml
 - Peer 模式不支持 ConfigSyncer，因为所有节点共享同一 DB
 - `self_addr` 建议设置为其他节点可路由的地址（主机名或 IP，不含 `http://`）
 - 心跳超时（90s）内宕机的节点会被 EvictStale 标记为 inactive，不影响 `ListHealthy` 结果
+
+---
+
+## 30. 已知问题与修复
+
+### 30.1 v2.14.0 SQLite 集群 LLM Target URL 冲突（已修复于 v2.14.1）
+
+**问题描述**：
+
+在 v2.14.0 中，使用 SQLite 数据库的 Worker 节点在启动后，ConfigSyncer 从 Primary 同步 LLM targets 时会报错：
+
+```
+UNIQUE constraint failed: llm_targets.url (2067)
+```
+
+**影响范围**：
+
+- 仅影响使用 SQLite 数据库的 Primary + Worker 集群模式
+- PostgreSQL Peer Mode（§29）不受影响
+- 单节点部署不受影响
+
+**根本原因**：
+
+`llm_targets` 表有两个唯一约束：`id`（主键）和 `url`（业务唯一键）。
+
+1. Worker 节点启动时，从 `sproxy.yaml` 同步 targets 到本地 SQLite，生成 Worker 自己的 UUID 作为 `id`（例如 `id=worker-uuid-1, url=https://api.anthropic.com`）
+2. Primary 节点启动时，从 `sproxy.yaml` 同步 targets 到本地 SQLite，生成 Primary 自己的 UUID 作为 `id`（例如 `id=primary-uuid-1, url=https://api.anthropic.com`）
+3. ConfigSyncer 30s 后从 Primary 拉取快照，尝试 upsert 相同 URL 但不同 ID 的 target
+4. v2.14.0 的 upsert 逻辑使用 `ON CONFLICT(id)` 检测冲突：
+   - `primary-uuid-1` 在 Worker 本地不存在 → 不触发 UPDATE
+   - GORM 走 INSERT 路径 → `url=https://api.anthropic.com` 已存在 → **UNIQUE constraint failed**
+
+**修复方案（v2.14.1）**：
+
+将 ConfigSyncer 中 LLM Targets 的冲突键从 `id` 改为 `url`：
+
+```go
+// internal/cluster/config_syncer.go:289
+Clauses(clause.OnConflict{
+    Columns: []clause.Column{{Name: "url"}},  // ← 改为 url
+    DoUpdates: clause.AssignmentColumns([]string{
+        "id", "provider", "name", "weight",  // ← id 加入更新列表
+        "health_check_path", "model_mapping", "source",
+        "is_editable", "is_active", "updated_at",
+    }),
+})
+```
+
+修复后，当 Worker 本地已有相同 `url` 但不同 `id` 的记录时：
+- `ON CONFLICT(url)` 命中 → 走 UPDATE 路径
+- Worker 本地记录的 `id` 更新为 Primary 的 `id`，其他字段也同步
+- 不再触发 UNIQUE constraint 错误
+
+**升级指南**：
+
+1. **无需数据库迁移**：v2.14.1 的修复仅涉及代码逻辑，不改变表结构
+2. **升级步骤**：
+   ```bash
+   # 1. 停止所有 Worker 节点
+   systemctl stop sproxy-worker
+
+   # 2. 升级 Worker 节点二进制
+   wget https://github.com/l17728/pairproxy/releases/download/v2.14.1/sproxy-linux-amd64
+   mv sproxy-linux-amd64 /usr/local/bin/sproxy
+   chmod +x /usr/local/bin/sproxy
+
+   # 3. 启动 Worker 节点
+   systemctl start sproxy-worker
+
+   # 4. 验证 ConfigSyncer 日志无错误
+   journalctl -u sproxy-worker -f | grep "config sync"
+   # 应看到：config sync: snapshot applied successfully
+   ```
+
+3. **回滚方案**：如需回滚到 v2.14.0，先清空 Worker 本地 SQLite 的 `llm_targets` 表：
+   ```bash
+   sqlite3 /path/to/pairproxy.db "DELETE FROM llm_targets WHERE source='config';"
+   ```
+
+**临时解决方案（v2.14.0 用户）**：
+
+如果无法立即升级到 v2.14.1，可采用以下任一方案：
+
+1. **方案 A：使用 PostgreSQL Peer Mode**（推荐）
+   - 参考 §29 配置 PostgreSQL 共享数据库
+   - 所有节点共享同一 DB，不存在 ID 冲突问题
+
+2. **方案 B：手动清空 Worker 本地 targets**
+   - 每次 Worker 重启前，清空本地 SQLite 的 `llm_targets` 表
+   - ConfigSyncer 首次同步时会从 Primary 拉取完整快照
+
+3. **方案 C：禁用 ConfigSyncer**（不推荐）
+   - 在 Worker 配置中移除 `cluster.primary_addr`
+   - 手动管理 Worker 节点的用户/分组/LLM 配置
+
+**验证修复**：
+
+运行回归测试验证修复有效：
+
+```bash
+go test ./internal/cluster/ -run TestConfigSyncer_LLMTargetURLConflictResolution -v
+```
+
+该测试模拟 Worker 预先存在相同 URL 但不同 ID 的 target，然后从 Primary 同步快照，验证：
+- 无 UNIQUE constraint 错误
+- Worker 本地记录的 ID 更新为 Primary 的 ID
+- 其他字段正确同步
+- 数据库中只有一条记录（无重复插入）
+
+**相关文档**：
+
+- 集群架构设计：`docs/CLUSTER_DESIGN.md` §ConfigSyncer
+- 测试报告：`docs/TEST_REPORT.md` v2.14.1 章节
+- 验收报告：`docs/ACCEPTANCE_REPORT.md` v2.14.1 章节

@@ -287,9 +287,9 @@ func (s *ConfigSyncer) upsertSnapshot(snap ConfigSnapshot) error {
 			targets := make([]*db.LLMTarget, len(snap.LLMTargets))
 			copy(targets, snap.LLMTargets)
 			if err := tx.Select("*").Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "id"}},
+				Columns: []clause.Column{{Name: "url"}},
 				DoUpdates: clause.AssignmentColumns([]string{
-					"url", "provider", "name", "weight",
+					"id", "provider", "name", "weight",
 					"health_check_path", "model_mapping", "source",
 					"is_editable", "is_active", "updated_at",
 				}),

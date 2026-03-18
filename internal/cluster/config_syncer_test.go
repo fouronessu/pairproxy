@@ -496,3 +496,139 @@ func TestConfigSyncer_MalformedJSON(t *testing.T) {
 		t.Error("expected PullFailures > 0 after malformed JSON, got 0")
 	}
 }
+
+// TestConfigSyncer_LLMTargetURLConflictResolution 验证 v2.14.1 修复：
+// Worker 和 Primary 对同一 URL 生成不同 ID 时，ConfigSyncer 应使用 ON CONFLICT(url)
+// 而非 ON CONFLICT(id)，避免 UNIQUE constraint failed: llm_targets.url 错误。
+//
+// 场景：
+// 1. Worker 启动时从 sproxy.yaml 同步 targets 到本地 SQLite（生成 worker-uuid）
+// 2. Primary 启动时从 sproxy.yaml 同步 targets 到本地 SQLite（生成 primary-uuid）
+// 3. ConfigSyncer 从 Primary 拉取快照，尝试 upsert 相同 URL 但不同 ID 的 target
+// 4. 预期：Worker 本地记录的 ID 更新为 Primary 的 ID，其他字段也同步，无 UNIQUE 错误
+func TestConfigSyncer_LLMTargetURLConflictResolution(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	llmTargetRepo := db.NewLLMTargetRepo(gormDB, logger)
+
+	// 模拟 Worker 启动时从配置文件同步的 target（生成 worker-uuid）
+	workerTarget := &db.LLMTarget{
+		ID:       "worker-uuid-12345",
+		URL:      "https://api.anthropic.com",
+		Provider: "anthropic",
+		Name:     "Worker Local Target",
+		Weight:   1,
+		IsActive: true,
+		Source:   "config",
+	}
+	if err := llmTargetRepo.Create(workerTarget); err != nil {
+		t.Fatalf("pre-populate worker target: %v", err)
+	}
+
+	// 验证 Worker 本地记录存在
+	workerRecord, err := llmTargetRepo.GetByURL("https://api.anthropic.com")
+	if err != nil {
+		t.Fatalf("GetByURL before sync: %v", err)
+	}
+	if workerRecord.ID != "worker-uuid-12345" {
+		t.Errorf("expected worker ID 'worker-uuid-12345', got %q", workerRecord.ID)
+	}
+	if workerRecord.Name != "Worker Local Target" {
+		t.Errorf("expected worker name 'Worker Local Target', got %q", workerRecord.Name)
+	}
+
+	// 模拟 Primary 的快照（相同 URL，不同 ID 和其他字段）
+	primaryTarget := &db.LLMTarget{
+		ID:       "primary-uuid-67890",
+		URL:      "https://api.anthropic.com",
+		Provider: "anthropic",
+		Name:     "Primary Synced Target",
+		Weight:   2,
+		IsActive: true,
+		Source:   "config",
+	}
+	snap := ConfigSnapshot{
+		Version:     time.Now(),
+		Users:       []db.User{},
+		Groups:      []db.Group{},
+		LLMTargets:  []*db.LLMTarget{primaryTarget},
+		LLMBindings: []db.LLMBinding{},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
+	}))
+	defer srv.Close()
+
+	userRepo := db.NewUserRepo(gormDB, logger)
+	groupRepo := db.NewGroupRepo(gormDB, logger)
+	llmBindingRepo := db.NewLLMBindingRepo(gormDB, logger)
+
+	syncer := NewConfigSyncer(logger, ConfigSyncerConfig{
+		PrimaryAddr:  srv.URL,
+		SharedSecret: "test-secret",
+		Interval:     50 * time.Millisecond,
+	}, gormDB, userRepo, groupRepo, llmTargetRepo, llmBindingRepo)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	syncer.Start(ctx)
+
+	// 等待至少一次成功同步
+	time.Sleep(80 * time.Millisecond)
+	syncer.Wait()
+
+	// 验证同步成功（无 UNIQUE constraint 错误）
+	if syncer.PullFailures() != 0 {
+		t.Errorf("expected PullFailures = 0, got %d (UNIQUE constraint error?)", syncer.PullFailures())
+	}
+	if syncer.LastSyncAt() == 0 {
+		t.Error("expected LastSyncAt > 0, got 0 (sync failed)")
+	}
+
+	// 验证 Worker 本地记录已更新为 Primary 的值
+	syncedRecord, err := llmTargetRepo.GetByURL("https://api.anthropic.com")
+	if err != nil {
+		t.Fatalf("GetByURL after sync: %v", err)
+	}
+
+	// 关键验证：ID 应更新为 Primary 的 ID
+	if syncedRecord.ID != "primary-uuid-67890" {
+		t.Errorf("expected ID updated to 'primary-uuid-67890', got %q", syncedRecord.ID)
+	}
+
+	// 验证其他字段也同步
+	if syncedRecord.Name != "Primary Synced Target" {
+		t.Errorf("expected Name updated to 'Primary Synced Target', got %q", syncedRecord.Name)
+	}
+	if syncedRecord.Weight != 2 {
+		t.Errorf("expected Weight updated to 2, got %d", syncedRecord.Weight)
+	}
+	if syncedRecord.Provider != "anthropic" {
+		t.Errorf("expected Provider 'anthropic', got %q", syncedRecord.Provider)
+	}
+	if !syncedRecord.IsActive {
+		t.Error("expected IsActive = true, got false")
+	}
+	if syncedRecord.Source != "config" {
+		t.Errorf("expected Source 'config', got %q", syncedRecord.Source)
+	}
+
+	// 验证数据库中只有一条记录（没有重复插入）
+	allTargets, err := llmTargetRepo.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(allTargets) != 1 {
+		t.Errorf("expected 1 target in DB, got %d (duplicate insert?)", len(allTargets))
+	}
+}

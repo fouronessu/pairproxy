@@ -59,6 +59,7 @@
 | **Worker 节点一致性（v2.12.0）** | ConfigSyncer 每 30s 从 Primary 拉取配置快照同步到本地 DB；Worker 写操作全部封锁（403 `worker_read_only`）；WebUI 只读横幅；统计响应头标注；CLI Primary-only 命令标注 |
 | **PostgreSQL 支持（v2.13.0）** | 新增 `driver: postgres` 选项，所有节点共享同一 PostgreSQL 实例，彻底解决 Worker 30s 一致性窗口；SQLite 保持默认向后兼容；支持 DSN 或独立字段（host/port/user/password/dbname/sslmode）；PG 模式下 ConfigSyncer 自动禁用 |
 | **Peer Mode 对等节点（v2.14.0）** | PG 模式下自动启用 `role: "peer"`；所有节点完全对等，任意节点可处理管理操作；`PGPeerRegistry` 通过 `peers` 表实现分布式节点发现（心跳/驱逐/优雅注销）；无写封锁、无 ConfigSyncer、无 Reporter |
+| **ConfigSyncer URL 冲突修复（v2.14.1）** | 修复 SQLite 集群模式下 Worker 节点 ConfigSyncer 同步 LLM targets 时 UNIQUE constraint 错误；冲突键从 `ON CONFLICT(id)` 改为 `ON CONFLICT(url)` |
 
 ---
 

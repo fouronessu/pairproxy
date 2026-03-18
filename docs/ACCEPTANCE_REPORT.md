@@ -1,10 +1,10 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.14.0 (PostgreSQL Peer Mode 对等节点模式)
+**版本**: v2.14.1 (ConfigSyncer LLM Target URL 冲突修复)
 **提交日期**: 2026-03-18
 **开发语言**: Go 1.23
-**代码规模**: 57,900+ 行非空非注释 Go 代码（含测试，v2.14.0 新增约 380 行）
+**代码规模**: 57,900+ 行非空非注释 Go 代码（含测试，v2.14.1 新增约 130 行）
 
 ---
 
@@ -717,6 +717,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 - **Worker 节点一致性修复（v2.12.0）**: ConfigSyncer 定期从 Primary 拉取配置快照并同步到本地 DB；Worker 写操作封锁（所有 POST/PUT/DELETE 返回 403）；Worker WebUI 只读横幅；Key 生成封锁；统计响应头标注（X-Node-Role/X-Stats-Scope）；CLI Primary-only 标注
 - **PostgreSQL 支持（v2.13.0）**: `driver: postgres` 选项，共享 PG 彻底解决 Worker 30s 一致性窗口；PG 模式 ConfigSyncer 自动禁用；DSN 脱敏日志；方言适配（dateExpr/monthsActiveExpr）
 - **Peer Mode 对等节点（v2.14.0）**: `cluster.role: "peer"` 模式（PG 模式自动启用）；PGPeerRegistry 通过 `peers` 表实现分布式节点发现（心跳/驱逐/注销）；任意节点可处理管理操作（无写封锁）；/cluster/routing 从 DB 读取健康节点列表
+- **ConfigSyncer URL 冲突修复（v2.14.1）**: 修复 SQLite 集群模式下 Worker 节点 ConfigSyncer 同步 LLM targets 时 `UNIQUE constraint failed: llm_targets.url` 错误；根因：`ON CONFLICT(id)` 未覆盖 `url` 唯一索引，Worker/Primary 对同一 URL 生成不同 UUID；修复：冲突键改为 `ON CONFLICT(url)`，DoUpdates 列表加入 `id` 确保 Worker 本地 ID 同步为 Primary 的 ID
 
 ✅ **运维功能**: 完整实现
 - 监控指标 (Prometheus)
@@ -727,14 +728,14 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 
 ### 9.2 代码质量
 
-✅ **代码规模**: ~57,900+ 行非空非注释 Go 代码（含测试；v2.13.0 基准 57,579 行，v2.14.0 新增约 380 行）
-✅ **测试覆盖**: 2,464 RUN 条目（1,901 顶层 + 563 子测试），覆盖率 76.2%（internal/cluster 84.6%→85%+）
+✅ **代码规模**: ~58,000+ 行非空非注释 Go 代码（含测试；v2.14.0 基准 57,900 行，v2.14.1 新增约 130 行）
+✅ **测试覆盖**: 2,465 RUN 条目（1,902 顶层 + 563 子测试），覆盖率 76.2%+
 ✅ **代码规范**: 通过golangci-lint检查
 ✅ **文档完整**: 用户手册、API文档、设计文档齐全
 
 ### 9.3 测试质量
 
-✅ **单元测试**: 1,886 顶层 + 557 子测试 = 2,443 RUN，全部通过（24包）
+✅ **单元测试**: 1,902 顶层 + 563 子测试 = 2,465 RUN，全部通过（24包）
 ✅ **集成测试**: 8 测试，全部通过
 ✅ **E2E测试**: 90+ 测试，全部通过
 ✅ **真实进程测试**: 4 子测试，全部通过（-tags=integration）
@@ -792,7 +793,7 @@ Total: 50  Pass: 50  Fail: 0  Error: 0  Time: 60ms
 ---
 
 **验收日期**: 2026-03-18
-**验收版本**: v2.14.0
+**验收版本**: v2.14.1
 **验收人员**: Claude Sonnet 4.6
 **验收结果**: ✅ 通过
 

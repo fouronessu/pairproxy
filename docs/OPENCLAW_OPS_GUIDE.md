@@ -1,8 +1,8 @@
 # PairProxy OpenClaw 自动化运维手册
 
-**版本**: v2.1
+**版本**: v2.2
 **适用系统**: PairProxy v2.9.0+
-**更新日期**: 2026-03-11
+**更新日期**: 2026-03-18
 
 ---
 
@@ -863,6 +863,28 @@ openclaw history --task health_check --limit 10
 - 协议转换问题（v2.6.0+）：参考 `docs/manual.md` §16（协议转换章节）
 - 告警页面问题（v2.8.0+）：检查 `internal/eventlog` 包日志；确认 admin JWT 有效
 - Direct Proxy / Key 认证问题（v2.9.0+）：检查用户是否 active；访问 `/keygen/` 重新生成 Key；查看 `keyauth_middleware` 日志
+- ConfigSyncer LLM Target 同步失败（v2.14.0，已修复于 v2.14.1）：
+
+  **症状**: Worker 节点日志出现 `UNIQUE constraint failed: llm_targets.url (2067)` 错误，ConfigSyncer 持续报 `failed to upsert snapshot to local DB`
+
+  **根因**: v2.14.0 的 ConfigSyncer 使用 `ON CONFLICT(id)` 作为 LLM targets 的冲突键，但 Worker 和 Primary 各自启动时对同一 URL 生成不同的 UUID，导致 INSERT 时触发 `url` 唯一索引冲突
+
+  **解决方案**:
+  1. 升级到 v2.14.1（推荐）：修复冲突键为 `ON CONFLICT(url)`
+  2. 临时方案：清空 Worker 本地 `llm_targets` 表后重启
+     ```bash
+     sqlite3 /path/to/pairproxy.db "DELETE FROM llm_targets WHERE source='config';"
+     systemctl restart sproxy-worker
+     ```
+  3. 长期方案：迁移到 PostgreSQL Peer Mode（参考 `docs/manual.md` §29），共享 DB 不存在此问题
+
+  **监控建议**: 监控 ConfigSyncer pull failures 计数器，持续增长说明同步异常
+  ```bash
+  # 检查 ConfigSyncer 同步状态
+  curl -s http://sproxy-worker:9000/metrics | grep config_sync
+  # 查看 Worker 日志中的同步错误
+  journalctl -u sproxy-worker | grep "UNIQUE constraint"
+  ```
 
 ---
 
@@ -888,6 +910,6 @@ openclaw history --task health_check --limit 10
 
 ---
 
-**文档版本**: 2.1
-**最后更新**: 2026-03-11
+**文档版本**: 2.2
+**最后更新**: 2026-03-18
 **维护者**: PairProxy Team
