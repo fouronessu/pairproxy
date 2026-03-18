@@ -56,6 +56,7 @@ func minimalValidSProxyConfig() *SProxyFullConfig {
 	cfg := &SProxyFullConfig{}
 	cfg.Listen.Port = 9000
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 32 chars
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://llm", APIKey: "key"}}
 	cfg.Database.Path = "pairproxy.db"
 	cfg.Database.Driver = "sqlite"

@@ -37,6 +37,7 @@ database:
   flush_interval: 5s
 auth:
   jwt_secret: "test_secret_test_secret_test_secret_te"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
   access_token_ttl: "24h"
   refresh_token_ttl: "168h"
 admin:
@@ -245,6 +246,7 @@ database:
   path: "` + testDBPath + `"
 auth:
   jwt_secret: "test_secret_for_testing_12345678"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 admin:
   password_hash: "$2a$$10$$vDtCxgJ890DO7ygpJ7CUseMQxIngNJoQ803KbbR6fHx3sKskHE72."
 `

@@ -224,6 +224,7 @@ func TestValidate_WorkerRequiresSharedSecret(t *testing.T) {
 	cfg := &SProxyFullConfig{}
 	cfg.Listen.Port = 9000
 	cfg.Auth.JWTSecret = "test-jwt-secret-1234567890abcdef"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.Database.Path = "/tmp/test.db"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://llm", APIKey: "key"}}
 	cfg.Cluster.Role = "worker"
@@ -243,6 +244,7 @@ func TestValidate_WorkerWithSharedSecret_OK(t *testing.T) {
 	cfg := &SProxyFullConfig{}
 	cfg.Listen.Port = 9000
 	cfg.Auth.JWTSecret = "test-jwt-secret-1234567890abcdef"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.Database.Path = "/tmp/test.db"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://llm", APIKey: "key"}}
 	cfg.Cluster.Role = "worker"
@@ -261,7 +263,10 @@ func TestValidate_WorkerWithSharedSecret_OK(t *testing.T) {
 func validSProxyCfg() *SProxyFullConfig {
 	return &SProxyFullConfig{
 		Listen: ListenConfig{Host: "0.0.0.0", Port: 9000},
-		Auth:   SProxyAuth{JWTSecret: "test-jwt-secret-1234567890abcdef"},
+		Auth: SProxyAuth{
+			JWTSecret:    "test-jwt-secret-1234567890abcdef",
+			KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
+		},
 		Database: DatabaseConfig{
 			Path:            "/tmp/test.db",
 			WriteBufferSize: 200,

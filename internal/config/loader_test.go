@@ -72,6 +72,7 @@ database:
   path: "./test.db"
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
   access_token_ttl: 24h
 cluster:
   role: primary
@@ -114,6 +115,7 @@ database:
   path: "./test.db"
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 cluster:
   role: primary
 `
@@ -143,6 +145,7 @@ database:
   path: "./test.db"
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 cluster:
   role: primary
 `
@@ -242,6 +245,7 @@ func TestApplyDefaultsSProxy(t *testing.T) {
 	minimalYAML := `
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 database:
   path: "./test.db"
 llm:
@@ -300,6 +304,7 @@ database:
   path: "./test.db"
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 cluster:
   role: primary
 `
@@ -504,6 +509,7 @@ func TestUsageBufferConfig_Defaults(t *testing.T) {
 	minimalYAML := `
 auth:
   jwt_secret: "test-jwt-secret-1234567890abcdef"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 database:
   path: "./test.db"
 llm:

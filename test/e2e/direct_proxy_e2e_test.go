@@ -22,6 +22,8 @@ import (
 	"github.com/l17728/pairproxy/internal/proxy"
 )
 
+const testKeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
+
 // setupDirectProxyTest 创建一个完整的直连测试环境。
 func setupDirectProxyTest(t *testing.T) (spURL string, aliceKey string, cleanup func()) {
 	t.Helper()
@@ -87,7 +89,7 @@ func setupDirectProxyTest(t *testing.T) (spURL string, aliceKey string, cleanup 
 	apiKeyCache, cacheErr := keygen.NewKeyCache(100, 0) // TTL=0 永不过期
 	require.NoError(t, cacheErr)
 	dbLister := proxy.NewDBUserLister(userRepo)
-	directH := proxy.NewDirectProxyHandler(logger, sp, dbLister, apiKeyCache)
+	directH := proxy.NewDirectProxyHandler(logger, sp, dbLister, apiKeyCache, testKeygenSecret)
 
 	// 6. 构建测试 HTTP 服务
 	mux := http.NewServeMux()
@@ -104,7 +106,7 @@ func setupDirectProxyTest(t *testing.T) (spURL string, aliceKey string, cleanup 
 	spServer := httptest.NewServer(mux)
 
 	// 7. 生成 alice 的 API Key
-	aliceKey, keyErr := keygen.GenerateKey("alice")
+	aliceKey, keyErr := keygen.GenerateKey("alice", []byte(testKeygenSecret))
 	require.NoError(t, keyErr)
 
 	return spServer.URL, aliceKey, func() {
@@ -245,13 +247,13 @@ func TestDirectProxy_AnthropicPathRewrite(t *testing.T) {
 	defer func() { cancel(); writer.Wait() }()
 
 	cache, _ := keygen.NewKeyCache(10, 0)
-	dh := proxy.NewDirectProxyHandler(logger, sp, proxy.NewDBUserLister(userRepo), cache)
+	dh := proxy.NewDirectProxyHandler(logger, sp, proxy.NewDBUserLister(userRepo), cache, testKeygenSecret)
 	mux := http.NewServeMux()
 	mux.Handle("/anthropic/", dh.HandlerAnthropic())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	daveKey, _ := keygen.GenerateKey("dave")
+	daveKey, _ := keygen.GenerateKey("dave", []byte(testKeygenSecret))
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "claude-test", "max_tokens": 10,
 		"messages": []map[string]string{{"role": "user", "content": "test"}},

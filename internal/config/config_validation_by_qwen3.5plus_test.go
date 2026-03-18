@@ -523,7 +523,8 @@ func TestSProxyFullConfigValidation(t *testing.T) {
 	t.Run("minimal_valid_sproxy_config", func(t *testing.T) {
 		cfg := &SProxyFullConfig{
 			Auth: SProxyAuth{
-				JWTSecret: "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				JWTSecret:    "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: DatabaseConfig{
 				Path: "test.db", // This is sufficient for testing validation, file need not exist
@@ -545,7 +546,8 @@ func TestSProxyFullConfigValidation(t *testing.T) {
 	t.Run("invalid_sproxy_missing_jwt_secret", func(t *testing.T) {
 		cfg := &SProxyFullConfig{
 			Auth: SProxyAuth{
-				JWTSecret: "", // Missing JWT secret
+				JWTSecret:    "", // Missing JWT secret
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: DatabaseConfig{
 				Path: "test.db",
@@ -568,7 +570,8 @@ func TestSProxyFullConfigValidation(t *testing.T) {
 	t.Run("invalid_sproxy_short_jwt_secret", func(t *testing.T) {
 		cfg := &SProxyFullConfig{
 			Auth: SProxyAuth{
-				JWTSecret: "short", // Too short JWT secret (< 32 chars)
+				JWTSecret:    "short", // Too short JWT secret (< 32 chars)
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: DatabaseConfig{
 				Path: "test.db",
@@ -591,7 +594,8 @@ func TestSProxyFullConfigValidation(t *testing.T) {
 	t.Run("invalid_sproxy_empty_database_path", func(t *testing.T) {
 		cfg := &SProxyFullConfig{
 			Auth: SProxyAuth{
-				JWTSecret: "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				JWTSecret:    "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: DatabaseConfig{
 				Path: "", // Missing database path
@@ -614,7 +618,8 @@ func TestSProxyFullConfigValidation(t *testing.T) {
 	t.Run("invalid_sproxy_no_llm_targets", func(t *testing.T) {
 		cfg := &SProxyFullConfig{
 			Auth: SProxyAuth{
-				JWTSecret: "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				JWTSecret:    "very_very_secure_jwt_secret_that_is_at_least_32_chars_test",
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: DatabaseConfig{
 				Path: "test.db",

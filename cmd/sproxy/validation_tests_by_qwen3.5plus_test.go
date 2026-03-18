@@ -36,6 +36,7 @@ database:
   flush_interval: 5s
 auth:
   jwt_secret: "very_secure_secret_of_at_least_32_chars"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
   access_token_ttl: "24h"
   refresh_token_ttl: "168h"
 admin:
@@ -66,7 +67,8 @@ log:
 		// Test minimal configuration required fields are validated
 		minimalValid := &config.SProxyFullConfig{
 			Auth: config.SProxyAuth{
-				JWTSecret: "very_secret_that_is_at_least_32_chars_long",
+				JWTSecret:    "very_secret_that_is_at_least_32_chars_long",
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: config.DatabaseConfig{
 				Path: ":memory:",
@@ -94,7 +96,8 @@ log:
 	t.Run("sproxy_worker_config_validation", func(t *testing.T) {
 		workerConfig := &config.SProxyFullConfig{
 			Auth: config.SProxyAuth{
-				JWTSecret: "very_secure_secret_of_at_least_32_chars_test",
+				JWTSecret:    "very_secure_secret_of_at_least_32_chars_test",
+				KeygenSecret: "test-keygen-secret-must-be-at-least-32-bytes!!",
 			},
 			Database: config.DatabaseConfig{
 				Path: ":memory:",
@@ -292,6 +295,7 @@ database:
   path: "` + dbPath + `"
 auth:
   jwt_secret: "test_secure_secret_of_at_least_32_chars"
+  keygen_secret: "test-keygen-secret-must-be-at-least-32-bytes!!"
 admin:
   password_hash: "$2a$$10$$vDtCxgJ890DO7ygpJ7CUseMQxIngNJoQ803KbbR6fHx3sKskHE72."
 `

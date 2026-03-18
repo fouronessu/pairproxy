@@ -13,6 +13,7 @@ func TestApplySProxyDefaults_PGDefaults(t *testing.T) {
 	cfg.Database.Driver = "postgres"
 	cfg.Listen.Port = 9000
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 34 chars
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 
 	applySProxyDefaults(cfg)
@@ -51,6 +52,7 @@ func TestValidate_PostgresDSNOK(t *testing.T) {
 	cfg.Database.Driver = "postgres"
 	cfg.Database.DSN = "host=pg user=app dbname=db"
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 	applySProxyDefaults(cfg)
@@ -65,6 +67,7 @@ func TestValidate_PostgresMissingDSNAndFields(t *testing.T) {
 	cfg.Database.Driver = "postgres"
 	// DSN 和独立字段均为空
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 	applySProxyDefaults(cfg)
@@ -82,6 +85,7 @@ func TestValidate_PostgresFieldsOK(t *testing.T) {
 	cfg.Database.User = "pairproxy"
 	cfg.Database.DBName = "pairproxy"
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 	applySProxyDefaults(cfg)
@@ -99,6 +103,7 @@ func TestValidate_PostgresInvalidSSLMode(t *testing.T) {
 	cfg.Database.DBName = "db"
 	cfg.Database.SSLMode = "invalid-mode"
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 
@@ -113,6 +118,7 @@ func TestValidate_SQLitePathRequired(t *testing.T) {
 	cfg.Database.Driver = "sqlite"
 	cfg.Database.Path = "" // 故意为空
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 
@@ -136,6 +142,7 @@ func TestValidate_PostgresPortBoundaryValues(t *testing.T) {
 		cfg.Database.DBName = "db"
 		cfg.Database.Port = port
 		cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 		cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 		cfg.Listen.Port = 9000
 		return cfg
@@ -174,6 +181,7 @@ func TestValidate_PostgresMissingIndividualFields(t *testing.T) {
 		cfg := &SProxyFullConfig{}
 		cfg.Database.Driver = "postgres"
 		cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 		cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 		cfg.Listen.Port = 9000
 		return cfg
@@ -216,6 +224,7 @@ func TestValidate_PostgresDSNSetPortIgnored(t *testing.T) {
 	cfg.Database.DSN = "host=pg user=app dbname=db"
 	cfg.Database.Port = -1 // 越界，但 DSN 已设置，应被忽略
 	cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 	cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 	cfg.Listen.Port = 9000
 
@@ -237,6 +246,7 @@ func TestValidate_PostgresSSLModeValidValues(t *testing.T) {
 			cfg.Database.DBName = "db"
 			cfg.Database.SSLMode = mode
 			cfg.Auth.JWTSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			cfg.Auth.KeygenSecret = "test-keygen-secret-must-be-at-least-32-bytes!!"
 			cfg.LLM.Targets = []LLMTarget{{URL: "http://pg", APIKey: "key"}}
 			cfg.Listen.Port = 9000
 			assert.NoError(t, cfg.Validate(), "sslmode %q should be valid", mode)
