@@ -1,7 +1,7 @@
 # PairProxy OpenClaw 自动化运维手册
 
-**版本**: v2.2
-**适用系统**: PairProxy v2.9.0+
+**版本**: v2.3
+**适用系统**: PairProxy v2.15.0+
 **更新日期**: 2026-03-18
 
 ---
@@ -30,6 +30,7 @@
 | 集群节点 | 心跳状态、用量同步 | 2 分钟 |
 | 告警流（v2.8.0+） | SSE 端点可达性、WARN/ERROR 日志积压 | 5 分钟 |
 | Direct Proxy（v2.9.0+） | `/keygen/` 端点可达性、Key 认证成功率 | 5 分钟 |
+| HMAC Keygen（v2.15.0+） | keygen_secret 配置存在性、API Key 验证失败率 | 5 分钟 |
 
 ---
 
@@ -142,6 +143,21 @@ task:
     - name: "alerts_sse_endpoint"
       command: "curl -sf --max-time 3 -H 'X-PairProxy-Auth: ${ADMIN_TOKEN}' http://localhost:9000/api/admin/alerts/stream -o /dev/null"
       severity: "warning"
+
+    - name: "keygen_secret_configured"
+      command: |
+        grep -q 'keygen_secret:' /etc/pairproxy/sproxy.yaml && echo "configured" || echo "missing"
+      expect: "configured"
+      severity: "critical"
+      description: "检查 auth.keygen_secret 配置存在性（v2.15.0 必填字段）"
+
+    - name: "api_key_auth_success_rate"
+      command: |
+        curl -s http://localhost:9000/metrics | grep 'pairproxy_direct_proxy_auth_success_total' | awk '{sum+=$2} END {print sum}'
+      threshold: 0
+      compare: "gt"
+      severity: "info"
+      description: "Direct Proxy API Key 认证成功数（v2.15.0 HMAC 算法）"
 
   # 故障响应
   on_failure:
@@ -863,6 +879,35 @@ openclaw history --task health_check --limit 10
 - 协议转换问题（v2.6.0+）：参考 `docs/manual.md` §16（协议转换章节）
 - 告警页面问题（v2.8.0+）：检查 `internal/eventlog` 包日志；确认 admin JWT 有效
 - Direct Proxy / Key 认证问题（v2.9.0+）：检查用户是否 active；访问 `/keygen/` 重新生成 Key；查看 `keyauth_middleware` 日志
+- HMAC Keygen 升级问题（v2.15.0+）：
+
+  **症状**: 升级到 v2.15.0 后所有 `sk-pp-` API Key 认证失败（401），或启动时报 `auth.keygen_secret is required`
+
+  **根因**: v2.15.0 将 API Key 生成算法从指纹嵌入改为 HMAC-SHA256，旧 key 与新算法不兼容；同时新增 `auth.keygen_secret` 必填配置字段
+
+  **解决方案**:
+  1. 确保 `sproxy.yaml` 中配置了 `auth.keygen_secret`（≥32 字符）：
+     ```yaml
+     auth:
+       jwt_secret: "your-jwt-secret"
+       keygen_secret: "your-keygen-secret-at-least-32-chars"
+     ```
+  2. 通知所有使用 Direct Proxy 的用户重新生成 API Key：
+     - 访问 `/keygen/` 页面重新登录并生成
+     - 或通过 CLI：`./sproxy admin user list` 确认用户状态
+  3. 监控升级后 API Key 认证失败率：
+     ```bash
+     # 查看 keyauth 相关日志
+     journalctl -u sproxy | grep "api key validated\|invalid key\|key validation failed"
+     ```
+
+  **监控建议**: 升级后 24 小时内密切关注 401 错误率，确认所有用户已完成 Key 迁移
+  ```bash
+  # 检查最近 1 小时的 401 错误数
+  journalctl -u sproxy --since "1 hour ago" | grep -c "401"
+  # 检查 keygen_secret 配置
+  grep 'keygen_secret' /etc/pairproxy/sproxy.yaml
+  ```
 - ConfigSyncer LLM Target 同步失败（v2.14.0，已修复于 v2.14.1）：
 
   **症状**: Worker 节点日志出现 `UNIQUE constraint failed: llm_targets.url (2067)` 错误，ConfigSyncer 持续报 `failed to upsert snapshot to local DB`
@@ -910,6 +955,6 @@ openclaw history --task health_check --limit 10
 
 ---
 
-**文档版本**: 2.2
+**文档版本**: 2.3
 **最后更新**: 2026-03-18
 **维护者**: PairProxy Team

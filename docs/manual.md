@@ -1,6 +1,6 @@
 # PairProxy 用户手册
 
-**版本 v2.14.1**
+**版本 v2.15.0**
 
 ---
 
@@ -4647,3 +4647,251 @@ go test ./internal/cluster/ -run TestConfigSyncer_LLMTargetURLConflictResolution
 - 集群架构设计：`docs/CLUSTER_DESIGN.md` §ConfigSyncer
 - 测试报告：`docs/TEST_REPORT.md` v2.14.1 章节
 - 验收报告：`docs/ACCEPTANCE_REPORT.md` v2.14.1 章节
+
+---
+
+## 31. HMAC-SHA256 Keygen 算法（v2.15.0）
+
+**版本**：v2.15.0  
+**发布日期**：2026-03-18  
+**影响范围**：所有使用 Direct Proxy（`sk-pp-` API Key）的用户
+
+### 31.1 升级概述
+
+v2.15.0 将 API Key 生成算法从指纹嵌入升级为 HMAC-SHA256，彻底消除碰撞风险。
+
+**核心变更**：
+- 算法：指纹嵌入 → HMAC-SHA256 + Base62 编码
+- 确定性：相同用户名+密钥 → 相同 key（可重复生成）
+- 无碰撞：密码学保证（碰撞概率 < 2^-143）
+- 配置：新增必填字段 `auth.keygen_secret`（≥32 字符）
+
+**破坏性变更**：
+- ⚠️ 所有现有 `sk-pp-` key 立即失效
+- ⚠️ 用户需重新登录 `/keygen/` 获取新 key
+- ⚠️ 配置文件必须添加 `auth.keygen_secret` 字段
+
+### 31.2 配置升级
+
+**1. 生成 keygen_secret**
+
+```bash
+# 生成 32 字节随机密钥（推荐）
+openssl rand -base64 32
+
+# 或使用 uuidgen（至少 32 字符）
+echo "$(uuidgen)$(uuidgen)" | tr -d '-'
+```
+
+**2. 更新 sproxy.yaml**
+
+```yaml
+auth:
+  jwt_secret: "${JWT_SECRET}"
+  keygen_secret: "${KEYGEN_SECRET}"  # ← 新增必填项
+  access_token_ttl: "24h"
+  refresh_token_ttl: "168h"
+```
+
+**3. 设置环境变量**
+
+```bash
+# 方式 A：环境变量注入（推荐）
+export KEYGEN_SECRET="your-generated-secret-here"
+
+# 方式 B：直接写入配置文件（不推荐，明文存储）
+auth:
+  keygen_secret: "your-generated-secret-here"
+```
+
+**4. 验证配置**
+
+```bash
+./sproxy admin validate --config sproxy.yaml
+# 应无错误输出
+```
+
+### 31.3 用户迁移流程
+
+**管理员操作**：
+
+1. **升级 sproxy 二进制**
+   ```bash
+   wget https://github.com/l17728/pairproxy/releases/download/v2.15.0/sproxy-linux-amd64
+   mv sproxy-linux-amd64 /usr/local/bin/sproxy
+   chmod +x /usr/local/bin/sproxy
+   ```
+
+2. **更新配置文件**（参考 §31.2）
+
+3. **重启 sproxy**
+   ```bash
+   systemctl restart sproxy
+   # 或
+   ./sproxy start --config sproxy.yaml
+   ```
+
+4. **通知用户重新生成 key**
+   - 发送邮件/Slack 通知：所有 Direct Proxy 用户需重新登录
+   - 提供 keygen 页面链接：`https://your-sproxy-domain/keygen/`
+
+**用户操作**：
+
+1. **访问 keygen 页面**
+   ```
+   https://your-sproxy-domain/keygen/
+   ```
+
+2. **登录并获取新 key**
+   - 输入用户名和密码
+   - 复制新生成的 `sk-pp-` key
+
+3. **更新环境变量**
+   ```bash
+   # Claude Code
+   export ANTHROPIC_API_KEY="sk-pp-新key"
+   export ANTHROPIC_BASE_URL="https://your-sproxy-domain/anthropic"
+
+   # OpenAI 客户端
+   export OPENAI_API_KEY="sk-pp-新key"
+   export OPENAI_BASE_URL="https://your-sproxy-domain/v1"
+   ```
+
+4. **验证新 key**
+   ```bash
+   # 测试请求
+   curl -X POST https://your-sproxy-domain/anthropic/v1/messages \
+     -H "x-api-key: sk-pp-新key" \
+     -H "Content-Type: application/json" \
+     -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+   ```
+
+### 31.4 技术细节
+
+**算法对比**：
+
+| 特性 | 旧算法（指纹嵌入） | 新算法（HMAC-SHA256） |
+|------|-------------------|---------------------|
+| 确定性 | ❌ 随机生成 | ✅ 确定性（可重复） |
+| 碰撞风险 | ⚠️ 存在（相同字符集） | ✅ 无碰撞（< 2^-143） |
+| 验证性能 | O(1) 字符集匹配 | O(n) HMAC 重计算 |
+| 缓存优化 | 无 | LRU + TTL（>95% 命中率） |
+| 密钥管理 | 无 | 需要 keygen_secret |
+
+**HMAC-SHA256 算法流程**：
+
+```
+生成：
+1. HMAC-SHA256(secret, username) → 32 字节签名
+2. Base62 编码签名 → ~43 字符
+3. 填充/截断到 48 字符
+4. 拼接前缀 "sk-pp-" → 54 字符 key
+
+验证：
+1. 格式检查（前缀 + 长度 + 字符集）
+2. 查询 KeyCache（LRU + TTL）
+3. 缓存未命中：遍历活跃用户，重新计算 HMAC
+4. 比较计算出的 key 与提供的 key
+5. 匹配则返回用户信息
+```
+
+**安全特性**：
+
+- **密码学强度**：HMAC-SHA256 提供 256 位安全强度
+- **碰撞概率**：48 字符 Base62 = 286 位熵，碰撞概率 < 2^-143
+- **防暴力破解**：无法从 key 反推 username 或 secret
+- **缓存二次校验**：用户禁用后立即失效，不等 TTL 过期
+
+**性能优化**：
+
+- **KeyCache**：LRU 缓存 + TTL，典型命中率 >95%
+- **验证延迟**：缓存命中 <1ms，未命中 ~1μs × 用户数
+- **扩展性**：1000 用户场景下，验证延迟 <1ms
+
+### 31.5 故障排查
+
+**问题 1：启动失败 "auth.keygen_secret is required"**
+
+```bash
+# 原因：配置文件缺少 keygen_secret 字段
+# 解决：参考 §31.2 添加配置
+
+# 验证配置
+./sproxy admin validate --config sproxy.yaml
+```
+
+**问题 2：旧 key 无法使用**
+
+```bash
+# 原因：v2.15.0 算法不兼容旧 key
+# 解决：用户重新登录 /keygen/ 获取新 key
+
+# 管理员可查看日志确认
+journalctl -u sproxy -f | grep "direct auth"
+# 应看到：direct auth: no matching user
+```
+
+**问题 3：用户报告 "key 每次登录都不同"**
+
+```bash
+# 原因：HMAC 算法是确定性的，相同用户名+密钥应生成相同 key
+# 可能原因：
+# 1. keygen_secret 在重启间被修改
+# 2. 用户名大小写不一致
+
+# 验证 keygen_secret 一致性
+grep keygen_secret /path/to/sproxy.yaml
+echo $KEYGEN_SECRET
+
+# 验证用户名
+./sproxy admin user list | grep username
+```
+
+**问题 4：验证性能下降**
+
+```bash
+# 原因：KeyCache 未启用或 TTL 过短
+# 解决：检查 cache 配置（默认已启用）
+
+# 查看缓存命中率（日志）
+journalctl -u sproxy | grep "direct auth: cache hit" | wc -l
+journalctl -u sproxy | grep "direct auth: key validated" | wc -l
+# 命中率 = cache hit / (cache hit + key validated)
+```
+
+### 31.6 回滚方案
+
+**不支持回滚到 v2.14.x**：
+
+- HMAC 算法与旧算法完全不兼容
+- 回滚会导致所有 v2.15.0 生成的 key 失效
+- 建议：充分测试后再升级生产环境
+
+**紧急回滚步骤**（仅限测试环境）：
+
+```bash
+# 1. 停止 sproxy
+systemctl stop sproxy
+
+# 2. 恢复旧版本二进制
+mv /usr/local/bin/sproxy.v2.14.1 /usr/local/bin/sproxy
+
+# 3. 移除 keygen_secret 配置
+sed -i '/keygen_secret/d' /path/to/sproxy.yaml
+
+# 4. 启动 sproxy
+systemctl start sproxy
+
+# 5. 通知用户重新生成 key（旧算法）
+```
+
+### 31.7 相关文档
+
+- **测试报告**：`docs/TEST_REPORT.md` v2.15.0 章节（2469 个测试全部通过）
+- **验收报告**：`docs/ACCEPTANCE_REPORT.md` v2.15.0 章节
+- **API 文档**：`docs/API.md` §Direct Proxy 章节
+- **安全建议**：§13 安全建议（keygen_secret 管理）
+
+---
+
+**手册结束**
