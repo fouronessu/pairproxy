@@ -807,7 +807,87 @@ Natural language: "import users from file", "bulk create users", "dry-run import
 
 ---
 
-## 15. Other Top-level Commands
+## 15. Semantic Route Management (v2.18.0)
+
+Semantic routing narrows the LLM candidate pool based on request message
+intent. Rules consist of a natural language description and target URLs.
+The classifier LLM reuses the existing LB. Only applies to unbound users.
+
+### 15.1 Add semantic route
+
+` + bq + `sproxy admin route add <name> --description <text> --targets <url1,url2> [--priority <n>]` + bq + `
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| ` + bq + `--description` + bq + ` | (required) | Natural language description for the classifier |
+| ` + bq + `--targets` + bq + ` | (required) | Comma-separated target URLs |
+| ` + bq + `--priority` + bq + ` | 0 | Rule priority (higher = more preferred) |
+
+Examples:
+  sproxy admin route add code_tasks --description "Code generation and debugging" --targets "https://api.anthropic.com,https://deepseek.example.com" --priority 10
+  sproxy admin route add general_chat --description "General conversation" --targets "https://haiku.example.com"
+
+Natural language: "add route", "create routing rule", "add semantic route"
+
+---
+
+### 15.2 List semantic routes
+
+` + bq + `sproxy admin route list` + bq + `
+
+Shows all semantic routing rules (ID, name, priority, active status, target URLs).
+
+Natural language: "list routes", "show routing rules", "list semantic routes"
+
+---
+
+### 15.3 Update semantic route
+
+` + bq + `sproxy admin route update <name> [--description <text>] [--targets <urls>] [--priority <n>]` + bq + `
+
+| Flag | Description |
+|------|-------------|
+| ` + bq + `--description` + bq + ` | New description |
+| ` + bq + `--targets` + bq + ` | New comma-separated target URLs |
+| ` + bq + `--priority` + bq + ` | New priority |
+
+Examples:
+  sproxy admin route update code_tasks --description "Updated description"
+  sproxy admin route update code_tasks --targets "https://api.anthropic.com" --priority 20
+
+Natural language: "update route", "change routing rule", "modify semantic route"
+
+---
+
+### 15.4 Delete semantic route
+
+` + bq + `sproxy admin route delete <name>` + bq + `
+
+Removes the route rule from the database.
+
+Examples:
+  sproxy admin route delete code_tasks
+
+Natural language: "delete route", "remove routing rule", "drop semantic route"
+
+---
+
+### 15.5 Enable / Disable semantic route
+
+` + bq + `sproxy admin route enable <name>` + bq + `
+` + bq + `sproxy admin route disable <name>` + bq + `
+
+Disabled routes are not sent to the classifier. Existing rules are preserved.
+
+Examples:
+  sproxy admin route enable code_tasks
+  sproxy admin route disable general_chat
+
+Natural language: "enable route", "disable route", "activate routing rule", "deactivate routing rule"
+
+---
+
+## 16. Other Top-level Commands
 
 ### hash-password
 
@@ -888,5 +968,11 @@ Natural language: "start server", "start sproxy", "run the proxy"
 | Clear alice's conversation records | sproxy admin track clear alice  **[primary-only]** |
 | Import groups/users from file | sproxy admin import users.txt  **[primary-only]** |
 | Preview import without writing | sproxy admin import --dry-run users.txt |
+| Add semantic route | sproxy admin route add code_tasks --description "Code gen" --targets "https://api.anthropic.com" --priority 10  **[primary-only]** |
+| List semantic routes | sproxy admin route list |
+| Update semantic route | sproxy admin route update code_tasks --description "New desc"  **[primary-only]** |
+| Delete semantic route | sproxy admin route delete code_tasks  **[primary-only]** |
+| Enable semantic route | sproxy admin route enable code_tasks  **[primary-only]** |
+| Disable semantic route | sproxy admin route disable code_tasks  **[primary-only]** |
 | Hash a new admin password | sproxy hash-password |
 `

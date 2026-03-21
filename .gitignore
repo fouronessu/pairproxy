@@ -66,3 +66,5 @@ test-output-*.log
 
 # Git worktrees
 .worktrees/
+test_full.log
+test_output.log
