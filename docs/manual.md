@@ -2569,6 +2569,23 @@ pricing:
 # 日志配置
 log:
   level: "info"   # debug / info / warn / error
+
+# 语义路由配置（v2.18.0）
+semantic_router:
+  enabled: false                   # 默认 false，需显式启用
+  classifier_timeout: 3s           # 分类器调用超时（默认 3s）
+  classifier_model: "claude-haiku-3-5"  # 分类器使用的模型名（建议用低延迟模型）
+  routes:                          # YAML 默认规则（DB 同名规则会覆盖）
+    - name: code_tasks
+      description: "Code generation, debugging, refactoring, or technical programming"
+      target_urls:
+        - "https://api.anthropic.com"
+      priority: 10                 # 数值越大越优先
+    # - name: general_chat
+    #   description: "General conversation, simple Q&A"
+    #   target_urls:
+    #     - "https://haiku-endpoint.example.com"
+    #   priority: 5
 ```
 
 ---
@@ -5280,6 +5297,7 @@ DEBUG semantic router: skipped, binding resolver active
 - `classifier_timeout` 应设置为可接受的最大延迟，超时后自动降级
 - `target_urls` 中的 URL 必须是已配置在 `llm.targets` 中的有效 target
 - 仅对有 `messages` 字段的请求（如 `/v1/messages`、`/v1/chat/completions`）生效
+- 分类器 prompt 仅使用对话的**最近 5 条消息**（`maxPromptMessages=5`），避免 prompt 过长；超长消息内容会被截断到 500 字符
 - 分类器子请求通过 context 标记防递归，不会无限循环
 - 数据库规则通过 REST API 或 CLI 修改后立即热更新，无需重启
 
