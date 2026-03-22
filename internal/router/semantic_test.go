@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,4 +278,133 @@ func contains(s, sub string) bool {
 			}
 			return false
 		}())
+}
+
+// ---------------------------------------------------------------------------
+// TestParseClassifierResponse — parseClassifierResponse 专用单元测试
+// ---------------------------------------------------------------------------
+
+func TestParseClassifierResponse(t *testing.T) {
+	sr := NewSemanticRouter(testLogger(), nil, nil, 3*time.Second, "")
+
+	t.Run("valid index 0", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("0"))
+		idx, err := sr.parseClassifierResponse(body, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if idx != 0 {
+			t.Errorf("idx = %d, want 0", idx)
+		}
+	})
+
+	t.Run("valid index 2 of 3", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("2"))
+		idx, err := sr.parseClassifierResponse(body, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if idx != 2 {
+			t.Errorf("idx = %d, want 2", idx)
+		}
+	})
+
+	t.Run("no match returns -1 nil", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("-1"))
+		idx, err := sr.parseClassifierResponse(body, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if idx != -1 {
+			t.Errorf("idx = %d, want -1", idx)
+		}
+	})
+
+	t.Run("out of range index", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("5"))
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for out-of-range index")
+		}
+		if !strings.Contains(err.Error(), "out-of-range") {
+			t.Errorf("error = %q, want to contain 'out-of-range'", err)
+		}
+	})
+
+	t.Run("negative out of range", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("-2"))
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for negative out-of-range index")
+		}
+		if !strings.Contains(err.Error(), "out-of-range") {
+			t.Errorf("error = %q, want to contain 'out-of-range'", err)
+		}
+	})
+
+	t.Run("non-integer text", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("code_tasks"))
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for non-integer text")
+		}
+		if !strings.Contains(err.Error(), "not an integer") {
+			t.Errorf("error = %q, want to contain 'not an integer'", err)
+		}
+	})
+
+	t.Run("whitespace-padded integer", func(t *testing.T) {
+		body := strings.NewReader(anthropicResponse("  1  "))
+		idx, err := sr.parseClassifierResponse(body, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if idx != 1 {
+			t.Errorf("idx = %d, want 1", idx)
+		}
+	})
+
+	t.Run("empty content array", func(t *testing.T) {
+		body := strings.NewReader(`{"content":[]}`)
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for empty content array")
+		}
+		if !strings.Contains(err.Error(), "no text content") {
+			t.Errorf("error = %q, want to contain 'no text content'", err)
+		}
+	})
+
+	t.Run("no text type in content", func(t *testing.T) {
+		body := strings.NewReader(`{"content":[{"type":"image","text":"0"}]}`)
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error when no text type in content")
+		}
+		if !strings.Contains(err.Error(), "no text content") {
+			t.Errorf("error = %q, want to contain 'no text content'", err)
+		}
+	})
+
+	t.Run("invalid JSON body", func(t *testing.T) {
+		body := strings.NewReader(`not json`)
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
+		if !strings.Contains(err.Error(), "decode classifier response") {
+			t.Errorf("error = %q, want to contain 'decode classifier response'", err)
+		}
+	})
+
+	t.Run("missing content field", func(t *testing.T) {
+		body := strings.NewReader(`{"model":"test"}`)
+		_, err := sr.parseClassifierResponse(body, 3)
+		if err == nil {
+			t.Fatal("expected error for missing content field")
+		}
+		if !strings.Contains(err.Error(), "no text content") {
+			t.Errorf("error = %q, want to contain 'no text content'", err)
+		}
+	})
 }
