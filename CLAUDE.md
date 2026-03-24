@@ -278,6 +278,24 @@ This outputs all commands with syntax, flags, examples, and natural language tri
 - Auto-builds: Cross-compile 5 platforms (Linux/macOS/Windows × amd64/arm64)
 - Docker: Multi-arch image `ghcr.io/l17728/pairproxy`
 
+## 解题复盘机制
+
+每次修复 bug 或经历多轮尝试才解决的问题，完成后必须做一次复盘，将过程沉淀为经验。
+
+**复盘的核心动作**：
+1. **记录有效路径**：把最终奏效的解决方案用简洁的步骤写下来，而不是描述走过的弯路
+2. **归因根本原因**：追问"为什么会出现这个问题"，而不是止步于"怎么修的"
+3. **提炼可复用规律**：把这次的教训抽象成下次可以直接套用的判断原则
+4. **更新知识库**：将结论补充到 `CLAUDE.md`（决策原则类）或 `docs/TROUBLESHOOTING.md`（操作排查类），让后来的自己和协作者直接受益
+
+**判断是否需要复盘**：凡是满足以下任一条件的问题，都值得复盘：
+- 尝试了两种以上方案才解决
+- 问题根因和第一直觉判断不符
+- 修复过程中发现了原本不了解的系统行为
+- 同类问题在项目中已经出现过一次
+
+**复盘不是写事故报告**，不需要面面俱到，一段话说清楚"踩了什么坑、为什么踩、以后怎么避免"即可。价值在于把一次性的痛苦转化成长期有效的判断力。
+
 ## Important Notes
 
 - All commands run from project directory (where sproxy.yaml exists)
