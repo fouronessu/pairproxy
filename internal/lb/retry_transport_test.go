@@ -324,6 +324,7 @@ func TestRetryTransport_BodyRestoredOnRetry(t *testing.T) {
 func TestRetryTransport_RetryOnStatus_429(t *testing.T) {
 	r1 := makeResp(429, `{"error":"rate_limit_exceeded"}`)
 	r2 := makeResp(200, `{"id":"msg_ok"}`)
+	t.Cleanup(func() { r1.Body.Close(); r2.Body.Close() })
 	inner := &mockRoundTripper{
 		responses: []*http.Response{r1, r2},
 	}
@@ -362,6 +363,7 @@ func TestRetryTransport_RetryOnStatus_429(t *testing.T) {
 func TestRetryTransport_RetryOnStatus_429_AllExhausted(t *testing.T) {
 	r1 := makeResp(429, `{"error":"rate_limit"}`)
 	r2 := makeResp(429, `{"error":"rate_limit"}`)
+	t.Cleanup(func() { r1.Body.Close(); r2.Body.Close() })
 	inner := &mockRoundTripper{
 		responses: []*http.Response{r1, r2},
 	}
@@ -383,7 +385,10 @@ func TestRetryTransport_RetryOnStatus_429_AllExhausted(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest(http.MethodPost, "http://t1/v1/messages", nil)
-	_, err := rt.RoundTrip(req)
+	resp, err := rt.RoundTrip(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
 	if err == nil {
 		t.Fatal("expected error when all targets return 429")
 	}
@@ -393,6 +398,7 @@ func TestRetryTransport_RetryOnStatus_429_AllExhausted(t *testing.T) {
 // 429 不触发重试（向后兼容）。
 func TestRetryTransport_RetryOnStatus_Disabled(t *testing.T) {
 	r1 := makeResp(429, `{"error":"rate_limit"}`)
+	t.Cleanup(func() { r1.Body.Close() })
 	inner := &mockRoundTripper{
 		responses: []*http.Response{r1},
 	}
