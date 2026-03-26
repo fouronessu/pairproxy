@@ -134,6 +134,11 @@ echo -e "testuser\ntestpass123" | ./cproxy.exe login --server http://localhost:9
 - **Provider symmetry**: 每个 provider 路径（anthropic / openai / ollama）需独立覆盖：正常流、malformed 容错、非流式场景
 - **Exported API**: 新增 exported 方法时，同 PR 内必须包含对应单元测试
 - **If-err-return 插入**: 在已有条件块前插入 `if err != nil { return }` 后，必须确认原有条件块结构完整，立即 `go build` 验证
+- **Goroutine 生命周期**: 凡是测试中启动的 goroutine（含 `hc.Start`、`writer.Start` 等），测试结束前必须 `cancel()` + `Wait()`，否则 goroutine 会在 zaptest logger 失效后继续写入，触发 data race
+- **共享变量保护**: HTTP handler goroutine 写、测试主 goroutine 读的变量必须用 mutex 保护；读取前先调用 `srv.Close()` 确保所有 handler 已退出
+- **异步断言时序**: 不要在 `Start()` 后立即断言异步副作用（如健康状态变化），应等待最终状态或用 `Eventually` 轮询
+- **bodyclose lint**: 测试中 `http.Response` 即使不读 body 也必须 `defer resp.Body.Close()`，否则 `bodyclose` linter 报错
+- **gosimple lint**: `if x != nil && len(x) != 0` 应简化为 `if len(x) != 0`，nil slice 的 len 为 0
 
 ## Configuration
 

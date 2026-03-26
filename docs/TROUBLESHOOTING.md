@@ -943,4 +943,95 @@ grep "SyncLLMTargets\|balancer and health checker updated" sproxy.log | tail -10
 
 **原因**：target 未配置 `health_check_path`，以 Healthy=true 乐观入场，依赖被动熔断。
 
+---
+
+## 17. CI 测试 Data Race 排查
+
+### 17.1 zaptest logger 在测试结束后被写入
+
+**症状**：`-race` 模式下报 `WARNING: DATA RACE`，read 栈在 `zaptest.TestingWriter.Write`，write 栈在 `testing.tRunner.func1`（测试已结束）。
+
+**根因**：测试中通过 `hc.Start(ctx)` / `writer.Start(ctx)` 启动的后台 goroutine，在测试函数返回后仍在运行，继续向已失效的 zaptest logger 写日志。
+
+**修复模式**：
+```go
+// 错误：defer cancel() 不等待 goroutine 退出
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+hc.Start(ctx)
+
+// 正确：cancel 后 Wait，确保所有子 goroutine 退出
+ctx, cancel := context.WithCancel(context.Background())
+hc.Start(ctx)
+defer func() { cancel(); hc.Wait() }()
+```
+
+**规律**：凡是测试中调用 `XXX.Start(ctx)` 的地方，必须配套 `defer func() { cancel(); XXX.Wait() }()`。
+
+---
+
+### 17.2 HTTP handler goroutine 与测试主 goroutine 共享变量
+
+**症状**：`-race` 模式下报 data race，一端在 `httptest.Server` 的 handler goroutine 写变量，另一端在测试主 goroutine 读变量。
+
+**根因**：handler 是并发执行的，测试主 goroutine 在 `srv.Close()` 之前就读取了 handler 写入的变量。
+
+**修复模式**：
+```go
+// 错误：无保护直接读
+var receivedAuth string
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    receivedAuth = r.Header.Get("Authorization") // handler goroutine 写
+}))
+// ... 发请求 ...
+assert(receivedAuth) // 主 goroutine 读，race！
+
+// 正确：mutex 保护 + srv.Close() 后再读
+var mu sync.Mutex
+var receivedAuth string
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    mu.Lock()
+    receivedAuth = r.Header.Get("Authorization")
+    mu.Unlock()
+}))
+// ... 发请求 ...
+srv.Close() // 等所有 handler 完成
+mu.Lock()
+val := receivedAuth
+mu.Unlock()
+assert(val)
+```
+
+---
+
+### 17.3 SQLite ON CONFLICT 不能更新主键
+
+**症状**：`ON CONFLICT(url) DO UPDATE SET id=excluded.id` 触发 `UNIQUE constraint failed: table.id`。
+
+**根因**：SQLite 不支持在 upsert 中修改主键列，即使 `ON CONFLICT` 指定的是其他列。
+
+**修复**：先按冲突列（url）删除 id 不同的旧记录，再按主键（id）做普通 upsert：
+```go
+// 先删除 URL 相同但 ID 不同的旧记录
+db.Where("url = ? AND id != ?", target.URL, target.ID).Delete(&LLMTarget{})
+// 再按 ID upsert
+db.Save(&target)
+```
+
+---
+
+### 17.4 异步状态断言时序问题
+
+**症状**：测试偶发失败，断言 `Healthy=false` 但实际仍为 `true`；或断言通过但 CI 偶尔失败。
+
+**根因**：`Start()` 后立即断言异步副作用，goroutine 可能尚未执行到对应逻辑。
+
+**修复**：移除对中间状态的即时断言，只验证最终稳定状态；或用轮询等待：
+```go
+// 等待最终状态，最多 2s
+require.Eventually(t, func() bool {
+    return balancer.IsHealthy(targetURL)
+}, 2*time.Second, 50*time.Millisecond)
+```
+
 **解决方案**：为所有 target 配置 `health_check_path`（如 `/health`），确保后端实现该端点。有 `health_check_path` 的新 target 会先经过主动检查再进入路由池。
