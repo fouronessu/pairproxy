@@ -283,13 +283,19 @@ func (s *ConfigSyncer) upsertSnapshot(snap ConfigSnapshot) error {
 
 		// --- 3. Upsert LLM Targets ---
 		// IsActive 和 IsEditable 均为 bool，显式包含在 DoUpdates 中避免零值丢失。
+		// 先按 URL 删除本地与 Primary ID 不同的旧记录，避免 SQLite 更新主键时触发 UNIQUE 冲突。
 		if len(snap.LLMTargets) > 0 {
 			targets := make([]*db.LLMTarget, len(snap.LLMTargets))
 			copy(targets, snap.LLMTargets)
+			for _, t := range targets {
+				if err := tx.Where("url = ? AND id != ?", t.URL, t.ID).Delete(&db.LLMTarget{}).Error; err != nil {
+					return fmt.Errorf("delete stale llm target by url: %w", err)
+				}
+			}
 			if err := tx.Select("*").Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "url"}},
+				Columns: []clause.Column{{Name: "id"}},
 				DoUpdates: clause.AssignmentColumns([]string{
-					"id", "provider", "name", "weight",
+					"url", "provider", "name", "weight",
 					"health_check_path", "model_mapping", "source",
 					"is_editable", "is_active", "updated_at",
 				}),
