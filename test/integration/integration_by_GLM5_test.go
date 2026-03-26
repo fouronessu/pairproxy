@@ -122,8 +122,8 @@ func TestLoadBalancerIntegration(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	hc.Start(ctx)
+	defer func() { cancel(); hc.Wait() }()
 
 	// Make multiple requests
 	for i := 0; i < 30; i++ {

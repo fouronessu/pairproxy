@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -328,6 +329,7 @@ func TestConfigSyncer_Pull_NoSharedSecret_NoAuthHeader(t *testing.T) {
 	}
 
 	receivedAuth := "not-empty"
+	var receivedAuthMu sync.Mutex
 
 	snap := ConfigSnapshot{
 		Version:     time.Now(),
@@ -338,7 +340,9 @@ func TestConfigSyncer_Pull_NoSharedSecret_NoAuthHeader(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthMu.Lock()
 		receivedAuth = r.Header.Get("Authorization")
+		receivedAuthMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)
 	}))
@@ -359,8 +363,13 @@ func TestConfigSyncer_Pull_NoSharedSecret_NoAuthHeader(t *testing.T) {
 	defer cancel()
 	syncer.Start(ctx)
 	syncer.Wait()
+	srv.Close() // wait for all handler goroutines to finish before reading receivedAuth
 
-	if receivedAuth != "" {
-		t.Errorf("Authorization header should be empty when no shared secret, got %q", receivedAuth)
+	receivedAuthMu.Lock()
+	auth := receivedAuth
+	receivedAuthMu.Unlock()
+
+	if auth != "" {
+		t.Errorf("Authorization header should be empty when no shared secret, got %q", auth)
 	}
 }
