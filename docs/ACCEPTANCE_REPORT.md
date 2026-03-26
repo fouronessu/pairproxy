@@ -1,10 +1,10 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.18.0 (语义路由 Semantic Router)
-**提交日期**: 2026-03-22
+**版本**: v2.19.0 (WebUI 健康检查运行时同步)
+**提交日期**: 2026-03-25
 **开发语言**: Go 1.23
-**代码规模**: 60,500+ 行非空非注释 Go 代码（含测试，v2.18.0 新增约 1,300 行）
+**代码规模**: 60,800+ 行非空非注释 Go 代码（含测试，v2.19.0 新增约 300 行）
 
 ---
 
@@ -31,6 +31,7 @@ PairProxy 是一个企业级的 LLM API 代理网关系统，提供统一的 API
 - **HMAC-SHA256 Keygen (v2.15.0)**: 替换指纹嵌入算法，消除碰撞漏洞（alice123 vs 321ecila），确定性生成（相同用户名+secret→相同key），256位安全强度，Base62编码（48字符），配置文件新增 auth.keygen_secret 必填字段（≥32字符）
 - **训练语料采集 Corpus (v2.16.0)**: 异步采集 LLM 请求/响应对为 JSONL 训练语料，质量过滤（错误响应/短回复/排除分组/空输出），支持 Anthropic/OpenAI/Ollama 三种 SSE 格式，按日期+大小文件轮转，记录 model_requested 和 model_actual 双模型字段
 - **语义路由 Semantic Router (v2.18.0)**: 根据请求 messages 语义意图缩窄 LLM 候选池；分类器复用现有 LB（防递归）；规则来自 YAML + DB（DB 优先，热更新）；REST API + CLI 管理规则；分类失败自动降级到完整候选池；仅对无绑定用户生效
+- **WebUI 健康检查运行时同步 (v2.19.0)**: 修复通过 WebUI/API 添加 LLM target 后健康检查永远不健康的问题；每次 Create/Update/Delete/Enable/Disable 后 `SyncLLMTargets()` 同步 llmBalancer 和 llmHC；有 HealthCheckPath 的新节点以 Healthy=false 入场并立即触发单次主动检查（秒级，无需等 30s ticker）；存量节点健康/排水状态在 Sync 时完整保留
 
 ---
 

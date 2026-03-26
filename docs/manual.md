@@ -48,6 +48,7 @@
 - [§30 已知问题与修复](#30-已知问题与修复)
 - [§32 训练语料采集（Corpus）](#32-训练语料采集corpusv2160)
 - [§34 语义路由（Semantic Router）（v2.18.0）](#34-语义路由semantic-routerv2180)
+- [§35 LLM 目标运行时同步（v2.19.0）](#35-llm-目标运行时同步v2190)
 
 ---
 
@@ -5300,6 +5301,41 @@ DEBUG semantic router: skipped, binding resolver active
 - 分类器 prompt 仅使用对话的**最近 5 条消息**（`maxPromptMessages=5`），避免 prompt 过长；超长消息内容会被截断到 500 字符
 - 分类器子请求通过 context 标记防递归，不会无限循环
 - 数据库规则通过 REST API 或 CLI 修改后立即热更新，无需重启
+
+---
+
+## 35. LLM 目标运行时同步（v2.19.0）
+
+**版本**：v2.19.0
+
+### 35.1 问题背景
+
+v2.19.0 之前，通过 WebUI 或 API 添加新 LLM target 后，运行中的 `llmBalancer` 和 `llmHC` 无法感知变更，导致新 target 永远显示 Healthy=false，无法被路由。
+
+### 35.2 解决方案
+
+每次通过 WebUI/API 执行 Create/Update/Delete/Enable/Disable 操作后，系统自动调用 `SyncLLMTargets()`，在同一请求内同步更新 `llmBalancer` 和 `llmHC`，无需重启。
+
+### 35.3 新 target 入场策略
+
+| 情况 | 初始状态 | 何时可路由 |
+|------|---------|-----------|
+| 有 `HealthCheckPath` | Healthy=false | 立即触发 `CheckTarget`，通过后秒级可用 |
+| 无 `HealthCheckPath` | Healthy=true | 立即可路由，依赖被动熔断 |
+
+有 `HealthCheckPath` 的新节点不会等待 30s 定时 ticker，而是在 Sync 时立即触发一次主动检查，避免坏节点消耗真实用户请求。
+
+### 35.4 存量节点状态保留
+
+Sync 操作不会重置已存在节点的运行时状态：
+
+- 已熔断节点（Healthy=false）：Sync 后保留熔断状态
+- 排水中节点（Draining=true）：Sync 后保留排水标志，不接受新流量
+- 失败计数：Sync 后保留，再失败一次即可触发熔断
+
+### 35.5 向后兼容
+
+v2.19.0 对外部接口无变更，所有 WebUI/API 操作行为不变，仅内部增加了运行时同步逻辑。
 
 ---
 

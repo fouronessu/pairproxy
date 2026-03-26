@@ -695,7 +695,45 @@ today := time.Now().UTC().Format("2006-01-02")
 
 ---
 
-## 12. 风险矩阵总结
+## 11.5 LLM 目标运行时同步故障场景 (v2.19.0+)
+
+### 11.5.1 新 target 有 HealthCheckPath 但后端不可达
+
+**场景**: 通过 WebUI 添加新 target，配置了 HealthCheckPath，但后端服务不可用
+
+**系统行为**:
+- ✅ **不消耗真实请求**: SyncLLMTargets 调用 CheckTarget，检查失败，target 保持 Healthy=false
+- ✅ **不进入路由池**: Pick 跳过 Healthy=false 的 target
+- ✅ **30s 后重试**: 定时 ticker 继续主动检查，后端恢复后自动变 Healthy=true
+
+**风险评估**: ✅ **低风险** - 坏节点不会消耗真实用户请求
+
+---
+
+### 11.5.2 Sync 时已熔断 target 状态保留
+
+**场景**: target-A 已熔断（Healthy=false），管理员编辑 target-B 并保存触发 Sync
+
+**系统行为**:
+- ✅ **熔断状态保留**: SyncLLMTargets 读取存量 target 的 Healthy 状态并在重建时还原
+- ✅ **排水状态保留**: Draining=true 的 target 在 Sync 后继续排水
+- ✅ **失败计数保留**: failures map 不被 Sync 清理，再失败一次即熔断
+
+**风险评估**: ✅ **低风险** - 运行时状态不因管理操作丢失
+
+---
+
+### 11.5.3 并发 Sync 与 checkAll
+
+**场景**: SyncLLMTargets 调用 UpdateHealthPaths 的同时，checkAll ticker 正在执行
+
+**系统行为**:
+- ✅ **无 data race**: checkAll 持锁拷贝 healthPaths 后立即释放锁，使用拷贝副本执行检查
+- ✅ **过渡窗口可接受**: 飞行中的 checkOneWithPath 使用旧路径，最多影响一次检查周期
+
+**风险评估**: ✅ **可接受** - 过渡窗口内最多 1 次旧路径检查，不影响功能
+
+---
 
 | 场景类别 | 具体场景 | 风险等级 | 数据丢失 | 服务中断 | 现有防护 | 改进建议 |
 |---------|---------|---------|---------|---------|---------|---------|

@@ -21,6 +21,7 @@
 13. [语义路由问题](#13-语义路由问题)
 14. [训练语料采集问题](#14-训练语料采集问题)
 15. [PostgreSQL 连接问题](#15-postgresql-连接问题)
+16. [健康检查运行时同步问题](#16-健康检查运行时同步问题v2190)
 
 ---
 
@@ -893,3 +894,53 @@ grep dsn sproxy.yaml   # 各节点应指向同一 PG
 curl -H "Authorization: Bearer $CLUSTER_SECRET" \
      http://sproxy:9000/cluster/routing | jq .
 ```
+
+---
+
+## 16. 健康检查运行时同步问题（v2.19.0）
+
+> v2.19.0+，涉及通过 WebUI/API 管理 LLM target 后的运行时同步。
+
+### 16.1 新增 target 后仍显示 Healthy=false
+
+**症状**：通过 WebUI 添加了新 target，Dashboard 上一直显示 Healthy=false，不自动恢复。
+
+**排查步骤**：
+
+```bash
+# 1. 确认 target 的 HealthCheckPath 配置
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+     http://localhost:9000/api/admin/llm-targets | jq '.[] | {url, health_check_path}'
+
+# 2. 手动测试健康检查端点
+curl -v http://<target-url><health_check_path>
+# 应返回 HTTP 200，否则 target 会保持 Healthy=false
+
+# 3. 查看日志中的 CheckTarget 记录
+grep -i "health check" sproxy.log | tail -20
+```
+
+**可能原因**：
+- `health_check_path` 指向的端点返回非 200 → 修复后端或更正路径
+- 后端服务未启动 → 启动后端，CheckTarget 会在下次 30s ticker 时重试
+- 无 `health_check_path` 配置但 target 仍不健康 → 检查被动熔断日志
+
+### 16.2 Sync 后已熔断 target 被意外复活
+
+**症状**：某 target 因连续失败被熔断（Healthy=false），编辑另一个 target 保存后，熔断 target 突然变 Healthy=true。
+
+**原因**：这是 v2.19.0 之前的 bug，已修复。现在 `SyncLLMTargets` 会保留存量 target 的健康状态。
+
+**验证**：
+```bash
+grep "SyncLLMTargets\|balancer and health checker updated" sproxy.log | tail -10
+# 已熔断的 target 应保持 Healthy=false
+```
+
+### 16.3 新 target 消耗了真实用户请求才被熔断
+
+**症状**：添加了一个坏 target（无法连接），前几个用户请求失败后才被熔断。
+
+**原因**：target 未配置 `health_check_path`，以 Healthy=true 乐观入场，依赖被动熔断。
+
+**解决方案**：为所有 target 配置 `health_check_path`（如 `/health`），确保后端实现该端点。有 `health_check_path` 的新 target 会先经过主动检查再进入路由池。

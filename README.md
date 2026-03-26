@@ -37,7 +37,7 @@
 | **用户配额** | 按分组设置每日/每月 token 上限，超额返回 429 |
 | **速率限制** | 每用户每分钟请求数（RPM）限制，滑动窗口算法 |
 | **负载均衡** | cproxy↔sproxy、sproxy↔LLM 两级负载均衡，加权随机策略 |
-| **健康检查** | 主动（GET /health）+ 被动（连续失败熔断）双重检查 |
+| **健康检查** | 主动（GET /health）+ 被动（连续失败熔断）双重检查；WebUI/API 变更后运行时同步（v2.19.0） |
 | **集群模式** | primary + worker 多节点（SQLite），或 peer 对等节点（PostgreSQL），路由表自动下发给 cproxy |
 | **Web Dashboard** | Go 模板 + Tailwind CSS，内嵌二进制，无需前端构建 |
 | **Admin CLI** | 命令行管理用户、分组、配额、统计 |
@@ -65,6 +65,7 @@
 | **训练语料采集 Corpus（v2.16.0）** | 异步采集 LLM 请求/响应对为 JSONL 训练语料；质量过滤（错误响应、短回复、排除分组）；支持 Anthropic/OpenAI/Ollama 三种 SSE 格式；按日期+大小自动文件轮转；记录 `model_requested` 和 `model_actual` 双模型字段；零阻塞热路径（channel + worker goroutine） |
 | **LLM 故障转移增强（v2.17.0）** | 新增 `llm.retry_on_status` 配置，支持对指定 HTTP 状态码（如 429 配额耗尽）触发 try-next；遍历所有 target 一次，找到可用端点；空列表默认关闭，完全向后兼容；每次重试打印结构化日志（reason=HTTP 429 / connection error）；失败 target 加入 tried 列表防止重复尝试 |
 | **语义路由（v2.18.0）** | 根据请求 messages 语义意图缩窄 LLM 候选池；分类器复用现有 LB（防递归）；规则来自 YAML + DB（DB 优先，热更新）；`sproxy admin route` CLI + REST API `/api/admin/semantic-routes` 管理规则；任何分类失败自动降级到完整候选池；仅对无绑定用户生效；`semantic_router:` 配置段启用 |
+| **WebUI 健康检查运行时同步（v2.19.0）** | 修复通过 WebUI/API 添加目标后健康检查永远不健康的问题；`SyncLLMTargets()` 在每次 Create/Update/Delete/Enable/Disable 后同步 `llmBalancer` 和 `llmHC`；有 `HealthCheckPath` 的新节点以 `Healthy=false` 入场并立即触发单次主动检查（秒级，无需等 30s ticker）；无 `HealthCheckPath` 的节点乐观初始化依赖被动熔断；存量节点的健康/排水状态在 Sync 时完整保留；新增 `lb.UpdateHealthPaths()`、`lb.CheckTarget()`、`proxy.SyncLLMTargets()` |
 
 ---
 

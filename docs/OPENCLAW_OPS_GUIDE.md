@@ -1,8 +1,8 @@
 # PairProxy OpenClaw 自动化运维手册
 
 **版本**: v2.4
-**适用系统**: PairProxy v2.18.0+
-**更新日期**: 2026-03-22
+**适用系统**: PairProxy v2.19.0+
+**更新日期**: 2026-03-25
 
 ---
 
@@ -33,6 +33,7 @@
 | HMAC Keygen（v2.15.0+） | keygen_secret 配置存在性、API Key 验证失败率 | 5 分钟 |
 | LLM 故障转移（v2.17.0+） | retry_on_status 配置存在性、429 触发重试次数、try-next 成功率 | 5 分钟 |
 | 语义路由（v2.18.0+） | semantic_router.enabled 配置、分类器超时率、规则匹配命中率、降级次数 | 5 分钟 |
+| LLM 目标运行时同步（v2.19.0+） | 新 target CheckTarget 成功率、Sync 调用后 Healthy 状态变化、已熔断 target 状态保留验证 | 2 分钟 |
 
 ---
 
