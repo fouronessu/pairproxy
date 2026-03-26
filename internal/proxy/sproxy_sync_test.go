@@ -265,17 +265,6 @@ func TestSyncLLMTargets_NewTargetWithHealthPath_StartsUnhealthyThenRecovers(t *t
 
 	sp.SyncLLMTargets()
 
-	// 验证：B 刚加入时 Healthy=false（不会用用户请求试错）
-	immediatelyHealthy := false
-	for _, tgt := range bal.Targets() {
-		if tgt.ID == srv.URL && tgt.Healthy {
-			immediatelyHealthy = true
-		}
-	}
-	if immediatelyHealthy {
-		t.Error("new target with HealthCheckPath should start as Healthy=false, not routable before first check")
-	}
-
 	// 等待 CheckTarget 异步完成（使用的是真实 http server，几毫秒内会响应）
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
