@@ -2702,3 +2702,100 @@ func TestAnthropicToOpenAIStreamConverter(t *testing.T) {
 		assert.Equal(t, 1, mf.flushCount)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// TestConvertOpenAIErrorResponse_ErrorTypeMappings
+// ---------------------------------------------------------------------------
+
+func TestConvertOpenAIErrorResponse_ErrorTypeMappings(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("insufficient_quota maps to rate_limit_error", func(t *testing.T) {
+		body := []byte(`{"error":{"message":"quota exceeded","type":"insufficient_quota"}}`)
+		out := convertOpenAIErrorResponse(body, logger, "req1")
+		var resp map[string]interface{}
+		if err := json.Unmarshal(out, &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "rate_limit_error", errObj["type"])
+		assert.Equal(t, "quota exceeded", errObj["message"])
+	})
+
+	t.Run("server_error maps to api_error", func(t *testing.T) {
+		body := []byte(`{"error":{"message":"internal error","type":"server_error"}}`)
+		out := convertOpenAIErrorResponse(body, logger, "req2")
+		var resp map[string]interface{}
+		if err := json.Unmarshal(out, &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "api_error", errObj["type"])
+	})
+
+	t.Run("empty type defaults to api_error", func(t *testing.T) {
+		body := []byte(`{"error":{"message":"something went wrong"}}`)
+		out := convertOpenAIErrorResponse(body, logger, "req3")
+		var resp map[string]interface{}
+		if err := json.Unmarshal(out, &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "api_error", errObj["type"])
+	})
+
+	t.Run("non-OpenAI format returned as-is", func(t *testing.T) {
+		body := []byte(`{"message":"plain error"}`)
+		out := convertOpenAIErrorResponse(body, logger, "req4")
+		assert.Equal(t, body, out)
+	})
+
+	t.Run("invalid JSON returned as-is", func(t *testing.T) {
+		body := []byte(`not json`)
+		out := convertOpenAIErrorResponse(body, logger, "req5")
+		assert.Equal(t, body, out)
+	})
+
+	t.Run("known type preserved unchanged", func(t *testing.T) {
+		body := []byte(`{"error":{"message":"bad request","type":"invalid_request_error"}}`)
+		out := convertOpenAIErrorResponse(body, logger, "req6")
+		var resp map[string]interface{}
+		if err := json.Unmarshal(out, &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		errObj := resp["error"].(map[string]interface{})
+		assert.Equal(t, "invalid_request_error", errObj["type"])
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenAIToAnthropicStreamConverter_HandleDone_UnopenedToolBlocks
+// ---------------------------------------------------------------------------
+
+func TestOpenAIToAnthropicStreamConverter_HandleDone_UnopenedToolBlocks(t *testing.T) {
+	logger := zap.NewNop()
+	mw := newMockResponseWriter()
+	conv := NewOpenAIToAnthropicStreamConverter(mw, logger, "req-done-tool", "claude-3-5-sonnet-20241022")
+
+	// Feed tool_call deltas without any prior content_block_start,
+	// then [DONE] — handleDone must emit the missing blocks.
+	events := []string{
+		// role delta (message start)
+		`data: {"id":"msg1","model":"gpt-4o","choices":[{"delta":{"role":"assistant","content":null},"index":0}]}`,
+		// tool_call: name + first arg chunk
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"get_weather","arguments":"{\"loc"}}]},"index":0}]}`,
+		// tool_call: second arg chunk
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ation\":\"NYC\"}"}}]},"index":0}]}`,
+		// done
+		`data: [DONE]`,
+	}
+	for _, ev := range events {
+		conv.Write([]byte(ev + "\n\n")) //nolint:errcheck
+	}
+
+	output := mw.String()
+	assert.Contains(t, output, `"type":"tool_use"`)
+	assert.Contains(t, output, `"name":"get_weather"`)
+	assert.Contains(t, output, `content_block_stop`)
+	assert.Contains(t, output, `message_stop`)
+}
