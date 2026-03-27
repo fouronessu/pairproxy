@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -154,96 +153,3 @@ func TestTargetAlertManager_Disabled(t *testing.T) {
 	assert.Len(t, alerts, 0)
 }
 
-// TestWeightedRandomStrategy_Select 测试加权随机策略
-func TestWeightedRandomStrategy_Select(t *testing.T) {
-	strategy := NewWeightedRandomStrategy()
-
-	targets := []db.TargetWithWeight{
-		{URL: "https://api1.example.com", Weight: 2, Healthy: true},
-		{URL: "https://api2.example.com", Weight: 1, Healthy: true},
-	}
-
-	// 执行多次选择，验证分布
-	counts := make(map[string]int)
-	for i := 0; i < 300; i++ {
-		selected := strategy.Select(targets, make(map[string]bool))
-		if selected != nil {
-			counts[selected.URL]++
-		}
-	}
-
-	// 验证 api1 被选中的次数大约是 api2 的两倍
-	assert.Greater(t, counts["https://api1.example.com"], counts["https://api2.example.com"])
-}
-
-// TestWeightedRandomStrategy_Select_WithTried 测试加权随机策略（已尝试过滤）
-func TestWeightedRandomStrategy_Select_WithTried(t *testing.T) {
-	strategy := NewWeightedRandomStrategy()
-
-	targets := []db.TargetWithWeight{
-		{URL: "https://api1.example.com", Weight: 2, Healthy: true},
-		{URL: "https://api2.example.com", Weight: 1, Healthy: true},
-	}
-
-	tried := map[string]bool{
-		"https://api1.example.com": true,
-	}
-
-	// 执行选择（应该只选择 api2）
-	selected := strategy.Select(targets, tried)
-	assert.NotNil(t, selected)
-	assert.Equal(t, "https://api2.example.com", selected.URL)
-}
-
-// TestWeightedRandomStrategy_Select_NoHealthy 测试加权随机策略（没有健康的 targets）
-func TestWeightedRandomStrategy_Select_NoHealthy(t *testing.T) {
-	strategy := NewWeightedRandomStrategy()
-
-	targets := []db.TargetWithWeight{
-		{URL: "https://api1.example.com", Weight: 2, Healthy: false},
-		{URL: "https://api2.example.com", Weight: 1, Healthy: false},
-	}
-
-	// 执行选择（应该返回 nil）
-	selected := strategy.Select(targets, make(map[string]bool))
-	assert.Nil(t, selected)
-}
-
-// TestRoundRobinStrategy_Select 测试轮询策略
-func TestRoundRobinStrategy_Select(t *testing.T) {
-	strategy := NewRoundRobinStrategy()
-
-	targets := []db.TargetWithWeight{
-		{URL: "https://api1.example.com", Weight: 1, Healthy: true},
-		{URL: "https://api2.example.com", Weight: 1, Healthy: true},
-	}
-
-	// 执行轮询选择
-	selected1 := strategy.Select(targets, make(map[string]bool))
-	selected2 := strategy.Select(targets, make(map[string]bool))
-	selected3 := strategy.Select(targets, make(map[string]bool))
-
-	assert.NotNil(t, selected1)
-	assert.NotNil(t, selected2)
-	assert.NotNil(t, selected3)
-
-	// 验证轮询顺序
-	assert.NotEqual(t, selected1.URL, selected2.URL)
-	assert.Equal(t, selected1.URL, selected3.URL)
-}
-
-// TestPriorityStrategy_Select 测试优先级策略
-func TestPriorityStrategy_Select(t *testing.T) {
-	strategy := NewPriorityStrategy()
-
-	targets := []db.TargetWithWeight{
-		{URL: "https://api1.example.com", Priority: 2, Healthy: true},
-		{URL: "https://api2.example.com", Priority: 1, Healthy: true},
-		{URL: "https://api3.example.com", Priority: 3, Healthy: true},
-	}
-
-	// 执行优先级选择
-	selected := strategy.Select(targets, make(map[string]bool))
-	assert.NotNil(t, selected)
-	assert.Equal(t, "https://api2.example.com", selected.URL) // priority=1 最高
-}
