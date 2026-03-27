@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/l17728/pairproxy/internal/db"
-	"github.com/l17728/pairproxy/internal/lb"
 )
 
 // GroupTargetSelector 在 Group 内选择 target
@@ -294,9 +293,7 @@ func (s *GroupTargetSelector) UpdateTargetHealth(targetURL string, healthy bool)
 	}
 
 	// 更新所有包含该 target 的 target set members
-	if err := s.repo.db.Model(&db.GroupTargetSetMember{}).
-		Where("target_url = ?", targetURL).
-		Update("health_status", status).Error; err != nil {
+	if err := s.repo.UpdateTargetHealth(targetURL, healthy); err != nil {
 		s.logger.Error("failed to update target health",
 			zap.String("target_url", targetURL),
 			zap.String("status", status),

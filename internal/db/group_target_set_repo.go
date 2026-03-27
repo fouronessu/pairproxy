@@ -53,7 +53,7 @@ func (r *GroupTargetSetRepo) Create(set *GroupTargetSet) error {
 // GetByID 根据 ID 获取 target set
 func (r *GroupTargetSetRepo) GetByID(id string) (*GroupTargetSet, error) {
 	var set GroupTargetSet
-	if err := r.db.Preload("Members").First(&set, "id = ?", id).Error; err != nil {
+	if err := r.db.First(&set, "id = ?", id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
@@ -69,7 +69,7 @@ func (r *GroupTargetSetRepo) GetByID(id string) (*GroupTargetSet, error) {
 // GetByName 根据名称获取 target set
 func (r *GroupTargetSetRepo) GetByName(name string) (*GroupTargetSet, error) {
 	var set GroupTargetSet
-	if err := r.db.Preload("Members").First(&set, "name = ?", name).Error; err != nil {
+	if err := r.db.First(&set, "name = ?", name).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
@@ -279,4 +279,31 @@ func (r *GroupTargetSetRepo) GetAvailableTargetsForGroup(groupID string) ([]Targ
 	}
 
 	return targets, nil
+}
+
+// UpdateTargetHealth 更新 target 的健康状态
+func (r *GroupTargetSetRepo) UpdateTargetHealth(targetURL string, healthy bool) error {
+	status := "healthy"
+	if !healthy {
+		status = "unhealthy"
+	}
+
+	// 更新所有包含该 target 的 target set members
+	if err := r.db.Model(&GroupTargetSetMember{}).
+		Where("target_url = ?", targetURL).
+		Update("health_status", status).Error; err != nil {
+		r.logger.Error("failed to update target health",
+			zap.String("target_url", targetURL),
+			zap.String("status", status),
+			zap.Error(err),
+		)
+		return fmt.Errorf("update target health: %w", err)
+	}
+
+	r.logger.Debug("target health updated",
+		zap.String("target_url", targetURL),
+		zap.String("status", status),
+	)
+
+	return nil
 }
