@@ -396,3 +396,63 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return !os.IsNotExist(err)
 }
+
+// IsRunning 返回测试是否正在运行
+func (c *Controller) IsRunning() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.shouldStop == false && c.startTime != time.Time{}
+}
+
+// GetStartTime 返回测试开始时间
+func (c *Controller) GetStartTime() time.Time {
+	return c.startTime
+}
+
+// GetWorkerStats 返回 worker 统计
+func (c *Controller) GetWorkerStats() (workers int, total, success, failure int64) {
+	if c.pool == nil {
+		return 0, 0, 0, 0
+	}
+	return c.pool.GetStats()
+}
+
+// GetCurrentWorkers 返回当前 worker 数量
+func (c *Controller) GetCurrentWorkers() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.currentWorkers
+}
+
+// GetConfig 返回当前配置
+func (c *Controller) GetConfig() *Config {
+	return c.config
+}
+
+// SetMode 设置测试模式
+func (c *Controller) SetMode(mode string) {
+	c.mu.Lock()
+	c.config.Mode = mode
+	c.mu.Unlock()
+}
+
+// SetFixedWorkers 设置固定 worker 数
+func (c *Controller) SetFixedWorkers(workers int) {
+	c.mu.Lock()
+	c.config.FixedWorkers = workers
+	c.mu.Unlock()
+}
+
+// SetDuration 设置测试时长
+func (c *Controller) SetDuration(duration time.Duration) {
+	c.mu.Lock()
+	c.config.Duration = duration
+	c.mu.Unlock()
+}
+
+// UpdateConfig 更新配置
+func (c *Controller) UpdateConfig(cfg *Config) {
+	c.mu.Lock()
+	c.config = cfg
+	c.mu.Unlock()
+}

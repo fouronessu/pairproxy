@@ -136,14 +136,17 @@ circuit_breaker:
 ```yaml
 categories:
   code_understanding:
-    - "解释这段代码的作用：func main() { fmt.Println(\"Hello\") }"
-    - "这段 Python 代码是什么意思：..."
-    
+    prompts:
+      - "解释这段代码的作用：func main() { fmt.Println(\"Hello\") }"
+      - "这段 Python 代码是什么意思：..."
+      
   code_refactoring:
-    - "重构这段代码，使其更易读..."
-    
+    prompts:
+      - "重构这段代码，使其更易读..."
+      
   debugging:
-    - "这段代码报错 'nil pointer dereference'，如何修复？"
+    prompts:
+      - "这段代码报错 'nil pointer dereference'，如何修复？"
 ```
 
 ## 分布式测试

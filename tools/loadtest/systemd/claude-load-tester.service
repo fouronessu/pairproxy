@@ -1,0 +1,41 @@
+[Unit]
+Description=Claude Load Tester
+After=network.target
+
+[Service]
+Type=simple
+User=loadtest
+Group=loadtest
+
+# Working directory
+WorkingDirectory=/opt/claude-load-tester
+
+# Binary path
+ExecStart=/opt/claude-load-tester/claude-load-tester run \
+    --api-enabled \
+    --api-addr :8080 \
+    --api-prometheus \
+    --mode fixed \
+    --workers 30 \
+    --duration 1h \
+    --output /opt/claude-load-tester/results/test.json
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65536
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/claude-load-tester/results
+
+# Environment
+Environment="GOMAXPROCS=4"
+
+[Install]
+WantedBy=multi-user.target

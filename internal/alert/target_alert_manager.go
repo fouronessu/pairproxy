@@ -174,6 +174,10 @@ func (m *TargetAlertManager) RecordError(
 
 	active, exists := m.activeAlerts[targetURL]
 	if !exists {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
 		active = &ActiveAlert{
 			Alert: &db.TargetAlert{
 				ID:             fmt.Sprintf("alert_%d", time.Now().UnixNano()),
@@ -181,7 +185,7 @@ func (m *TargetAlertManager) RecordError(
 				AlertType:      "error",
 				Severity:       "error",
 				StatusCode:     &statusCode,
-				ErrorMessage:   err.Error(),
+				ErrorMessage:   errMsg,
 				OccurrenceCount: 1,
 			},
 			ErrorCount:    1,

@@ -154,7 +154,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.wsMu.Unlock()
 	}()
 
-	s.logger.Info("WebSocket client connected", zap.RemoteAddr(conn.RemoteAddr()))
+	s.logger.Info("WebSocket client connected", zap.String("remote_addr", conn.RemoteAddr().String()))
 
 	// 发送初始数据
 	s.sendRealtimeMetrics(conn)

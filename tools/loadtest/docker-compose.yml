@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  loadtest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-load-tester
+    ports:
+      - "8080:8080"
+    command:
+      - /app/claude-load-tester
+      - run
+      - --api-enabled
+      - --api-addr
+      - :8080
+      - --api-prometheus
+      - --mode
+      - ramp-up
+      - --initial
+      - "1"
+      - --max
+      - "50"
+      - --step-size
+      - "5"
+      - --step-duration
+      - 60s
+      - --output
+      - /app/results/test.json
+    volumes:
+      - ./results:/app/results
+      - ./config:/app/config:ro
+      - ./prompts:/app/prompts:ro
+    restart: unless-stopped
+    networks:
+      - loadtest
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: loadtest-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - loadtest
+    networks:
+      - loadtest
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: loadtest-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/claude-load-tester.json:ro
+      - ./grafana/datasources/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - loadtest
+
+networks:
+  loadtest:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
