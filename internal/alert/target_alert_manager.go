@@ -80,6 +80,7 @@ type TargetAlertManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	once   sync.Once
 }
 
 // NewTargetAlertManager 创建告警管理器
@@ -107,7 +108,7 @@ func NewTargetAlertManager(
 func (m *TargetAlertManager) Start(ctx context.Context) {
 	if !m.config.Enabled {
 		m.logger.Info("alert manager disabled")
-		close(m.done) // 确保 Stop() 不会阻塞
+		m.once.Do(func() { close(m.done) }) // 确保 Stop() 不会阻塞
 		return
 	}
 
@@ -124,7 +125,7 @@ func (m *TargetAlertManager) Stop() {
 
 // eventLoop 事件处理循环
 func (m *TargetAlertManager) eventLoop() {
-	defer close(m.done)
+	defer m.once.Do(func() { close(m.done) })
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
