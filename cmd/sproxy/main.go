@@ -766,6 +766,22 @@ func runStart(cmd *cobra.Command, args []string) error {
 	userHandler.RegisterRoutes(mux)
 	logger.Info("user self-service API registered at /api/user/")
 
+	// Group-Target Set 管理 REST API
+	groupTargetSetRepo := db.NewGroupTargetSetRepo(database, logger)
+	targetAlertRepo := db.NewTargetAlertRepo(database, logger)
+
+	adminTargetSetHandler := api.NewAdminTargetSetHandler(groupTargetSetRepo, logger)
+	adminAlertHandler := api.NewAdminAlertHandler(targetAlertRepo, logger)
+
+	// 注册 Group-Target Set 和 Alert 管理端点
+	mux.Handle("GET /api/admin/targetsets", adminHandler.RequireAdmin(http.HandlerFunc(adminTargetSetHandler.ListTargetSets)))
+	mux.Handle("POST /api/admin/targetsets", adminHandler.RequireAdmin(http.HandlerFunc(adminTargetSetHandler.CreateTargetSet)))
+	mux.Handle("GET /api/admin/alerts/active", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ListActiveAlerts)))
+	mux.Handle("GET /api/admin/alerts/history", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ListAlertHistory)))
+	mux.Handle("POST /api/admin/alerts/resolve", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ResolveAlert)))
+	mux.Handle("GET /api/admin/alerts/stats", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.GetAlertStats)))
+	logger.Info("Group-Target Set and Alert management API registered at /api/admin/")
+
 	// 集群内部 API（仅 primary）
 	if peerRegistry != nil {
 		// P0-4: 使用 cluster.shared_secret 作为内部 API 认证密钥，而非节点地址

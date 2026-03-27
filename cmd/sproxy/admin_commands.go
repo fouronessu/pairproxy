@@ -1,12 +1,9 @@
-package cmd
+package main
 
 import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
-
-	"github.com/l17728/pairproxy/internal/db"
 )
 
 // targetsetCmd 代表 targetset 命令
