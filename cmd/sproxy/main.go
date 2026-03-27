@@ -798,6 +798,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	alertManager := alert.NewTargetAlertManager(targetAlertRepo, alertConfig, logger)
 	alertManager.Start(context.Background())
 
+	// 初始化 TargetHealthMonitor
+	healthCheckConfig := alert.HealthCheckConfig{
+		Interval:         30 * time.Second,
+		Timeout:          5 * time.Second,
+		FailureThreshold: 3,
+		SuccessThreshold: 2,
+		Path:             "/health",
+	}
+	healthMonitor := alert.NewTargetHealthMonitor(groupTargetSetRepo, alertManager, healthCheckConfig, logger)
+	healthMonitor.Start(context.Background())
+
 	// 创建 SSE Alert Handler
 	sseAlertHandler := api.NewSSEAlertHandler(alertManager, logger)
 
