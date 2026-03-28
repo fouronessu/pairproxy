@@ -37,7 +37,7 @@ func (h *AdminTargetSetHandler) ListTargetSets(w http.ResponseWriter, r *http.Re
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"sets": sets,
 	})
 }
@@ -99,7 +99,7 @@ func (h *AdminTargetSetHandler) CreateTargetSet(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(set)
+	_ = json.NewEncoder(w).Encode(set)
 }
 
 // DeleteTargetSet 删除 target set
@@ -160,7 +160,7 @@ func (h *AdminTargetSetHandler) AddTarget(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(member)
+	_ = json.NewEncoder(w).Encode(member)
 }
 
 // RemoveTarget 从 set 移除 target
@@ -264,7 +264,7 @@ func (h *AdminAlertHandler) ListActiveAlerts(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"alerts": alerts,
 		"summary": map[string]interface{}{
 			"total_active": len(alerts),
@@ -307,7 +307,7 @@ func (h *AdminAlertHandler) ListAlertHistory(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"alerts": alerts,
 		"pagination": map[string]interface{}{
 			"page":      page,
@@ -357,7 +357,7 @@ func (h *AdminAlertHandler) GetAlertStats(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 // SSEAlertHandler SSE 告警流处理器

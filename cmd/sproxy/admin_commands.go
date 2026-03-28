@@ -186,14 +186,14 @@ func init() {
 	targetsetAddTargetCmd.Flags().StringP("url", "u", "", "Target URL")
 	targetsetAddTargetCmd.Flags().IntP("weight", "w", 1, "Target weight")
 	targetsetAddTargetCmd.Flags().IntP("priority", "p", 0, "Target priority")
-	targetsetAddTargetCmd.MarkFlagRequired("url")
+	_ = targetsetAddTargetCmd.MarkFlagRequired("url")
 
 	targetsetRemoveTargetCmd.Flags().StringP("url", "u", "", "Target URL")
-	targetsetRemoveTargetCmd.MarkFlagRequired("url")
+	_ = targetsetRemoveTargetCmd.MarkFlagRequired("url")
 
 	targetsetSetWeightCmd.Flags().StringP("url", "u", "", "Target URL")
 	targetsetSetWeightCmd.Flags().IntP("weight", "w", 1, "Target weight")
-	targetsetSetWeightCmd.MarkFlagRequired("url")
+	_ = targetsetSetWeightCmd.MarkFlagRequired("url")
 
 	// alert 子命令
 	alertCmd.AddCommand(
