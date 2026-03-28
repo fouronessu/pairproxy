@@ -2,7 +2,7 @@ package dashboard
 
 import (
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"strconv"
 	"time"
 
@@ -249,7 +249,7 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 
 	if err := h.llmBindingRepo.Set(targetURL, userID, groupID); err != nil {
 		h.logger.Error("create llm binding", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("llm binding created via dashboard",
@@ -273,7 +273,7 @@ func (h *Handler) handleLLMDeleteBinding(w http.ResponseWriter, r *http.Request)
 	}
 	if err := h.llmBindingRepo.Delete(id); err != nil {
 		h.logger.Error("delete llm binding", zap.String("id", id), zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("llm binding deleted via dashboard", zap.String("id", id))
@@ -316,7 +316,7 @@ func (h *Handler) handleLLMDistribute(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.llmBindingRepo.EvenDistribute(userIDs, targetURLs); err != nil {
 		h.logger.Error("llm distribute failed", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -324,7 +324,7 @@ func (h *Handler) handleLLMDistribute(w http.ResponseWriter, r *http.Request) {
 		zap.Int("users", len(userIDs)),
 		zap.Int("targets", len(targetURLs)),
 	)
-	http.Redirect(w, r, "/dashboard/llm?flash="+url.QueryEscape("均分完成，共分配"+strconv.Itoa(len(userIDs))+"个用户"), http.StatusSeeOther)
+	http.Redirect(w, r, "/dashboard/llm?flash="+neturl.QueryEscape("均分完成，共分配"+strconv.Itoa(len(userIDs))+"个用户"), http.StatusSeeOther)
 }
 
 func itoa(n int) string {
@@ -351,7 +351,7 @@ func (h *Handler) handleDrainEnter(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.drainFn(); err != nil {
 		h.logger.Error("drain enter failed", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("drain mode entered via dashboard")
@@ -366,7 +366,7 @@ func (h *Handler) handleDrainExit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.undrainFn(); err != nil {
 		h.logger.Error("drain exit failed", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("drain mode exited via dashboard")
@@ -388,20 +388,20 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	url := r.FormValue("url")
+	targetURL := r.FormValue("url")
 	provider := r.FormValue("provider")
 	name := r.FormValue("name")
 	weightStr := r.FormValue("weight")
 	healthCheckPath := r.FormValue("health_check_path")
 	apiKeyID := r.FormValue("api_key_id")
 
-	if url == "" || provider == "" {
+	if targetURL == "" || provider == "" {
 		http.Redirect(w, r, "/dashboard/llm?error=URL+and+provider+required", http.StatusSeeOther)
 		return
 	}
 
 	// 检查 URL 冲突
-	exists, err := h.llmTargetRepo.URLExists(url)
+	exists, err := h.llmTargetRepo.URLExists(targetURL)
 	if err != nil {
 		h.logger.Error("check url exists", zap.Error(err))
 		http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
@@ -426,7 +426,7 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 
 	target := &db.LLMTarget{
 		ID:              generateID(),
-		URL:             url,
+		URL:             targetURL,
 		Provider:        provider,
 		Name:            name,
 		Weight:          weight,
@@ -439,7 +439,7 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 
 	if err := h.llmTargetRepo.Create(target); err != nil {
 		h.logger.Error("create llm target", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -449,7 +449,7 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.logger.Info("llm target created via dashboard",
-		zap.String("url", url),
+		zap.String("url", targetURL),
 		zap.String("provider", provider),
 	)
 	http.Redirect(w, r, "/dashboard/llm?flash=目标已创建", http.StatusSeeOther)
@@ -487,21 +487,21 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	url := r.FormValue("url")
+	targetURL := r.FormValue("url")
 	provider := r.FormValue("provider")
 	name := r.FormValue("name")
 	weightStr := r.FormValue("weight")
 	healthCheckPath := r.FormValue("health_check_path")
 	apiKeyID := r.FormValue("api_key_id")
 
-	if url == "" || provider == "" {
+	if targetURL == "" || provider == "" {
 		http.Redirect(w, r, "/dashboard/llm?error=URL+and+provider+required", http.StatusSeeOther)
 		return
 	}
 
 	// 如果 URL 变更，检查冲突
-	if url != existing.URL {
-		exists, err := h.llmTargetRepo.URLExists(url)
+	if targetURL != existing.URL {
+		exists, err := h.llmTargetRepo.URLExists(targetURL)
 		if err != nil {
 			h.logger.Error("check url exists", zap.Error(err))
 			http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
@@ -525,7 +525,7 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 		apiKeyIDPtr = &apiKeyID
 	}
 
-	existing.URL = url
+	existing.URL = targetURL
 	existing.Provider = provider
 	existing.Name = name
 	existing.Weight = weight
@@ -534,7 +534,7 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 
 	if err := h.llmTargetRepo.Update(existing); err != nil {
 		h.logger.Error("update llm target", zap.String("id", id), zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -545,7 +545,7 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 
 	h.logger.Info("llm target updated via dashboard",
 		zap.String("id", id),
-		zap.String("url", url),
+		zap.String("url", targetURL),
 	)
 	http.Redirect(w, r, "/dashboard/llm?flash=目标已更新", http.StatusSeeOther)
 }
@@ -579,7 +579,7 @@ func (h *Handler) handleLLMDeleteTarget(w http.ResponseWriter, r *http.Request) 
 
 	if err := h.llmTargetRepo.Delete(id); err != nil {
 		h.logger.Error("delete llm target", zap.String("id", id), zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
