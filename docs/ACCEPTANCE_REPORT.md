@@ -1,10 +1,10 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.20.0 (Group-Target Set、Alert Manager、Target Health Monitor)
+**版本**: v2.22.0 (WebUI Expansion Phase 1/2/3)
 **提交日期**: 2026-03-28
 **开发语言**: Go 1.23
-**代码规模**: 60,800+ 行非空非注释 Go 代码（含测试，v2.19.0 新增约 300 行）
+**代码规模**: 60,800+ 行非空非注释 Go 代码（含测试，v2.22.0 新增约 334 行文档）
 
 ---
 
