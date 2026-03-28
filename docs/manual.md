@@ -1,6 +1,6 @@
 ﻿# PairProxy 用户手册
 
-**版本 v2.20.0**
+**版本 v2.22.0**
 
 ---
 
@@ -52,6 +52,9 @@
 - [§36 Group-Target Set（分组目标集）（v2.20.0）](#36-group-target-set分组目标集v2200)
 - [§37 告警管理（Alert Manager）（v2.20.0）](#37-告警管理alert-managerv2200)
 - [§38 目标健康监控（Target Health Monitor）（v2.20.0）](#38-目标健康监控target-health-monitorv2200)
+- [§39 WebUI Phase 1：分组目标集管理（v2.22.0）](#39-webui-phase-1分组目标集管理v2220)
+- [§40 WebUI Phase 2：告警管理增强（v2.22.0）](#40-webui-phase-2告警管理增强v2220)
+- [§41 WebUI Phase 3：快速操作面板（v2.22.0）](#41-webui-phase-3快速操作面板v2220)
 
 ---
 
@@ -5450,3 +5453,332 @@ unknown（初始）、healthy（检查通过）、unhealthy（连续失败达阈
 ### 38.6 向后兼容
 
 未配置 health_monitor 时使用默认值，行为与 v2.19.0 完全一致。
+---
+
+## 39. WebUI Phase 1：分组目标集管理（v2.22.0）
+
+**版本**：v2.22.0
+
+**概述**：将后端的 Group-Target Set 功能完整暴露到 Dashboard WebUI，支持管理员直观地创建/编辑/删除目标集及其成员，取代命令行操作。
+
+### 39.1 用户界面
+
+LLM 页面新增 **"Target Sets"** 选项卡，采用**双栏式布局**：
+
+**左栏 — 目标集列表**
+- 按分组显示所有 Target Set
+- 快速操作：编辑、删除按钮
+- 支持搜索/过滤
+
+**右栏 — 详情与成员管理**
+- 目标集名称、ID、路由策略（weighted_random/round_robin/priority）
+- 绑定分组显示
+- 成员列表及其 URL、权重、优先级、健康状态
+- 成员快速操作：修改、删除
+
+### 39.2 API 端点
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| POST | `/dashboard/llm/targetsets` | 创建新目标集 |
+| POST | `/dashboard/llm/targetsets/{id}/update` | 编辑目标集（名称、策略） |
+| POST | `/dashboard/llm/targetsets/{id}/delete` | 删除目标集 |
+| POST | `/dashboard/llm/targetsets/{id}/members` | 添加成员到目标集 |
+| POST | `/dashboard/llm/targetsets/{id}/members/update` | 修改成员配置（权重、优先级） |
+| POST | `/dashboard/llm/targetsets/{id}/members/delete` | 删除成员 |
+
+### 39.3 操作流程
+
+#### 创建目标集
+
+1. 点击"新建 Target Set"
+2. 填写：分组、集合名称、路由策略
+3. 系统校验 ID 格式（`^[a-zA-Z0-9_-]+$`）
+4. 提交后跳转到成员管理界面
+
+#### 添加成员
+
+1. 在"目标集详情"右栏点击"添加成员"
+2. 输入上游 LLM 目标 URL、权重（默认1）、优先级（默认0）
+3. 确认后自动刷新成员列表
+
+#### 修改成员
+
+1. 点击成员的"编辑"按钮，修改权重/优先级
+2. 更新即刻生效，无需重启 sproxy
+
+#### 删除成员
+
+1. 点击"删除"按钮，确认无误
+2. 删除后立即从路由池中移除
+
+### 39.4 关键设计
+
+**错误消息编码**：所有错误通过 `url.QueryEscape()` 编码再跳转，防止 URL 注入。
+
+**审计日志**：每次操作（创建、编辑、删除）都记录到 audit_logs 表，包含操作人、时间、操作类型、目标资源 ID。
+
+**只读保护**：Worker 节点 Dashboard 标签显示"只读模式"，禁止所有写操作（返回 403）。
+
+**模态对话框**：成员编辑/删除操作通过 CSS 隐藏/显示的 HTML 模态框实现，使用 `data-*` 属性预填充表单字段。
+
+### 39.5 配置示例
+
+```yaml
+# 无需额外配置，Phase 1 UI 自动启用（依赖于现有 Group-Target Set 数据库）
+```
+
+### 39.6 使用场景
+
+- **蓝绿部署**：为不同用户组配置不同 LLM 目标池，逐步灰度切换
+- **成本控制**：为成本敏感的团队绑定便宜的 LLM（如开源模型），为关键业务绑定高性能模型
+- **容灾演练**：快速禁用故障 Target（is_active=false），自动从路由池移除
+
+---
+
+## 40. WebUI Phase 2：告警管理增强（v2.22.0）
+
+**版本**：v2.22.0
+
+**概述**：将后端的 Alert Manager 完整暴露到 Dashboard，全新设计 3 标签告警页面，支持实时流、活跃告警统计、历史查询、批量操作。
+
+### 40.1 告警页面架构
+
+Dashboard 告警页面采用**三标签设计**：
+
+#### Live Tab（实时流）
+
+- **功能**：实时流式推送告警事件（SSE 连接 `/api/admin/alerts/stream`）
+- **过滤器**：All（全部）/ Error（错误）/ Warning（警告）
+- **交互**：无需手动刷新，新事件自动追加到列表顶部
+- **卸载**：用户切换标签时自动断开 SSE 连接
+
+#### Active Tab（活跃告警）
+
+- **功能**：当前未解除的告警概览
+- **统计卡片**：
+  - Critical 数量（红卡）
+  - Error 数量（橙卡）
+  - Warning 数量（黄卡）
+- **批量操作**：
+  - Checkbox 多选告警
+  - 一键解除按钮（POST `/dashboard/alerts/resolve-batch`）
+  - 视觉反馈：操作后卡片数值实时更新
+
+#### History Tab（历史查询）
+
+- **时间范围选择器**：7天 / 30天 / 90天（或自定义日期范围）
+- **过滤条件**：
+  - Level（All/Critical/Error/Warning）
+  - Source（告警来源，如 "http_error" / "health_check_failed"）
+- **分页**：50 条/页，Previous / Next 按钮
+- **查询结果**：告警 ID、目标 URL、类型、发生时间、解除时间
+
+### 40.2 数据源与 API
+
+| API | 用途 | 说明 |
+|-----|------|------|
+| GET `/api/admin/alerts/stream` | Live 标签 | Server-Sent Events 实时推送 |
+| GET `/dashboard/api/alerts/active` | Active 标签 | 返回 `{critical, error, warning}` 统计 |
+| GET `/dashboard/api/alerts/history?since=...&until=...&level=...&source=...&offset=...&limit=50` | History 标签 | 分页查询历史告警 |
+| POST `/dashboard/alerts/resolve` | 单个解除 | 解除指定 ID 告警 |
+| POST `/dashboard/alerts/resolve-batch` | 批量解除 | 解除多个告警，请求体 `{"ids": [...]}` |
+
+### 40.3 事件流（Live Tab）
+
+SSE 连接推送的事件类型：
+
+```json
+{
+  "event": "alert_created",
+  "data": {
+    "id": "alert-123",
+    "target_url": "https://api.example.com/v1/messages",
+    "severity": "error",
+    "type": "http_error",
+    "message": "Connection timeout",
+    "timestamp": "2026-03-28T10:30:00Z"
+  }
+}
+```
+
+实时流支持**客户端过滤**：JavaScript 根据选中的 Level（All/Error/Warning）动态渲染事件，无需重连。
+
+### 40.4 使用场景
+
+- **值班告警**：开发者登录 Dashboard，Live 标签持续推送告警；Active 标签一览统计；一旦发现告警可直接批量标记为已解除
+- **事后分析**：History 标签按时间范围、级别、来源查询过去 90 天告警，追踪故障根因
+- **SLA 监控**：通过告警数量趋势了解系统健康度
+
+### 40.5 配置
+
+```yaml
+alert:
+  enabled: true                    # 启用告警管理（默认 false）
+  triggers:
+    http_error:
+      min_occurrences: 3          # 连续错误 3 次触发告警
+  recovery:
+    consecutive_successes: 2      # 连续成功 2 次自动解除
+```
+
+---
+
+## 41. WebUI Phase 3：快速操作面板（v2.22.0）
+
+**版本**：v2.22.0
+
+**概述**：Dashboard 主页新增"快速操作"摘要卡片区域，一眼洞察 LLM 健康、系统告警、用户/分组指标，支持异步加载与优雅降级。
+
+### 41.1 快速操作面板布局
+
+Dashboard 首页（Overview）新增 **Quick Operations** 区域，包含 **3 张卡片**：
+
+#### 卡片 1：LLM 目标状态
+
+```
+┌─────────────────────────────────────┐
+│  🚀 LLM 目标状态                     │
+├─────────────────────────────────────┤
+│  健康目标：     42 个                │
+│  告警目标：     3 个                 │
+│  目标集总数：   8 个                 │
+│                                     │
+│            查看详情 →               │
+└─────────────────────────────────────┘
+```
+
+**数据来源**：
+- 健康目标 = GroupTargetSetMember 中 health_status='healthy' 的数量
+- 告警目标 = 有未解除告警（status='active'）的目标数量
+- 目标集数量 = GroupTargetSet 总数
+
+#### 卡片 2：系统告警
+
+```
+┌─────────────────────────────────────┐
+│  ⚠️  系统告警                        │
+├─────────────────────────────────────┤
+│  未解除告警：   5 个     🔴 严重    │
+│  ├─ Critical： 1 个                 │
+│  ├─ Error：    2 个                 │
+│  └─ Warning：  2 个                 │
+│                                     │
+│            查看详情 →               │
+└─────────────────────────────────────┘
+```
+
+**数据来源**：
+- 未解除告警 = TargetAlert 中 status='active' 的数量
+- 按 severity 分类统计（critical, error, warning）
+- 状态徽章：Critical≥1 时红色，Error≥1 时橙色，否则绿色
+
+#### 卡片 3：用户/分组
+
+```
+┌─────────────────────────────────────┐
+│  👥 用户/分组                       │
+├─────────────────────────────────────┤
+│  活跃用户：     127 个              │
+│  用户总数：     150 个              │
+│  分组总数：     12 个               │
+│  新增用户（本周）：  8 个           │
+│                                     │
+│            查看详情 →               │
+└─────────────────────────────────────┘
+```
+
+**数据来源**：
+- 活跃用户 = User 中 is_active=true 的数量
+- 用户总数 = User 总数
+- 分组总数 = Group 总数
+- 新增用户 = 本周创建的 User 数量（created_at >= 7 days ago）
+
+### 41.2 异步加载机制
+
+**页面加载流程**：
+
+1. Dashboard 首页初始加载（HTML 渲染，无 Quick Operations 卡片内容）
+2. 页面 onload 后，JavaScript 异步并发调用 3 个 API：
+   - `GET /dashboard/api/quick-ops/llm-status`
+   - `GET /dashboard/api/quick-ops/alerts`
+   - `GET /dashboard/api/quick-ops/users`
+3. 各 API 返回后，动态填充对应卡片内容
+4. 若某 API 超时（3s）或错误，卡片显示"未配置"或"——"
+
+**优点**：
+- 非阻塞：Dashboard 主页快速加载，不依赖后端查询完成
+- 容错：单个 API 失败不影响整页展示
+- 实时：每次访问都刷新最新数据
+
+### 41.3 API 端点
+
+| 端点 | 返回数据 |
+|------|---------|
+| `GET /dashboard/api/quick-ops/llm-status` | `{healthy_count, alert_count, total_sets}` |
+| `GET /dashboard/api/quick-ops/alerts` | `{total_active, critical, error, warning, status}` |
+| `GET /dashboard/api/quick-ops/users` | `{active_users, total_users, total_groups, new_users_week}` |
+
+### 41.4 HTML 实现
+
+```html
+<!-- overview.html 片段 -->
+<section class="quick-operations">
+  <!-- 卡片 1 -->
+  <div class="card llm-status" id="llm-card">
+    <h3>🚀 LLM 目标状态</h3>
+    <div id="llm-content">加载中...</div>
+  </div>
+
+  <!-- 卡片 2 -->
+  <div class="card alerts-status" id="alerts-card">
+    <h3>⚠️ 系统告警</h3>
+    <div id="alerts-content">加载中...</div>
+  </div>
+
+  <!-- 卡片 3 -->
+  <div class="card users-status" id="users-card">
+    <h3>👥 用户/分组</h3>
+    <div id="users-content">加载中...</div>
+  </div>
+</section>
+
+<script>
+// 异步加载函数
+async function loadQuickOps() {
+  try {
+    const llm = await fetch('/dashboard/api/quick-ops/llm-status').then(r => r.json());
+    document.getElementById('llm-content').innerHTML = `
+      健康目标：${llm.healthy_count} 个<br>
+      告警目标：${llm.alert_count} 个<br>
+      目标集总数：${llm.total_sets} 个
+    `;
+  } catch (e) {
+    document.getElementById('llm-content').innerHTML = '加载失败';
+  }
+  // 类似处理 alerts 和 users...
+}
+
+window.addEventListener('load', loadQuickOps);
+</script>
+```
+
+### 41.5 优雅降级
+
+若尚未配置 Group-Target Set 或告警功能，卡片显示：
+
+```
+LLM 目标状态
+├─ 健康目标：— 个
+├─ 告警目标：— 个
+└─ 目标集总数：未配置
+```
+
+用户体验无损，不会报错。
+
+### 41.6 使用场景
+
+- **晨会看板**：每天早上打开 Dashboard，快速了解系统健康度
+- **值班接班**：入班首先查看 Quick Operations，了解昨晚是否有告警
+- **性能监控**：看用户增长趋势，评估系统容量
+- **故障应急**：告警卡片显示 Critical≥1 时，直接跳转到告警页面处理
