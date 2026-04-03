@@ -380,6 +380,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		// 构建 LLM lb.Target 列表（ID = URL，Weight 来自数据库）
 		lbLLMTargets := make([]lb.Target, 0, len(loadedTargets))
 		healthPaths := make(map[string]string, len(loadedTargets))
+		credentials := make(map[string]lb.TargetCredential, len(loadedTargets))
 		for _, t := range loadedTargets {
 			w := t.Weight
 			if w <= 0 {
@@ -394,6 +395,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 			if t.HealthCheckPath != "" {
 				healthPaths[t.URL] = t.HealthCheckPath
 			}
+			// 构建认证凭证（用于主动健康检查）
+			if t.APIKey != "" {
+				credentials[t.URL] = lb.TargetCredential{
+					APIKey:   t.APIKey,
+					Provider: t.Provider,
+				}
+			}
 		}
 
 		llmBalancer := lb.NewWeightedRandom(lbLLMTargets)
@@ -406,6 +414,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 		if len(healthPaths) > 0 {
 			hcOpts = append(hcOpts, lb.WithHealthPaths(healthPaths))
+		}
+		if len(credentials) > 0 {
+			hcOpts = append(hcOpts, lb.WithCredentials(credentials))
 		}
 
 		llmHC := lb.NewHealthChecker(llmBalancer, logger, hcOpts...)
@@ -421,6 +432,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			zap.Ints("retry_on_status", cfg.LLM.RetryOnStatus),
 			zap.Duration("recovery_delay", cfg.LLM.RecoveryDelay),
 			zap.Int("health_check_paths", len(healthPaths)),
+			zap.Int("credentials", len(credentials)),
 		)
 	}
 

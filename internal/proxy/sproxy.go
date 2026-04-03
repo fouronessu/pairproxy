@@ -522,6 +522,7 @@ func (sp *SProxy) SyncLLMTargets() {
 
 	lbTargets := make([]lb.Target, 0, len(loadedTargets))
 	healthPaths := make(map[string]string, len(loadedTargets))
+	credentials := make(map[string]lb.TargetCredential, len(loadedTargets))
 	var newTargetsWithPath []string // 新加入且有 health path 的 target，需立即检查
 
 	for _, t := range loadedTargets {
@@ -561,10 +562,18 @@ func (sp *SProxy) SyncLLMTargets() {
 				newTargetsWithPath = append(newTargetsWithPath, t.URL)
 			}
 		}
+		// 构建认证凭证（用于主动健康检查认证）
+		if t.APIKey != "" {
+			credentials[t.URL] = lb.TargetCredential{
+				APIKey:   t.APIKey,
+				Provider: t.Provider,
+			}
+		}
 	}
 
 	sp.llmBalancer.UpdateTargets(lbTargets)
 	sp.llmHC.UpdateHealthPaths(healthPaths)
+	sp.llmHC.UpdateCredentials(credentials)
 
 	// 对新加入且有 health path 的 target 立即发起一次主动检查（异步）
 	// 检查通过后 MarkHealthy，不需要等下一个 30s ticker
@@ -575,6 +584,7 @@ func (sp *SProxy) SyncLLMTargets() {
 	sp.logger.Info("SyncLLMTargets: balancer and health checker updated",
 		zap.Int("targets", len(lbTargets)),
 		zap.Int("health_check_paths", len(healthPaths)),
+		zap.Int("credentials", len(credentials)),
 		zap.Int("new_targets_checking", len(newTargetsWithPath)),
 	)
 }

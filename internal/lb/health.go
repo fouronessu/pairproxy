@@ -19,9 +19,16 @@ const (
 	defaultHealthPath    = "/health"
 )
 
+// TargetCredential 健康检查认证凭证（按 provider 类型注入不同认证头）。
+type TargetCredential struct {
+	APIKey   string // 明文 key（健康检查时直接使用）
+	Provider string // "anthropic" | "openai" | "ollama" | ""（空=无认证）
+}
+
 // HealthChecker 对 Balancer 中的目标节点进行主动健康检查。
 //
-// 主动检查：每隔 interval 对每个节点发 GET /health，200 视为健康。
+// 主动检查：每隔 interval 对每个节点发 GET /health（或自定义路径），200 视为健康。
+// 认证支持：支持 Bearer 认证（OpenAI/OpenAI-compatible）和 x-api-key 认证（Anthropic）。
 // 被动熔断：调用方通过 RecordSuccess/RecordFailure 上报结果，
 // 连续 failThreshold 次失败后将节点标记为不健康。
 // 自动恢复：recoveryDelay > 0 时，节点进入不健康状态后自动在 recoveryDelay 后恢复（半开状态）。
@@ -36,6 +43,7 @@ type HealthChecker struct {
 	notifier      *alert.Notifier // 可选，nil 时不发告警
 	recoveryDelay time.Duration   // 0=禁用自动恢复；>0=熔断后自动恢复延迟
 	healthPaths   map[string]string // targetID → health check path（空=跳过主动检查）
+	credentials   map[string]TargetCredential // targetID → credential（用于主动健康检查认证）
 
 	mu       sync.Mutex
 	failures map[string]int // 连续失败计数
@@ -92,6 +100,18 @@ func WithHealthPaths(paths map[string]string) HealthCheckerOption {
 	}
 }
 
+// WithCredentials 设置各 target 的健康检查认证凭证（targetID → TargetCredential）。
+// 凭证用于对接需要认证的大厂 API（OpenAI、Anthropic、阿里百炼、火山引擎等）。
+// 无凭证或 APIKey 为空的 target 不注入认证头（适用本地 vLLM/sglang）。
+func WithCredentials(creds map[string]TargetCredential) HealthCheckerOption {
+	return func(h *HealthChecker) {
+		h.credentials = make(map[string]TargetCredential, len(creds))
+		for k, v := range creds {
+			h.credentials[k] = v
+		}
+	}
+}
+
 // NewHealthChecker 创建并返回 HealthChecker。
 func NewHealthChecker(balancer Balancer, logger *zap.Logger, opts ...HealthCheckerOption) *HealthChecker {
 	hc := &HealthChecker{
@@ -104,6 +124,7 @@ func NewHealthChecker(balancer Balancer, logger *zap.Logger, opts ...HealthCheck
 		failures:      make(map[string]int),
 		client:        &http.Client{Timeout: defaultCheckTimeout},
 		healthPaths:   make(map[string]string),
+		credentials:   make(map[string]TargetCredential),
 	}
 	for _, opt := range opts {
 		opt(hc)
@@ -125,6 +146,17 @@ func (hc *HealthChecker) UpdateHealthPaths(paths map[string]string) {
 	hc.healthPaths = make(map[string]string, len(paths))
 	for k, v := range paths {
 		hc.healthPaths[k] = v
+	}
+}
+
+// UpdateCredentials 在运行时原子替换 credentials 映射（targetID → TargetCredential）。
+// 供目标列表变更（增删启停）时调用，无需重启进程。
+func (hc *HealthChecker) UpdateCredentials(creds map[string]TargetCredential) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	hc.credentials = make(map[string]TargetCredential, len(creds))
+	for k, v := range creds {
+		hc.credentials[k] = v
 	}
 }
 
@@ -225,6 +257,29 @@ func (hc *HealthChecker) checkOne(t Target) {
 	hc.checkOneWithPath(t, hc.healthPath)
 }
 
+// injectAuth 根据 provider 类型将认证信息注入 HTTP 请求。
+// Anthropic：注入 x-api-key 头和 anthropic-version 头；
+// 其他（OpenAI/OpenAI-compatible）：注入 Authorization: Bearer 头；
+// 无凭证：不注入任何认证头（用于本地 vLLM/sglang 等无认证端点）。
+func (hc *HealthChecker) injectAuth(req *http.Request, targetID string) {
+	hc.mu.Lock()
+	cred, ok := hc.credentials[targetID]
+	hc.mu.Unlock()
+	if !ok || cred.APIKey == "" {
+		return
+	}
+
+	switch cred.Provider {
+	case "anthropic":
+		// Anthropic 使用 x-api-key 而非标准 Bearer，且需要 anthropic-version 版本头
+		req.Header.Set("x-api-key", cred.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	default:
+		// OpenAI、OpenAI-compatible（DashScope、Ark 等）、ollama、空字符串等
+		req.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	}
+}
+
 func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string) {
 	url := t.Addr + healthPath
 
@@ -241,6 +296,9 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string) {
 		hc.recordFailure(t.ID)
 		return
 	}
+
+	// 注入认证信息（根据 provider 类型）
+	hc.injectAuth(req, t.ID)
 
 	resp, err := hc.client.Do(req)
 	if err != nil {
