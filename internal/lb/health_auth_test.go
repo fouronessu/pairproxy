@@ -337,3 +337,22 @@ func TestHealthChecker_ConcurrentAuthInjection(t *testing.T) {
 	assert.Equal(t, "key1", req.Header.Get("x-api-key"), "target1 应为 Anthropic 认证")
 }
 
+
+// TestHealthChecker_CredentialExistsButEmptyAPIKey 验证 credential 存在但 APIKey 为空字符串时，
+// 不注入任何认证头（覆盖 injectAuth 中 cred.APIKey == "" 分支）。
+func TestHealthChecker_CredentialExistsButEmptyAPIKey(t *testing.T) {
+	balance := NewWeightedRandom([]Target{{ID: "target-empty", Addr: "http://127.0.0.1:0", Healthy: true}})
+
+	hc := NewHealthChecker(balance, zaptest.NewLogger(t))
+	// credential 存在，provider 非空，但 APIKey 为空字符串
+	hc.UpdateCredentials(map[string]TargetCredential{
+		"target-empty": {APIKey: "", Provider: "openai"},
+	})
+
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:0/health", nil)
+	hc.injectAuth(req, "target-empty")
+
+	// APIKey 为空，不应注入任何认证头
+	assert.Empty(t, req.Header.Get("Authorization"), "empty APIKey should not inject Authorization header")
+	assert.Empty(t, req.Header.Get("x-api-key"), "empty APIKey should not inject x-api-key header")
+}

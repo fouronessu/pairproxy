@@ -984,3 +984,21 @@ func TestSyncConfigTargets_Idempotent_MultipleSync(t *testing.T) {
 	assert.Equal(t, count1, count2, "second sync should not create duplicate APIKey records")
 	assert.Equal(t, int64(2), count2, "should have exactly 2 APIKey records")
 }
+
+// TestResolveAPIKeyID_DBError 验证数据库查询异常（非 ErrRecordNotFound）时，
+// resolveAPIKeyID 应返回 error 而非静默失败。
+func TestResolveAPIKeyID_DBError(t *testing.T) {
+	logger := zap.NewNop()
+	// 使用已关闭的 DB 模拟不可预期的 DB 错误
+	gormDB, _ := setupSyncTestDB(t)
+	sqlDB, err := gormDB.DB()
+	require.NoError(t, err)
+	sqlDB.Close() // 强制关闭底层连接，后续查询必然出错
+
+	sp := &SProxy{db: gormDB, logger: logger}
+	result, err := sp.resolveAPIKeyID("sk-any-key", "openai", "https://api.openai.com")
+
+	// 数据库错误时应传播 error，不应返回 nil, nil
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}

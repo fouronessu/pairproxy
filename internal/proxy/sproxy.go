@@ -261,6 +261,10 @@ func (sp *SProxy) resolveAPIKeyID(apiKey, provider, targetURL string) (*string, 
 	err := sp.db.Where("provider = ? AND encrypted_value = ?", provider, obfuscated).First(&existingKey).Error
 	if err == nil {
 		// 已存在相同 key 值的记录，直接复用（不覆盖）
+		sp.logger.Debug("reusing existing api key for config target",
+			zap.String("provider", provider),
+			zap.String("target_url", targetURL),
+			zap.String("key_id", existingKey.ID))
 		return &existingKey.ID, nil
 	}
 	if err != gorm.ErrRecordNotFound {
