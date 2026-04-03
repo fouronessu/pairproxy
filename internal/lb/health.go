@@ -158,6 +158,9 @@ func (hc *HealthChecker) UpdateCredentials(creds map[string]TargetCredential) {
 	for k, v := range creds {
 		hc.credentials[k] = v
 	}
+	hc.logger.Info("credentials updated",
+		zap.Int("count", len(creds)),
+	)
 }
 
 // Start 启动后台主动健康检查 goroutine，ctx 取消时退出。
@@ -266,6 +269,7 @@ func (hc *HealthChecker) injectAuth(req *http.Request, targetID string) {
 	cred, ok := hc.credentials[targetID]
 	hc.mu.Unlock()
 	if !ok || cred.APIKey == "" {
+		hc.logger.Debug("no credential for target", zap.String("target", targetID))
 		return
 	}
 
@@ -274,9 +278,14 @@ func (hc *HealthChecker) injectAuth(req *http.Request, targetID string) {
 		// Anthropic 使用 x-api-key 而非标准 Bearer，且需要 anthropic-version 版本头
 		req.Header.Set("x-api-key", cred.APIKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
+		hc.logger.Debug("injected Anthropic auth", zap.String("target", targetID))
 	default:
 		// OpenAI、OpenAI-compatible（DashScope、Ark 等）、ollama、空字符串等
 		req.Header.Set("Authorization", "Bearer "+cred.APIKey)
+		hc.logger.Debug("injected Bearer auth",
+			zap.String("target", targetID),
+			zap.String("provider", cred.Provider),
+		)
 	}
 }
 
