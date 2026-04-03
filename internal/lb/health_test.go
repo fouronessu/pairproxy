@@ -99,8 +99,7 @@ func TestActiveHealthCheckOK(t *testing.T) {
 		WithTimeout(2*time.Second),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()  // 确保 cancel 会被调用
+	ctx, cancel := context.WithCancel(context.Background())
 	hc.Start(ctx)
 
 	// 等待至少一次检查完成
@@ -110,8 +109,8 @@ func TestActiveHealthCheckOK(t *testing.T) {
 		t.Errorf("target should be healthy after active check, got: %v", err)
 	}
 
-	// 等待 context 超时和所有 goroutine 完成
-	<-ctx.Done()
+	// 明确取消 context 并等待所有 goroutine 完成
+	cancel()
 	hc.Wait()
 }
 
@@ -132,8 +131,7 @@ func TestActiveHealthCheckFail(t *testing.T) {
 		WithFailThreshold(2),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	hc.Start(ctx)
 
 	// 等待至少 2 次检查完成（failThreshold=2）
@@ -143,8 +141,8 @@ func TestActiveHealthCheckFail(t *testing.T) {
 		t.Errorf("target should be unhealthy after consecutive 500s, got: %v", err)
 	}
 
-	// 等待 context 超时和所有 goroutine 完成
-	<-ctx.Done()
+	// 明确取消 context 并等待所有 goroutine 完成
+	cancel()
 	hc.Wait()
 }
 
