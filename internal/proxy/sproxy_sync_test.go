@@ -172,33 +172,33 @@ func TestLoadAllTargets(t *testing.T) {
 	key2ID := "key2"
 	targets := []*db.LLMTarget{
 		{
-			ID:        "t1",
-			URL:       "http://config.local",
-			APIKeyID:  &key1ID,
-			Provider:  "anthropic",
-			Name:      "Config Target",
-			Weight:    1,
-			Source:    "config",
-			IsActive:  true,
+			ID:       "t1",
+			URL:      "http://config.local",
+			APIKeyID: &key1ID,
+			Provider: "anthropic",
+			Name:     "Config Target",
+			Weight:   1,
+			Source:   "config",
+			IsActive: true,
 		},
 		{
-			ID:        "t2",
-			URL:       "http://database.local",
-			APIKeyID:  &key2ID,
-			Provider:  "openai",
-			Name:      "Database Target",
-			Weight:    2,
-			Source:    "database",
-			IsActive:  true,
+			ID:       "t2",
+			URL:      "http://database.local",
+			APIKeyID: &key2ID,
+			Provider: "openai",
+			Name:     "Database Target",
+			Weight:   2,
+			Source:   "database",
+			IsActive: true,
 		},
 		{
-			ID:        "t3",
-			URL:       "http://inactive.local",
-			Provider:  "anthropic",
-			Name:      "Inactive Target",
-			Weight:    1,
-			Source:    "database",
-			IsActive:  true, // Create with true first
+			ID:       "t3",
+			URL:      "http://inactive.local",
+			Provider: "anthropic",
+			Name:     "Inactive Target",
+			Weight:   1,
+			Source:   "database",
+			IsActive: true, // Create with true first
 		},
 	}
 	for _, target := range targets {
@@ -806,8 +806,8 @@ func TestResolveAPIKeyID_SameProvider_SameKey_Reuses(t *testing.T) {
 	assert.Equal(t, int64(1), count, "should have only 1 API key record (reused)")
 
 	// 两个 llm_targets 应指向同一个 api_key_id
-	target1 := &db.LLMTarget{ID: "t1", URL: urlA, APIKeyID: idA, Provider: "openai", Weight: 1, IsActive: true}
-	target2 := &db.LLMTarget{ID: "t2", URL: urlB, APIKeyID: idB, Provider: "openai", Weight: 1, IsActive: true}
+	target1 := &db.LLMTarget{URL: urlA, APIKeyID: idA, Provider: "openai", Weight: 1, IsActive: true}
+	target2 := &db.LLMTarget{URL: urlB, APIKeyID: idB, Provider: "openai", Weight: 1, IsActive: true}
 	assert.Equal(t, target1.APIKeyID, target2.APIKeyID, "both targets should share same api_key_id")
 }
 
@@ -986,4 +986,3 @@ func TestSyncConfigTargets_Idempotent_MultipleSync(t *testing.T) {
 	assert.Equal(t, count1, count2, "second sync should not create duplicate APIKey records")
 	assert.Equal(t, int64(2), count2, "should have exactly 2 APIKey records")
 }
-
