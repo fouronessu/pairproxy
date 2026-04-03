@@ -1,5 +1,47 @@
 # PairProxy Changelog
 
+## [v2.23.0] - 2026-04-04
+
+### 🐛 Bug Fixes
+
+#### Issue #2: API Key 号池共享修复
+- **问题**：同一 provider（如 `openai`）只能存储一个 API Key，导致多 Key 号池共享失效
+- **根因**：`resolveAPIKeyID` 仅按 `provider` 字段唯一化，同类型多 Key 互相覆盖
+- **修复**：UNIQUE 约束从 `(provider)` 改为 `(provider, encrypted_value)`，支持同 provider 多 Key 共存
+- **影响**：百炼、火山引擎等 OpenAI 兼容 provider 现在可配置多个不同 API Key，实现真正的号池共享
+- **向后兼容**：现有 DB 记录自动过渡，无需手动迁移
+
+#### Issue #3: `admin.key_encryption_key` 文档与行为一致性修复
+- **问题**：文档将 `admin.key_encryption_key` 标记为可选，但使用 `admin apikey` 命令时实为必填
+- **修复**：UPGRADE.md 和 config/README.md 明确标注「使用 API Key 管理功能时必填」
+- **改进**：错误消息更具体，提示用户配置该字段
+
+#### Issue #4: 健康检查支持大厂 API 认证
+- **问题**：Anthropic、OpenAI 等没有 `/health` 端点的 LLM 提供商，健康检查因缺少认证头而失败（401）
+- **解决方案**：实现 provider 感知的认证注入，使用推理 API 替代 `/health` 端点
+- **支持的 Provider**：
+  - Anthropic Claude：注入 `x-api-key` + `anthropic-version` 头
+  - OpenAI / Codex：注入 `Authorization: Bearer` 头
+  - 阿里云百炼（DashScope）：Bearer token
+  - 火山引擎（Ark）：Bearer token
+  - 华为云 MaaS：框架就绪，后续支持 AKSK 签名
+  - vLLM / sglang：向后兼容，无需认证
+- **新增**：`TargetCredential` 结构体、`WithCredentials` 选项、`injectAuth()` 方法
+- **可观测性**：DEBUG 日志追踪认证注入，INFO 日志追踪 credential 更新
+
+### 🔧 Data Race Fix
+- **问题**：`HealthChecker` 测试在 CI 中间歇性出现 data race（Go `-race` 检测）
+- **根因**：`WaitGroup` 未追踪主循环 goroutine 本身（`loop()`），仅追踪子任务
+- **修复**：在 `Start()` 中添加 `wg.Add(1)`，在 `loop()` 开头添加 `defer wg.Done()`
+- **教训**：WaitGroup 必须追踪所有长生命周期 goroutine（主循环 + 子任务），详见 `docs/GO_CONCURRENCY_TEACHING_MATERIAL.md`
+
+### 📚 Documentation
+- 新增 `docs/GO_CONCURRENCY_TEACHING_MATERIAL.md`：Go 并发编程教材（含 Mermaid 流程图、WaitGroup 模式、GitHub 工作流）
+- 新增 `docs/CONCURRENCY_GUIDELINES.md`：并发编程规范与检查清单
+- 更新 `CLAUDE.md`：新增并发测试必须遵守的规范章节
+
+---
+
 ## [v2.22.0] - 2026-03-28
 
 ### ✨ New Features

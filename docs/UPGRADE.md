@@ -1,6 +1,6 @@
 # PairProxy 升级指南
 
-> 当前版本：**v2.22.0** | 更新日期：2026-03-28
+> 当前版本：**v2.23.0** | 更新日期：2026-04-04
 
 本文档描述各版本间的升级步骤、数据库 Schema 变更、回滚方法及不兼容变更。
 
@@ -51,6 +51,49 @@
 ---
 
 ## 版本变更记录
+
+### v2.23.0 — APIKey 号池修复 + 健康检查认证 + 文档修正
+
+**数据库 Schema 变更**
+
+| 变更 | 说明 |
+|------|------|
+| `api_keys` 表：UNIQUE 约束变更 | 从 `(provider)` 改为 `(provider, encrypted_value)`，允许同 provider 多 Key 共存 |
+
+Schema 变更由 `db.AutoMigrate` 自动完成，**无需手动操作**。
+
+**向后兼容性**
+
+- 现有 `api_keys` 记录保持原样，无数据丢失
+- 旧格式 `'Auto-created for {provider}'` 的 Name 记录成为孤立记录（不影响功能）
+- 降级到 v2.22.0 时，`encrypted_value` 列仍存在但 UNIQUE 约束不同；旧版本读写不受影响
+
+**新增配置支持（无需修改现有配置）**
+
+健康检查现在自动从 `llm.targets[*].api_key` 和 `llm.targets[*].provider` 读取认证信息，无需额外配置。
+
+**升级验证**
+
+```bash
+# 1. 验证服务正常
+curl http://localhost:9000/health
+
+# 2. 验证健康检查对 Anthropic target 生效
+# 查看日志是否出现 DEBUG 级别的 "injecting Anthropic auth" 或 "injecting Bearer auth"
+grep -i "auth\|health" /var/log/sproxy.log | tail -20
+
+# 3. 验证多 Key 号池（如配置了同 provider 多 target）
+sproxy admin apikey list
+# 应看到每个 target 的 Key 独立存在，不互相覆盖
+```
+
+**回滚说明**
+
+降级到 v2.22.0 时：
+- `api_keys` 表的 UNIQUE 约束回退（旧代码不执行新约束），功能正常
+- 健康检查无认证注入，Anthropic/OpenAI 等 target 会返回 401（与 v2.22.0 行为一致）
+
+---
 
 ### v2.18.0 — 语义路由 Semantic Router
 

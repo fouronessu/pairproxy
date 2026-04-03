@@ -613,6 +613,7 @@ pairproxy/
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 故障排查手册（启动失败、JWT 错误、配额超限、集群问题、性能调优） |
 | [docs/UPGRADE.md](docs/UPGRADE.md) | 版本升级指南（Schema 变更、回滚方法、不兼容变更清单） |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 性能调优指南（缓冲区、WAL 模式、连接池、缓存调优） |
+| [docs/GO_CONCURRENCY_TEACHING_MATERIAL.md](docs/GO_CONCURRENCY_TEACHING_MATERIAL.md) | Go 并发编程教材（WaitGroup 同步、Race 调试、GitHub 工作流，含 Mermaid 流程图） |
 
 ---
 

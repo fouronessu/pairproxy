@@ -1,6 +1,6 @@
 ﻿# PairProxy 用户手册
 
-**版本 v2.22.0**
+**版本 v2.23.0**
 
 ---
 
@@ -55,6 +55,7 @@
 - [§39 WebUI Phase 1：分组目标集管理（v2.22.0）](#39-webui-phase-1分组目标集管理v2220)
 - [§40 WebUI Phase 2：告警管理增强（v2.22.0）](#40-webui-phase-2告警管理增强v2220)
 - [§41 WebUI Phase 3：快速操作面板（v2.22.0）](#41-webui-phase-3快速操作面板v2220)
+- [§42 v2.23.0 更新说明：APIKey 号池 + 健康检查认证 + 文档修正](#42-v2230-更新说明)
 
 ---
 
@@ -5782,3 +5783,211 @@ LLM 目标状态
 - **值班接班**：入班首先查看 Quick Operations，了解昨晚是否有告警
 - **性能监控**：看用户增长趋势，评估系统容量
 - **故障应急**：告警卡片显示 Critical≥1 时，直接跳转到告警页面处理
+
+---
+
+## 42. v2.23.0 更新说明
+
+**版本**：v2.23.0
+**发布日期**：2026-04-04
+
+本版本修复了三个 GitHub Issue，提升了 API Key 号池共享能力、健康检查覆盖范围和文档准确性。
+
+---
+
+### 42.1 Issue #2：API Key 号池共享修复
+
+#### 问题描述
+
+在 v2.22.0 及之前版本，同一 `provider` 类型（如 `openai`）只能在数据库中保存一个 API Key 记录。
+
+这导致以下场景失效：
+- 阿里云百炼 + 火山引擎 Ark 都是 `openai` 兼容协议，配置两个 target 时，后者的 Key 会覆盖前者
+- 多个不同的 OpenAI 账号（不同 `api_key`）无法同时存在于号池中
+
+#### 修复方案
+
+UNIQUE 约束从 `(provider)` 改为 `(provider, encrypted_value)`：
+
+```
+之前：同一 provider 只能有 1 个 Key
+  openai → sk-openai-key-A       ← 唯一
+
+之后：同一 provider 可有多个不同 Key
+  openai → sk-openai-key-A       ✅
+  openai → sk-dashscope-key-B    ✅（不同 Key，独立存储）
+  openai → sk-ark-key-C          ✅
+```
+
+#### 验证方式
+
+```bash
+# 配置多个 openai 兼容 target
+llm:
+  targets:
+    - url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      api_key: "${DASHSCOPE_KEY}"
+      provider: "openai"
+    - url: "https://ark.cn-beijing.volces.com/api/v3"
+      api_key: "${ARK_KEY}"
+      provider: "openai"
+
+# 启动后验证每个 Key 独立存在
+sproxy admin apikey list
+# 期望：看到 2 条记录，Key 不互相覆盖
+```
+
+---
+
+### 42.2 Issue #3：`admin.key_encryption_key` 配置说明修正
+
+#### 问题描述
+
+文档将 `admin.key_encryption_key` 标注为"可选"，但实际上使用 `sproxy admin apikey` 系列命令时该字段是**必填的**。
+
+#### 修正后的配置说明
+
+```yaml
+admin:
+  password: "${ADMIN_PASSWORD}"       # Dashboard 登录密码（必填）
+  key_encryption_key: "${KEY_ENC}"    # API Key 加密密钥（使用 admin apikey 命令时必填，≥32 字符）
+```
+
+| 字段 | 类型 | 必填条件 |
+|------|------|---------|
+| `admin.password` | string | 始终必填 |
+| `admin.key_encryption_key` | string | 使用 `admin apikey add/list/delete` 时必填；不使用号池功能可省略 |
+
+#### 错误提示改进
+
+未配置时，系统现在会给出更清晰的错误信息：
+
+```
+Error: admin.key_encryption_key is not configured.
+This field is required when using the API key management feature (admin apikey commands).
+Please add it to your configuration: admin.key_encryption_key: "<32+ char secret>"
+```
+
+---
+
+### 42.3 Issue #4：健康检查支持大厂 API 认证
+
+#### 问题描述
+
+Anthropic、OpenAI 等主流 LLM 提供商没有公开的 `/health` 端点。之前版本中，即使配置了健康检查路径（如 `/v1/models`），请求因缺少认证头而返回 401，导致 target 被错误标记为不健康。
+
+#### 解决方案：使用推理 API 替代健康检查
+
+健康检查现在自动注入 provider 对应的认证头：
+
+| Provider | 健康检查端点（建议） | 注入的请求头 |
+|----------|---------------------|-------------|
+| `anthropic` | `/v1/models` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` |
+| `openai` / 其他 | `/v1/models` | `Authorization: Bearer <key>` |
+| 无 provider 或本地 | `/health` | 无（向后兼容） |
+
+#### 配置示例
+
+```yaml
+llm:
+  targets:
+    # Anthropic — 健康检查自动注入认证
+    - url: "https://api.anthropic.com"
+      api_key: "${ANTHROPIC_API_KEY}"
+      provider: "anthropic"
+      health_path: "/v1/models"       # ← 使用 /v1/models 替代 /health
+
+    # OpenAI — 健康检查自动注入 Bearer token
+    - url: "https://api.openai.com"
+      api_key: "${OPENAI_API_KEY}"
+      provider: "openai"
+      health_path: "/v1/models"
+
+    # 阿里云百炼（DashScope）
+    - url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      api_key: "${DASHSCOPE_KEY}"
+      provider: "openai"
+      health_path: "/v1/models"
+
+    # 火山引擎（Ark）
+    - url: "https://ark.cn-beijing.volces.com/api/v3"
+      api_key: "${ARK_KEY}"
+      provider: "openai"
+      health_path: "/v1/models"
+
+    # 华为云 MaaS（框架就绪）
+    - url: "https://infer-modelarts-cn-southwest-2.modelarts-infer.com"
+      api_key: "${HUAWEI_KEY}"
+      provider: "openai"
+      health_path: "/v1/models"
+
+    # vLLM / sglang / Ollama — 无认证，向后兼容
+    - url: "http://localhost:11434"
+      api_key: "ollama"
+      health_path: "/health"
+```
+
+#### 支持的 Provider 列表
+
+| Provider 值 | 代表服务 | 认证方式 |
+|------------|---------|---------|
+| `anthropic` | Anthropic Claude API | `x-api-key` + `anthropic-version` |
+| `openai` | OpenAI, Azure OpenAI, DashScope, Ark, 华为云 MaaS 等 | `Authorization: Bearer` |
+| 空字符串 / 其他 | vLLM, sglang, Ollama, 自建服务 | 无认证（向后兼容） |
+
+#### 可观测性
+
+启用 DEBUG 日志后，可以在日志中观察认证注入行为：
+
+```bash
+# 查看健康检查认证日志
+grep "injecting.*auth\|health check" /var/log/sproxy.log | head -20
+
+# 示例输出
+DEBUG   health: injecting Anthropic auth   {"target": "https://api.anthropic.com"}
+DEBUG   health: injecting Bearer auth      {"target": "https://api.openai.com", "provider": "openai"}
+DEBUG   health: no credential for target  {"target": "http://localhost:11434"}
+```
+
+---
+
+### 42.4 升级步骤
+
+1. **备份数据库**
+   ```bash
+   cp pairproxy.db pairproxy.db.bak.v2.22.0
+   ```
+
+2. **停止 sproxy**
+   ```bash
+   systemctl stop sproxy
+   ```
+
+3. **替换二进制**
+   ```bash
+   cp sproxy-v2.23.0 /usr/local/bin/sproxy
+   ```
+
+4. **（可选）更新配置**：为 LLM target 添加 `health_path: "/v1/models"` 和正确的 `provider` 字段
+
+5. **启动 sproxy**（Schema 自动迁移）
+   ```bash
+   systemctl start sproxy
+   ```
+
+6. **验证**
+   ```bash
+   curl http://localhost:9000/health
+   # 查看日志确认健康检查正常
+   journalctl -u sproxy -f | grep -i health
+   ```
+
+---
+
+### 42.5 不兼容变更
+
+**无破坏性变更**。所有修改均向后兼容：
+
+- v2.22.0 配置文件直接可用，无需修改
+- 现有 API Key 数据库记录不受影响
+- 未设置 `health_path` 的 target 健康检查行为不变
