@@ -61,6 +61,9 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	data.QuotaUsage, _ = q.QueryQuotaUsage(params.From, params.To)
 	data.UpstreamLatencyBoxPlot, _ = q.QueryLatencyBoxPlotByUpstream(params.From, params.To)
 
+	// Phase 5: Medium-value supplements
+	data.GroupTokenBoxPlots, _ = q.QueryGroupTokenDistribution(params.From, params.To)
+
 	// Generate insights
 	data.Insights = GenerateInsights(&data)
 

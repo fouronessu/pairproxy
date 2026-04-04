@@ -48,6 +48,9 @@ type ReportData struct {
 	QuotaUsage            []QuotaUsageRow      `json:"quota_usage"`
 	UpstreamLatencyBoxPlot []LatencyBoxPlotRow `json:"upstream_latency_box_plot"`
 
+	// Phase 5: 中等价值补齐
+	GroupTokenBoxPlots    []GroupTokenDistribution `json:"group_token_box_plots"`
+
 	Insights []Insight `json:"insights"`
 }
 

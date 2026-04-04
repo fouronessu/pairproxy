@@ -84,6 +84,11 @@ tr:nth-child(even) td{background:#111130}
     <div class="card"><h3>📊 I/O Token 比率分布</h3><div id="chart-io-ratio" class="chart-box"></div></div>
   </div>
 
+  <!-- Phase 5: Group Token Distribution Box Plot -->
+  <div class="grid" style="margin-bottom:20px">
+    <div class="card"><h3>🎯 分组用量箱线图（组内差异）</h3><div id="chart-group-token-boxplot" class="chart-box" style="min-height:400px"></div></div>
+  </div>
+
   <!-- Phase 2: Latency Analysis Row -->
   <div class="grid">
     <div class="card"><h3>⏱️ 延迟箱线图（按模型）</h3><div id="chart-latency-boxplot" class="chart-box"></div></div>
@@ -168,6 +173,7 @@ function init(){
   initStreaming();
   initGroups();
   initIORatio();
+  initGroupTokenBoxplot();
   initLatencyBoxplot();
   initLatencyPercentiles();
   initFreq();
@@ -369,6 +375,27 @@ function initIORatio(){
     xAxis:{type:'category',data:D.io_ratio_buckets.map(b=>b.range)},
     yAxis:{type:'value'},
     series:[{type:'bar',data:D.io_ratio_buckets.map(b=>b.count),itemStyle:{color:'#ab47bc'},barWidth:'60%'}]
+  });
+}
+
+function initGroupTokenBoxplot(){
+  const c=mkChart('chart-group-token-boxplot');if(!c||!D.group_token_box_plots||!D.group_token_box_plots.length)return;
+  const data=D.group_token_box_plots.map(g=>[g.min,g.q1,g.median,g.q3,g.max]);
+  const labels=D.group_token_box_plots.map(g=>g.group_name||g.group_id);
+  c.setOption({
+    tooltip:{trigger:'axis',formatter:function(p){
+      const g=D.group_token_box_plots[p[0].dataIndex];
+      return (g.group_name||g.group_id)+'<br>最小: '+fmtTok(g.min)+'<br>Q1: '+fmtTok(g.q1)+'<br>中位: '+fmtTok(g.median)+'<br>Q3: '+fmtTok(g.q3)+'<br>最大: '+fmtTok(g.max)+'<br>用户数: '+g.count;
+    }},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:labels,axisLabel:{fontSize:10}},
+    yAxis:{type:'value',name:'Token 用量',axisLabel:{formatter:v=>fmtTok(v)}},
+    series:[{
+      type:'boxplot',
+      data:data,
+      itemStyle:{color:'#ab47bc',borderColor:'#7b1fa2'},
+      emphasis:{itemStyle:{shadowBlur:10,shadowColor:'rgba(0,0,0,0.5)'}}
+    }]
   });
 }
 
