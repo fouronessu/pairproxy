@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PairProxy 分析报告</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f1a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.6}
+.container{max-width:1400px;margin:0 auto;padding:20px}
+h1{font-size:1.5rem;font-weight:600;margin-bottom:4px}
+.subtitle{color:#a0a0a0;font-size:0.9rem;margin-bottom:24px}
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.kpi-card{background:#16213e;border-radius:12px;padding:20px;text-align:center;border:1px solid #1a1a4e}
+.kpi-card .value{font-size:1.8rem;font-weight:700;margin-bottom:4px}
+.kpi-card .label{color:#a0a0a0;font-size:0.8rem;margin-bottom:6px}
+.kpi-card .change{font-size:0.8rem;font-weight:600}
+.change-up{color:#66bb6a}
+.change-down{color:#ef5350}
+.change-neutral{color:#a0a0a0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+.grid-full{grid-column:1/-1}
+.card{background:#16213e;border-radius:12px;padding:20px;border:1px solid #1a1a4e}
+.card h3{font-size:1rem;font-weight:600;margin-bottom:16px;color:#b0bec5}
+.chart-box{width:100%;min-height:350px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:0.85rem}
+th{background:#1a1a3e;padding:10px 12px;text-align:left;font-weight:600;color:#b0bec5;border-bottom:1px solid #2a2a5e}
+td{padding:8px 12px;border-bottom:1px solid #1a1a3e}
+tr:nth-child(even) td{background:#111130}
+.insight-card{background:#16213e;border-radius:12px;padding:16px 20px;margin-bottom:12px;border-left:4px solid #4fc3f7}
+.insight-card h4{font-size:0.95rem;margin-bottom:8px}
+.insight-card p{font-size:0.85rem;color:#b0bec5;white-space:pre-line}
+.insight-growth{border-left-color:#4fc3f7}
+.insight-anomaly{border-left-color:#ef5350}
+.insight-cost_warning{border-left-color:#ff7043}
+.insight-engagement{border-left-color:#66bb6a}
+.insight-efficiency{border-left-color:#ab47bc}
+.insight-capacity{border-left-color:#26c6da}
+.insight-model_suggestion{border-left-color:#ffd54f}
+.footer{text-align:center;color:#666;font-size:0.8rem;margin-top:32px;padding:20px 0;border-top:1px solid #1a1a3e}
+@media(max-width:768px){
+.kpi-row{grid-template-columns:repeat(2,1fr)}
+.grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1 id="report-title">📊 PairProxy 分析报告</h1>
+  <div class="subtitle" id="report-subtitle"></div>
+
+  <!-- KPI Cards -->
+  <div class="kpi-row" id="kpi-row"></div>
+
+  <!-- Row 1: Token Trend + Cost Trend -->
+  <div class="grid">
+    <div class="card"><h3>📈 Token 用量趋势</h3><div id="chart-daily-trend" class="chart-box"></div></div>
+    <div class="card"><h3>💰 费用趋势 (USD)</h3><div id="chart-cost-trend" class="chart-box"></div></div>
+  </div>
+
+  <!-- Row 2: Heatmap + Top Users -->
+  <div class="grid">
+    <div class="card"><h3>🕐 24h×7天 请求热力图</h3><div id="chart-heatmap" class="chart-box"></div></div>
+    <div class="card"><h3>🏆 TOP10 用户 Token 用量</h3><div id="chart-top-users" class="chart-box"></div></div>
+  </div>
+
+  <!-- Row 3: Model Dist + Upstream -->
+  <div class="grid">
+    <div class="card"><h3>🤖 模型使用分布</h3><div id="chart-model-dist" class="chart-box"></div></div>
+    <div class="card"><h3>🌐 上游端点状态</h3><div id="chart-upstream" class="chart-box"></div></div>
+  </div>
+
+  <!-- Row 4: Status Codes + Streaming -->
+  <div class="grid">
+    <div class="card"><h3>📊 状态码分布</h3><div id="chart-status-codes" class="chart-box"></div></div>
+    <div class="card"><h3>⚡ 流式 vs 非流式对比</h3><div id="chart-streaming" class="chart-box"></div></div>
+  </div>
+
+  <!-- Row 5: Groups + IO Ratio -->
+  <div class="grid">
+    <div class="card"><h3>🏢 分组对比</h3><div id="chart-groups" class="chart-box"></div></div>
+    <div class="card"><h3>📊 I/O Token 比率分布</h3><div id="chart-io-ratio" class="chart-box"></div></div>
+  </div>
+
+  <!-- Phase 2: Latency Analysis Row -->
+  <div class="grid">
+    <div class="card"><h3>⏱️ 延迟箱线图（按模型）</h3><div id="chart-latency-boxplot" class="chart-box"></div></div>
+    <div class="card"><h3>📊 P50/P95/P99 延迟趋势</h3><div id="chart-latency-percentiles" class="chart-box"></div></div>
+  </div>
+
+  <!-- Row 6: Freq + Pareto -->
+  <div class="grid">
+    <div class="card"><h3>👤 用户请求频次分布</h3><div id="chart-freq" class="chart-box"></div></div>
+    <div class="card"><h3>📈 帕累托图（累积贡献%）</h3><div id="chart-pareto" class="chart-box"></div></div>
+  </div>
+
+  <!-- Phase 3: Advanced Analysis -->
+  <div class="grid">
+    <div class="card"><h3>📈 模型费用占比</h3><div id="chart-model-cost" class="chart-box"></div></div>
+    <div class="card"><h3>💧 Input vs Output Token 相关性</h3><div id="chart-io-scatter" class="chart-box"></div></div>
+  </div>
+
+  <!-- Slow Requests Table -->
+  <div class="card" style="margin-bottom:20px">
+    <h3>🐌 慢请求 TOP10</h3>
+    <div class="table-wrap">
+      <table id="slow-table">
+        <thead><tr><th>时间</th><th>用户</th><th>模型</th><th>输入Token</th><th>输出Token</th><th>延迟(ms)</th><th>状态码</th><th>上游</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Insights -->
+  <div class="card" style="margin-bottom:20px">
+    <h3>📝 智能洞察</h3>
+    <div id="insights-container"></div>
+  </div>
+
+  <div class="footer" id="report-footer"></div>
+</div>
+
+<script>
+const D = {{REPORT_DATA}};
+const charts = [];
+
+function fmt(n){return n.toLocaleString('en-US')}
+function fmtCost(n){return '$'+n.toFixed(2)}
+function fmtTok(n){
+  if(n>=1e9) return (n/1e9).toFixed(1)+'B';
+  if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(1)+'K';
+  return n.toString();
+}
+function fmtPct(n){return n.toFixed(1)+'%'}
+function arrow(c){return c>0?'↑':c<0?'↓':'→'}
+function changeCls(c){return c>0?'change-up':c<0?'change-down':'change-neutral'}
+
+function init(){
+  initHeader();
+  initKPI();
+  initDailyTrend();
+  initCostTrend();
+  initHeatmap();
+  initTopUsers();
+  initModelDist();
+  initUpstream();
+  initStatusCodes();
+  initStreaming();
+  initGroups();
+  initIORatio();
+  initLatencyBoxplot();
+  initLatencyPercentiles();
+  initFreq();
+  initPareto();
+  initModelCost();
+  initIOScatter();
+  renderSlowRequests();
+  renderInsights();
+  window.addEventListener('resize',()=>charts.forEach(c=>c.resize()));
+}
+
+function initHeader(){
+  document.getElementById('report-subtitle').textContent=
+    D.period_label+' | 生成于 '+D.generated_at;
+  document.getElementById('report-footer').textContent=
+    '报告生成时间: '+D.generated_at+' | 数据周期: '+D.period_label+' | PairProxy Report Generator';
+}
+
+function initKPI(){
+  const k=D.kpi;
+  const items=[
+    {label:'总请求',value:fmt(k.total_requests),change:k.requests_change,unit:''},
+    {label:'总 Token',value:fmtTok(k.total_tokens),change:k.tokens_change,unit:''},
+    {label:'总费用',value:fmtCost(k.total_cost),change:k.cost_change,unit:''},
+    {label:'活跃用户',value:k.active_users,change:k.users_change,unit:'人'},
+    {label:'错误率',value:fmtPct(k.error_rate),change:k.error_rate_change,unit:''},
+    {label:'平均延迟',value:Math.round(k.avg_latency_ms)+'ms',change:k.latency_change,unit:''},
+    {label:'P95延迟',value:Math.round(k.p95_latency_ms)+'ms',change:0,unit:''},
+    {label:'P99延迟',value:Math.round(k.p99_latency_ms)+'ms',change:0,unit:''},
+  ];
+  const row=document.getElementById('kpi-row');
+  row.innerHTML=items.map(i=>{
+    const a=arrow(i.change);
+    const cls=changeCls(i.change);
+    const pct=Math.abs(i.change).toFixed(1);
+    return `<div class="kpi-card"><div class="value">${i.value}</div><div class="label">${i.label}</div><div class="change ${cls}">${a} ${pct}%</div></div>`;
+  }).join('');
+}
+
+function mkChart(id){
+  const el=document.getElementById(id);
+  if(!el)return null;
+  const c=echarts.init(el,'dark');
+  charts.push(c);
+  return c;
+}
+
+function initDailyTrend(){
+  const c=mkChart('chart-daily-trend');if(!c||!D.daily_trend||!D.daily_trend.length)return;
+  const dates=D.daily_trend.map(r=>r.date);
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['输入 Token','输出 Token']},
+    grid:{left:60,right:20,top:40,bottom:30},
+    xAxis:{type:'category',data:dates,axisLabel:{fontSize:10}},
+    yAxis:{type:'value',axisLabel:{formatter:v=>fmtTok(v)}},
+    series:[
+      {name:'输入 Token',type:'line',stack:'t',areaStyle:{opacity:0.3},data:D.daily_trend.map(r=>r.input_tokens),itemStyle:{color:'#4fc3f7'},lineStyle:{width:2}},
+      {name:'输出 Token',type:'line',stack:'t',areaStyle:{opacity:0.3},data:D.daily_trend.map(r=>r.output_tokens),itemStyle:{color:'#66bb6a'},lineStyle:{width:2}}
+    ]
+  });
+}
+
+function initCostTrend(){
+  const c=mkChart('chart-cost-trend');if(!c||!D.daily_trend||!D.daily_trend.length)return;
+  c.setOption({
+    tooltip:{trigger:'axis',formatter:p=>'$'+p[0].value.toFixed(2)},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:D.daily_trend.map(r=>r.date),axisLabel:{fontSize:10}},
+    yAxis:{type:'value',axisLabel:{formatter:v=>'$'+v.toFixed(0)}},
+    series:[{type:'line',data:D.daily_trend.map(r=>r.cost_usd),areaStyle:{opacity:0.3,color:'#ff7043'},itemStyle:{color:'#ff7043'},lineStyle:{width:2}}]
+  });
+}
+
+function initHeatmap(){
+  const c=mkChart('chart-heatmap');if(!c||!D.heatmap_data||!D.heatmap_data.length)return;
+  const days=['周日','周一','周二','周三','周四','周五','周六'];
+  const hours=[];for(let i=0;i<24;i++)hours.push(i+':00');
+  const data=D.heatmap_data.map(h=>[h.hour,h.day,h.value]);
+  let maxVal=0;data.forEach(d=>{if(d[2]>maxVal)maxVal=d[2]});
+  c.setOption({
+    tooltip:{formatter:function(p){return days[p.value[1]]+' '+hours[p.value[0]]+'<br>请求数: '+p.value[2]}},
+    grid:{left:60,right:60,top:10,bottom:40},
+    xAxis:{type:'category',data:hours,splitArea:{show:true}},
+    yAxis:{type:'category',data:days,splitArea:{show:true}},
+    visualMap:{min:0,max:maxVal||1,calculable:true,orient:'horizontal',left:'center',bottom:0,inRange:{color:['#0d1b2a','#1b3a5c','#3a7bd5','#4fc3f7']}},
+    series:[{type:'heatmap',data:data,label:{show:false},emphasis:{itemStyle:{shadowBlur:10,shadowColor:'rgba(0,0,0,0.5)'}}}]
+  });
+}
+
+function initTopUsers(){
+  const c=mkChart('chart-top-users');if(!c||!D.top_users_by_token||!D.top_users_by_token.length)return;
+  const users=D.top_users_by_token.map(u=>u.username).reverse();
+  const vals=D.top_users_by_token.map(u=>u.value).reverse();
+  c.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'}},
+    grid:{left:100,right:40,top:10,bottom:30},
+    xAxis:{type:'value',axisLabel:{formatter:v=>fmtTok(v)}},
+    yAxis:{type:'category',data:users},
+    series:[{type:'bar',data:vals,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#1565c0'},{offset:1,color:'#4fc3f7'}])},barWidth:'60%'}]
+  });
+}
+
+function initModelDist(){
+  const c=mkChart('chart-model-dist');if(!c||!D.model_distribution||!D.model_distribution.length)return;
+  const colors=['#4fc3f7','#66bb6a','#ff7043','#ab47bc','#ffd54f','#26c6da','#ef5350','#8d6e63'];
+  c.setOption({
+    tooltip:{trigger:'item',formatter:p=>p.name+'<br>Token: '+fmtTok(p.value)+'<br>占比: '+p.percent+'%'},
+    legend:{orient:'vertical',right:10,top:'center',textStyle:{color:'#b0bec5'}},
+    series:[{
+      type:'pie',radius:['40%','70%'],center:['40%','50%'],
+      data:D.model_distribution.map((m,i)=>({name:m.model,value:m.total_tokens,itemStyle:{color:colors[i%colors.length]}})),
+      label:{color:'#b0bec5'},
+      emphasis:{itemStyle:{shadowBlur:10,shadowOffsetX:0,shadowColor:'rgba(0,0,0,0.5)'}}
+    }]
+  });
+}
+
+function initUpstream(){
+  const c=mkChart('chart-upstream');if(!c||!D.upstream_stats||!D.upstream_stats.length)return;
+  const urls=D.upstream_stats.map(u=>u.url.replace(/https?:\/\//,'').split('/')[0]);
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['平均延迟(ms)','错误率(%)']},
+    grid:{left:60,right:60,top:40,bottom:30},
+    xAxis:{type:'category',data:urls,axisLabel:{fontSize:10}},
+    yAxis:[
+      {type:'value',name:'ms',axisLabel:{formatter:v=>v+'ms'}},
+      {type:'value',name:'%',axisLabel:{formatter:v=>v+'%'}}
+    ],
+    series:[
+      {name:'平均延迟(ms)',type:'bar',data:D.upstream_stats.map(u=>Math.round(u.avg_latency)),itemStyle:{color:'#4fc3f7'}},
+      {name:'错误率(%)',type:'bar',yAxisIndex:1,data:D.upstream_stats.map(u=>parseFloat(u.error_rate.toFixed(2))),itemStyle:{color:'#ef5350'}}
+    ]
+  });
+}
+
+function initStatusCodes(){
+  const c=mkChart('chart-status-codes');if(!c||!D.status_code_dist||!D.status_code_dist.length)return;
+  const colors=D.status_code_dist.map(s=>{
+    if(s.status_code>=200&&s.status_code<300)return'#66bb6a';
+    if(s.status_code>=400&&s.status_code<500)return'#ff7043';
+    return'#ef5350';
+  });
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:D.status_code_dist.map(s=>s.status_code.toString())},
+    yAxis:{type:'value'},
+    series:[{type:'bar',data:D.status_code_dist.map((s,i)=>({value:s.count,itemStyle:{color:colors[i]}}))}]
+  });
+}
+
+function initStreaming(){
+  const c=mkChart('chart-streaming');if(!c)return;
+  const sr=D.streaming_ratio;
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['请求数','平均延迟(ms)']},
+    grid:{left:60,right:60,top:40,bottom:30},
+    xAxis:{type:'category',data:['流式','非流式']},
+    yAxis:[
+      {type:'value',name:'请求数'},
+      {type:'value',name:'ms'}
+    ],
+    series:[
+      {name:'请求数',type:'bar',data:[sr.streaming_count,sr.non_streaming_count],itemStyle:{color:'#4fc3f7'}},
+      {name:'平均延迟(ms)',type:'bar',yAxisIndex:1,data:[Math.round(sr.streaming_avg_latency),Math.round(sr.non_streaming_avg_latency)],itemStyle:{color:'#ff7043'}}
+    ]
+  });
+}
+
+function initGroups(){
+  const c=mkChart('chart-groups');if(!c||!D.group_comparison||!D.group_comparison.length)return;
+  const names=D.group_comparison.map(g=>g.group_name||g.group_id);
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['Token 用量','费用(USD)','活跃用户']},
+    grid:{left:60,right:60,top:40,bottom:30},
+    xAxis:{type:'category',data:names},
+    yAxis:[
+      {type:'value',axisLabel:{formatter:v=>fmtTok(v)}},
+      {type:'value',axisLabel:{formatter:v=>'$'+v}}
+    ],
+    series:[
+      {name:'Token 用量',type:'bar',data:D.group_comparison.map(g=>g.total_tokens),itemStyle:{color:'#4fc3f7'}},
+      {name:'费用(USD)',type:'bar',yAxisIndex:1,data:D.group_comparison.map(g=>parseFloat(g.cost_usd.toFixed(2))),itemStyle:{color:'#ff7043'}},
+    ]
+  });
+}
+
+function initIORatio(){
+  const c=mkChart('chart-io-ratio');if(!c||!D.io_ratio_buckets||!D.io_ratio_buckets.length)return;
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:D.io_ratio_buckets.map(b=>b.range)},
+    yAxis:{type:'value'},
+    series:[{type:'bar',data:D.io_ratio_buckets.map(b=>b.count),itemStyle:{color:'#ab47bc'},barWidth:'60%'}]
+  });
+}
+
+function initFreq(){
+  const c=mkChart('chart-freq');if(!c||!D.user_freq_buckets||!D.user_freq_buckets.length)return;
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:D.user_freq_buckets.map(b=>b.range)},
+    yAxis:{type:'value'},
+    series:[{type:'bar',data:D.user_freq_buckets.map(b=>b.count),itemStyle:{color:'#26c6da'},barWidth:'60%'}]
+  });
+}
+
+function initPareto(){
+  const c=mkChart('chart-pareto');if(!c||!D.pareto_data||!D.pareto_data.length)return;
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['Token 用量','累积贡献%']},
+    grid:{left:60,right:60,top:40,bottom:40},
+    xAxis:{type:'category',data:D.pareto_data.slice(0,20).map(p=>p.username),axisLabel:{rotate:45,fontSize:10}},
+    yAxis:[
+      {type:'value',axisLabel:{formatter:v=>fmtTok(v)}},
+      {type:'value',max:100,axisLabel:{formatter:v=>v+'%'}}
+    ],
+    series:[
+      {name:'Token 用量',type:'bar',data:D.pareto_data.slice(0,20).map(p=>p.total_tokens),itemStyle:{color:'#ff7043'}},
+      {name:'累积贡献%',type:'line',yAxisIndex:1,data:D.pareto_data.slice(0,20).map(p=>p.cumulative_pct),itemStyle:{color:'#ef5350'},lineStyle:{width:2,type:'dashed'},markLine:{data:[{yAxis:80,name:'80%'}],lineStyle:{color:'#ffd54f',type:'dashed'}}}
+    ]
+  });
+}
+
+function initLatencyBoxplot(){
+  const c=mkChart('chart-latency-boxplot');if(!c||!D.latency_box_plots||!D.latency_box_plots.length)return;
+  const data=D.latency_box_plots.map(bp=>[bp.min,bp.q1,bp.median,bp.q3,bp.max]);
+  c.setOption({
+    tooltip:{trigger:'axis',formatter:function(p){
+      const bp=D.latency_box_plots[p[0].dataIndex];
+      return bp.model+'<br>最小: '+bp.min+'ms<br>Q1: '+bp.q1+'ms<br>中位: '+bp.median+'ms<br>Q3: '+bp.q3+'ms<br>最大: '+bp.max+'ms<br>样本: '+bp.count;
+    }},
+    grid:{left:80,right:20,top:30,bottom:30},
+    xAxis:{type:'category',data:D.latency_box_plots.map(bp=>bp.model),axisLabel:{fontSize:10}},
+    yAxis:{type:'value',name:'延迟(ms)',axisLabel:{formatter:v=>v+'ms'}},
+    series:[{
+      type:'boxplot',
+      data:data,
+      itemStyle:{color:'#4fc3f7',borderColor:'#0288d1'},
+      emphasis:{itemStyle:{shadowBlur:10,shadowColor:'rgba(0,0,0,0.5)'}}
+    }]
+  });
+}
+
+function initLatencyPercentiles(){
+  const c=mkChart('chart-latency-percentiles');if(!c||!D.latency_percentiles||!D.latency_percentiles.length)return;
+  c.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['P50(中位)','P95','P99']},
+    grid:{left:60,right:20,top:40,bottom:30},
+    xAxis:{type:'category',data:D.latency_percentiles.map(r=>r.date),axisLabel:{fontSize:9}},
+    yAxis:{type:'value',name:'延迟(ms)',axisLabel:{formatter:v=>v+'ms'}},
+    series:[
+      {name:'P50(中位)',type:'line',data:D.latency_percentiles.map(r=>r.p50),itemStyle:{color:'#4fc3f7'},lineStyle:{width:2}},
+      {name:'P95',type:'line',data:D.latency_percentiles.map(r=>r.p95),itemStyle:{color:'#ff7043'},lineStyle:{width:2}},
+      {name:'P99',type:'line',data:D.latency_percentiles.map(r=>r.p99),itemStyle:{color:'#ef5350'},lineStyle:{width:2}}
+    ]
+  });
+}
+
+function initModelCost(){
+  const c=mkChart('chart-model-cost');if(!c||!D.model_cost_breakdown||!D.model_cost_breakdown.length)return;
+  const colors=['#4fc3f7','#66bb6a','#ff7043','#ab47bc','#ffd54f','#26c6da','#ef5350','#8d6e63'];
+  c.setOption({
+    tooltip:{trigger:'item',formatter:p=>p.name+'<br>费用: $'+p.value.cost.toFixed(2)+'<br>占比: '+p.value.pct.toFixed(1)+'%<br>请求: '+p.value.reqs},
+    legend:{orient:'vertical',right:10,top:'center',textStyle:{color:'#b0bec5'}},
+    series:[{
+      type:'pie',radius:['40%','70%'],center:['40%','50%'],
+      data:D.model_cost_breakdown.map((m,i)=>({name:m.model,value:{cost:m.cost_usd,pct:m.cost_percent,reqs:m.requests},itemStyle:{color:colors[i%colors.length]}})),
+      label:{color:'#b0bec5'},
+      emphasis:{itemStyle:{shadowBlur:10,shadowOffsetX:0,shadowColor:'rgba(0,0,0,0.5)'}}
+    }]
+  });
+}
+
+function initIOScatter(){
+  const c=mkChart('chart-io-scatter');if(!c||!D.io_scatter_plot||!D.io_scatter_plot.length)return;
+  const data=D.io_scatter_plot.map(p=>[p.input_tokens,p.output_tokens]);
+  c.setOption({
+    tooltip:{trigger:'item'},
+    grid:{left:60,right:20,top:30,bottom:30},
+    xAxis:{type:'value',name:'输入 Token',axisLabel:{formatter:v=>fmtTok(v)}},
+    yAxis:{type:'value',name:'输出 Token',axisLabel:{formatter:v=>fmtTok(v)}},
+    series:[{
+      type:'scatter',
+      data:data,
+      symbolSize:function(val){return Math.min(15,Math.max(3,Math.sqrt(val[0]+val[1])/100))},
+      itemStyle:{color:new echarts.graphic.LinearGradient(0,0,1,1,[{offset:0,color:'#4fc3f7'},{offset:1,color:'#26c6da'}],false),opacity:0.6},
+      emphasis:{itemStyle:{opacity:1,shadowBlur:10}}
+    }]
+  });
+}
+
+function renderSlowRequests(){
+  const tbody=document.querySelector('#slow-table tbody');
+  if(!tbody||!D.slow_requests||!D.slow_requests.length){
+    if(tbody)tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:#666">无数据</td></tr>';
+    return;
+  }
+  tbody.innerHTML=D.slow_requests.map(r=>
+    `<tr><td>${r.created_at}</td><td>${r.username}</td><td>${r.model}</td><td>${fmt(r.input_tokens)}</td><td>${fmt(r.output_tokens)}</td><td>${fmt(r.duration_ms)}</td><td>${r.status_code}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.upstream_url}</td></tr>`
+  ).join('');
+}
+
+function renderInsights(){
+  const container=document.getElementById('insights-container');
+  if(!container||!D.insights||!D.insights.length){
+    if(container)container.innerHTML='<p style="color:#666;text-align:center">暂无洞察数据</p>';
+    return;
+  }
+  container.innerHTML=D.insights.map(i=>
+    `<div class="insight-card insight-${i.type}"><h4>${i.title}</h4><p>${i.detail}</p></div>`
+  ).join('');
+}
+
+document.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>
