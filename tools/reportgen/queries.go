@@ -1044,3 +1044,42 @@ func (q *Querier) QueryUserRequestBoxPlot(from, to time.Time) (UserRequestBoxPlo
 
 	return result, nil
 }
+
+// ---------------------------------------------------------------------------
+// Error Requests: full list for drill-down table
+// ---------------------------------------------------------------------------
+
+// QueryErrorRequests returns all non-2xx requests in the period (capped at 500).
+func (q *Querier) QueryErrorRequests(from, to time.Time) ([]ErrorRequestRow, error) {
+	rows, err := q.db.Query(`
+		SELECT
+			created_at, user_id, model, status_code,
+			duration_ms, input_tokens,
+			COALESCE(upstream_url,''),
+			COALESCE(request_id,'')
+		FROM usage_logs
+		WHERE created_at >= ? AND created_at < ?
+		  AND status_code NOT IN (200, 201, 204)
+		ORDER BY created_at DESC
+		LIMIT 500
+	`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query error requests: %w", err)
+	}
+	defer rows.Close()
+
+	var result []ErrorRequestRow
+	for rows.Next() {
+		var r ErrorRequestRow
+		var uid string
+		var createdAt time.Time
+		if err := rows.Scan(&createdAt, &uid, &r.Model, &r.StatusCode,
+			&r.DurationMs, &r.InputTokens, &r.UpstreamURL, &r.RequestID); err != nil {
+			continue
+		}
+		r.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
+		r.Username = q.username(uid)
+		result = append(result, r)
+	}
+	return result, nil
+}

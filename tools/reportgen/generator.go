@@ -38,6 +38,7 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	data.UpstreamStats, _ = q.QueryUpstreamStats(params.From, params.To)
 	data.StatusCodeDist, _ = q.QueryStatusCodeDist(params.From, params.To)
 	data.SlowRequests, _ = q.QuerySlowRequests(params.From, params.To, 10)
+	data.ErrorRequests, _ = q.QueryErrorRequests(params.From, params.To)
 	data.StreamingRatio, _ = q.QueryStreamingRatio(params.From, params.To)
 
 	registeredUsers := q.CountRegisteredUsers()

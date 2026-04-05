@@ -125,6 +125,29 @@ tr:nth-child(even) td{background:#111130}
     <div class="card"><h3>📊 用户采纳率</h3><div id="chart-adoption-rate" class="chart-box"></div></div>
   </div>
 
+  <!-- Error Requests Table (filterable) -->
+  <div class="card" style="margin-bottom:20px">
+    <h3>🚨 错误请求明细</h3>
+    <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <select id="err-filter-status" style="background:#1a1a3e;color:#e0e0e0;border:1px solid #2a2a5e;padding:6px 10px;border-radius:6px;font-size:0.85rem">
+        <option value="">全部状态码</option>
+      </select>
+      <select id="err-filter-model" style="background:#1a1a3e;color:#e0e0e0;border:1px solid #2a2a5e;padding:6px 10px;border-radius:6px;font-size:0.85rem">
+        <option value="">全部模型</option>
+      </select>
+      <select id="err-filter-upstream" style="background:#1a1a3e;color:#e0e0e0;border:1px solid #2a2a5e;padding:6px 10px;border-radius:6px;font-size:0.85rem">
+        <option value="">全部上游</option>
+      </select>
+      <span id="err-count-label" style="color:#a0a0a0;font-size:0.85rem;margin-left:auto"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="error-table">
+        <thead><tr><th>时间</th><th>用户</th><th>模型</th><th>状态码</th><th>延迟(ms)</th><th>输入Token</th><th>上游</th><th>RequestID</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Slow Requests Table -->
   <div class="card" style="margin-bottom:20px">
     <h3>🐌 慢请求 TOP10</h3>
@@ -632,6 +655,64 @@ function initAdoptionRate(){
   });
 }
 
+function renderErrorTable(){
+  const tbody=document.querySelector('#error-table tbody');
+  if(!tbody)return;
+  const rows=D.error_requests||[];
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:#666">无错误记录</td></tr>';
+    document.getElementById('err-count-label').textContent='共 0 条';
+    return;
+  }
+
+  // Populate filter dropdowns (deduplicated)
+  const statuses=[...new Set(rows.map(r=>r.status_code))].sort();
+  const models=[...new Set(rows.map(r=>r.model))].sort();
+  const upstreams=[...new Set(rows.map(r=>r.upstream_url.replace(/^https?:\/\//,'').split('/')[0]))].sort();
+
+  const selStatus=document.getElementById('err-filter-status');
+  const selModel=document.getElementById('err-filter-model');
+  const selUpstream=document.getElementById('err-filter-upstream');
+
+  if(selStatus.options.length===1){
+    statuses.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;selStatus.appendChild(o);});
+    models.forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;selModel.appendChild(o);});
+    upstreams.forEach(u=>{const o=document.createElement('option');o.value=u;o.textContent=u;selUpstream.appendChild(o);});
+    [selStatus,selModel,selUpstream].forEach(s=>s.addEventListener('change',renderErrorTable));
+  }
+
+  const fStatus=selStatus.value;
+  const fModel=selModel.value;
+  const fUpstream=selUpstream.value;
+
+  const statusColor={429:'#ff7043',500:'#ef5350',503:'#ef5350',401:'#ab47bc',403:'#ab47bc'};
+
+  const filtered=rows.filter(r=>{
+    if(fStatus&&r.status_code!=fStatus)return false;
+    if(fModel&&r.model!==fModel)return false;
+    if(fUpstream&&!r.upstream_url.includes(fUpstream))return false;
+    return true;
+  });
+
+  document.getElementById('err-count-label').textContent='共 '+filtered.length+' / '+rows.length+' 条';
+
+  tbody.innerHTML=filtered.map(r=>{
+    const col=statusColor[r.status_code]||'#ef5350';
+    const upShort=r.upstream_url.replace(/^https?:\/\//,'').split('/')[0];
+    const rid=r.request_id.length>16?r.request_id.slice(0,16)+'…':r.request_id;
+    return `<tr>
+      <td>${r.created_at}</td>
+      <td>${r.username}</td>
+      <td>${r.model}</td>
+      <td><span style="color:${col};font-weight:600">${r.status_code}</span></td>
+      <td>${fmt(r.duration_ms)}</td>
+      <td>${fmt(r.input_tokens)}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.upstream_url}">${upShort}</td>
+      <td style="font-size:0.75rem;color:#888" title="${r.request_id}">${rid}</td>
+    </tr>`;
+  }).join('');
+}
+
 function renderSlowRequests(){
   const tbody=document.querySelector('#slow-table tbody');
   if(!tbody||!D.slow_requests||!D.slow_requests.length){
@@ -668,6 +749,7 @@ function renderQuotaTable(){
 document.addEventListener('DOMContentLoaded',function(){
   init();
   renderQuotaTable();
+  renderErrorTable();
 });
 </script>
 </body>

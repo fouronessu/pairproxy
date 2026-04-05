@@ -24,6 +24,7 @@ type ReportData struct {
 
 	StatusCodeDist []StatusCodeRow  `json:"status_code_dist"`
 	SlowRequests   []SlowRequestRow `json:"slow_requests"`
+	ErrorRequests  []ErrorRequestRow `json:"error_requests"`
 
 	StreamingRatio StreamingRatioData `json:"streaming_ratio"`
 	Engagement     EngagementData     `json:"engagement"`
@@ -160,6 +161,17 @@ type SlowRequestRow struct {
 	DurationMs   int64  `json:"duration_ms"`
 	StatusCode   int    `json:"status_code"`
 	UpstreamURL  string `json:"upstream_url"`
+}
+
+type ErrorRequestRow struct {
+	CreatedAt   string `json:"created_at"`
+	Username    string `json:"username"`
+	Model       string `json:"model"`
+	StatusCode  int    `json:"status_code"`
+	DurationMs  int64  `json:"duration_ms"`
+	InputTokens int64  `json:"input_tokens"`
+	UpstreamURL string `json:"upstream_url"`
+	RequestID   string `json:"request_id"`
 }
 
 type StreamingRatioData struct {

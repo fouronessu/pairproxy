@@ -66,6 +66,44 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 
 	now := time.Now()
+
+	// errorScenarios defines distinct error bursts to simulate real failure patterns.
+	type errScenario struct {
+		day      int
+		hourFrom int
+		count    int
+		status   int
+		model    string
+		upstream string
+		note     string
+	}
+	scenarios := []errScenario{
+		{0, 14, 8, 429, "claude-opus-4-5", "https://api.anthropic.com", "rate-limit-burst"},
+		{1, 9, 5, 500, "claude-sonnet-4-5", "https://api.anthropic.com", "upstream-500-spike"},
+		{2, 22, 4, 503, "gpt-4o", "https://api.openai.com/v1", "openai-outage"},
+		{3, 11, 3, 401, "claude-opus-4-5", "https://api.anthropic.com", "auth-error"},
+		{4, 16, 4, 429, "gpt-4o", "https://api.openai.com/v1", "openai-rate-limit"},
+	}
+
+	errIdx := 0
+	for _, s := range scenarios {
+		t := now.AddDate(0, 0, -s.day)
+		for j := 0; j < s.count; j++ {
+			minute := rand.Intn(60)
+			ts := fmt.Sprintf("%s %02d:%02d:%02d", t.Format("2006-01-02"), s.hourFrom, minute, 0)
+			uid := (errIdx%6 + 1)
+			inp := rand.Intn(400)
+			dur := 80 + rand.Intn(600)
+			if s.status == 500 || s.status == 503 {
+				dur = 1000 + rand.Intn(4000)
+			}
+			db.Exec(`INSERT INTO usage_logs (request_id,user_id,model,input_tokens,output_tokens,total_tokens,is_streaming,upstream_url,status_code,duration_ms,cost_usd,source_node,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				fmt.Sprintf("err-%s-%d", s.note, j), fmt.Sprintf("%d", uid), s.model,
+				inp, 0, inp, 0, s.upstream, s.status, dur, 0.0, "node-1", ts)
+			errIdx++
+		}
+	}
+
 	for day := 0; day < 7; day++ {
 		t := now.AddDate(0, 0, -day)
 		dateStr := t.Format("2006-01-02")
