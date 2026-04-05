@@ -66,6 +66,12 @@ tr:nth-child(even) td{background:#111130}
     <div class="card"><h3>🏆 TOP10 用户 Token 用量</h3><div id="chart-top-users" class="chart-box"></div></div>
   </div>
 
+  <!-- Request-count analytics: TOP10 by requests + box plot stats -->
+  <div class="grid">
+    <div class="card"><h3>🔢 TOP10 请求人（按请求次数）</h3><div id="chart-top-users-req" class="chart-box"></div></div>
+    <div class="card"><h3>📦 用户请求数分布（箱线统计）</h3><div id="chart-req-boxplot-stats" class="chart-box"></div></div>
+  </div>
+
   <!-- Row 3: Model Dist + Upstream -->
   <div class="grid">
     <div class="card"><h3>🤖 模型使用分布</h3><div id="chart-model-dist" class="chart-box"></div></div>
@@ -173,6 +179,8 @@ function init(){
   initCostTrend();
   initHeatmap();
   initTopUsers();
+  initTopUsersByRequest();
+  initReqBoxplotStats();
   initModelDist();
   initUpstream();
   initStatusCodes();
@@ -284,6 +292,48 @@ function initTopUsers(){
     xAxis:{type:'value',axisLabel:{formatter:v=>fmtTok(v)}},
     yAxis:{type:'category',data:users},
     series:[{type:'bar',data:vals,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#1565c0'},{offset:1,color:'#4fc3f7'}])},barWidth:'60%'}]
+  });
+}
+
+function initTopUsersByRequest(){
+  const c=mkChart('chart-top-users-req');if(!c||!D.top_users_by_request||!D.top_users_by_request.length)return;
+  const users=D.top_users_by_request.map(u=>u.username).reverse();
+  const vals=D.top_users_by_request.map(u=>u.requests).reverse();
+  c.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:function(p){
+      const u=D.top_users_by_request[D.top_users_by_request.length-1-p[0].dataIndex];
+      return u.username+'<br>请求数: '+fmt(u.requests)+'<br>Token: '+fmtTok(u.value)+'<br>费用: $'+u.cost_usd.toFixed(2)+(u.group_name?'<br>分组: '+u.group_name:'');
+    }},
+    grid:{left:100,right:40,top:10,bottom:30},
+    xAxis:{type:'value',name:'请求次数'},
+    yAxis:{type:'category',data:users},
+    series:[{type:'bar',data:vals,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#1b5e20'},{offset:1,color:'#66bb6a'}])},barWidth:'60%',label:{show:true,position:'right',formatter:v=>fmt(v.value)}}]
+  });
+}
+
+function initReqBoxplotStats(){
+  const c=mkChart('chart-req-boxplot-stats');
+  if(!c||!D.user_request_box_plot||D.user_request_box_plot.count===0)return;
+  const bp=D.user_request_box_plot;
+  // Show as a horizontal box plot for the full user population
+  c.setOption({
+    tooltip:{trigger:'axis',formatter:function(p){
+      return '用户请求数分布<br>最小: '+bp.min+'<br>Q1: '+bp.q1+'<br>中位: '+bp.median+'<br>均值: '+bp.mean+'<br>Q3: '+bp.q3+'<br>最大: '+bp.max+'<br>IQR: '+bp.iqr+'<br>活跃用户: '+bp.count;
+    }},
+    grid:{left:80,right:80,top:60,bottom:60},
+    xAxis:{type:'value',name:'请求次数/人',nameLocation:'end'},
+    yAxis:{type:'category',data:['全体用户']},
+    series:[
+      {type:'boxplot',data:[[bp.min,bp.q1,bp.median,bp.q3,bp.max]],
+        itemStyle:{color:'#ffd54f',borderColor:'#f9a825'},
+        emphasis:{itemStyle:{shadowBlur:10,shadowColor:'rgba(0,0,0,0.5)'}}},
+      {type:'scatter',data:[[bp.mean,0]],
+        symbolSize:12,itemStyle:{color:'#ef5350'},
+        tooltip:{formatter:'均值: '+bp.mean}}
+    ],
+    graphic:[
+      {type:'text',left:'center',top:10,style:{text:'活跃用户数: '+bp.count+' | 中位: '+bp.median+' | 均值: '+bp.mean+' | IQR: '+bp.iqr+' | 最大: '+bp.max,fill:'#b0bec5',fontSize:12}}
+    ]
   });
 }
 

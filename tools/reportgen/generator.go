@@ -32,6 +32,7 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	data.HeatmapData, _ = q.QueryHeatmap(params.From, params.To)
 	data.TopUsersByToken, _ = q.QueryTopUsers(params.From, params.To, "tokens", 10)
 	data.TopUsersByCost, _ = q.QueryTopUsers(params.From, params.To, "cost", 10)
+	data.TopUsersByRequest, _ = q.QueryTopUsers(params.From, params.To, "requests", 10)
 	data.ModelDistribution, _ = q.QueryModelDistribution(params.From, params.To)
 	data.GroupComparison, _ = q.QueryGroupComparison(params.From, params.To)
 	data.UpstreamStats, _ = q.QueryUpstreamStats(params.From, params.To)
@@ -72,6 +73,9 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	if data.AdoptionRate.TotalRegistered > 0 {
 		data.AdoptionRate.AdoptionPercent = float64(activeUsers) / float64(data.AdoptionRate.TotalRegistered) * 100
 	}
+
+	// Phase 7: Request-count analytics
+	data.UserRequestBoxPlot, _ = q.QueryUserRequestBoxPlot(params.From, params.To)
 
 	// Generate insights
 	data.Insights = GenerateInsights(&data)

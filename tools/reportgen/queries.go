@@ -265,12 +265,14 @@ func (q *Querier) QueryHeatmap(from, to time.Time) ([]HeatmapCell, error) {
 // Top Users
 // ---------------------------------------------------------------------------
 
-// QueryTopUsers returns the top N users ordered by "tokens" or "cost".
+// QueryTopUsers returns the top N users ordered by "tokens", "cost", or "requests".
 func (q *Querier) QueryTopUsers(from, to time.Time, orderBy string, limit int) ([]TopUserRow, error) {
 	var orderExpr string
 	switch orderBy {
 	case "cost":
 		orderExpr = "SUM(ul.cost_usd) DESC"
+	case "requests":
+		orderExpr = "COUNT(*) DESC"
 	default:
 		orderExpr = "SUM(ul.total_tokens) DESC"
 	}
@@ -340,6 +342,8 @@ func (q *Querier) QueryTopUsers(from, to time.Time, orderBy string, limit int) (
 		// For cost ordering, swap Value
 		if orderBy == "cost" {
 			r.Value = r.CostUSD
+		} else if orderBy == "requests" {
+			r.Value = float64(r.Requests)
 		}
 		result = append(result, r)
 	}
@@ -990,3 +994,53 @@ func (q *Querier) QueryDailyLatencyTrend(from, to time.Time) ([]DailyLatencyRow,
 	return result, nil
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 7: User Request Count Box Plot
+// ---------------------------------------------------------------------------
+
+// QueryUserRequestBoxPlot computes box plot statistics over per-user request counts.
+func (q *Querier) QueryUserRequestBoxPlot(from, to time.Time) (UserRequestBoxPlotData, error) {
+	var result UserRequestBoxPlotData
+
+	rows, err := q.db.Query(`
+		SELECT user_id, COUNT(*) AS cnt
+		FROM usage_logs
+		WHERE created_at >= ? AND created_at < ?
+		GROUP BY user_id
+		ORDER BY cnt
+	`, from, to)
+	if err != nil {
+		return result, fmt.Errorf("query user request boxplot: %w", err)
+	}
+	defer rows.Close()
+
+	var counts []int64
+	var total int64
+	for rows.Next() {
+		var uid string
+		var cnt int64
+		if err := rows.Scan(&uid, &cnt); err != nil {
+			continue
+		}
+		counts = append(counts, cnt)
+		total += cnt
+	}
+
+	n := len(counts)
+	if n == 0 {
+		return result, nil
+	}
+
+	// counts is already sorted by ORDER BY cnt
+	result.Count = n
+	result.Min = counts[0]
+	result.Max = counts[n-1]
+	result.Median = percentile(counts, 50)
+	result.Q1 = percentile(counts, 25)
+	result.Q3 = percentile(counts, 75)
+	result.IQR = result.Q3 - result.Q1
+	result.Mean = math.Round(float64(total)/float64(n)*10) / 10
+
+	return result, nil
+}

@@ -14,8 +14,9 @@ type ReportData struct {
 	DailyTrend  []DailyRow    `json:"daily_trend"`
 	HeatmapData []HeatmapCell `json:"heatmap_data"`
 
-	TopUsersByToken []TopUserRow `json:"top_users_by_token"`
-	TopUsersByCost  []TopUserRow `json:"top_users_by_cost"`
+	TopUsersByToken   []TopUserRow `json:"top_users_by_token"`
+	TopUsersByCost    []TopUserRow `json:"top_users_by_cost"`
+	TopUsersByRequest []TopUserRow `json:"top_users_by_request"`
 
 	ModelDistribution []ModelRow    `json:"model_distribution"`
 	GroupComparison   []GroupRow    `json:"group_comparison"`
@@ -51,9 +52,12 @@ type ReportData struct {
 	// Phase 5: 中等价值补齐
 	GroupTokenBoxPlots    []GroupTokenDistribution `json:"group_token_box_plots"`
 
+	// Phase 7: 请求数统计
+	UserRequestBoxPlot UserRequestBoxPlotData `json:"user_request_box_plot"`
+
 	// Phase 6: 低频补齐
-	ModelRadarData        []ModelRadarData `json:"model_radar_data"`
-	AdoptionRate          AdoptionRateData `json:"adoption_rate"`
+	ModelRadarData []ModelRadarData `json:"model_radar_data"`
+	AdoptionRate   AdoptionRateData `json:"adoption_rate"`
 
 	Insights []Insight `json:"insights"`
 }
@@ -275,6 +279,18 @@ type AdoptionRateData struct {
 	TotalRegistered int     `json:"total_registered"`
 	TotalActive     int     `json:"total_active"`
 	AdoptionPercent float64 `json:"adoption_percent"`
+}
+
+// Phase 7: 用户请求数箱线图统计
+type UserRequestBoxPlotData struct {
+	Min    int64   `json:"min"`
+	Q1     int64   `json:"q1"`
+	Median int64   `json:"median"`
+	Q3     int64   `json:"q3"`
+	Max    int64   `json:"max"`
+	IQR    int64   `json:"iqr"`
+	Mean   float64 `json:"mean"`
+	Count  int     `json:"count"` // number of active users
 }
 
 type Insight struct {
