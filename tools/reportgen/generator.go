@@ -78,8 +78,13 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	// Phase 7: Request-count analytics
 	data.UserRequestBoxPlot, _ = q.QueryUserRequestBoxPlot(params.From, params.To)
 
-	// Generate insights
+	// Generate rule-based insights
 	data.Insights = GenerateInsights(&data)
+
+	// Generate LLM insights (best-effort: requires KEY_ENCRYPTION_KEY env var)
+	if llmInsight := GenerateLLMInsights(&data, params.DBPath); llmInsight != nil {
+		data.Insights = append(data.Insights, *llmInsight)
+	}
 
 	// Read template
 	tmplBytes, err := os.ReadFile(templatePath)
