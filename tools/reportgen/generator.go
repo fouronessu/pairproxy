@@ -78,6 +78,25 @@ func GenerateReport(params QueryParams, templatePath, outputPath string) error {
 	// Phase 7: Request-count analytics
 	data.UserRequestBoxPlot, _ = q.QueryUserRequestBoxPlot(params.From, params.To)
 
+	// Phase 8: Missing/partial features
+	data.LatencyHistogram, _ = q.QueryLatencyHistogram(params.From, params.To)
+	data.LatencyScatter, _ = q.QueryLatencyScatter(params.From, params.To, 1000)
+	data.TokenThroughputHeatmap, _ = q.QueryTokenThroughputHeatmap(params.From, params.To)
+	data.UpstreamShare, _ = q.QueryUpstreamShare(params.From, params.To)
+	data.UpstreamLatencyTrend, _ = q.QueryUpstreamLatencyTrend(params.From, params.To)
+	data.CostPerTokenTrend, _ = q.QueryCostPerTokenTrend(params.From, params.To)
+	data.IORatioTrend, _ = q.QueryIORatioTrend(params.From, params.To)
+	data.ModelInputBoxPlots, _ = q.QueryModelTokenBoxPlots(params.From, params.To, "input_tokens")
+	data.ModelOutputBoxPlots, _ = q.QueryModelTokenBoxPlots(params.From, params.To, "output_tokens")
+	data.SourceNodeDist, _ = q.QuerySourceNodeDist(params.From, params.To)
+	data.StreamingBoxPlot, _ = q.QueryStreamingBoxPlot(params.From, params.To)
+	data.ModelDailyTrend, _ = q.QueryModelDailyTrend(params.From, params.To)
+	data.KPI.PeakRPM, _ = q.QueryPeakRPM(params.From, params.To)
+
+	// Phase 9: remaining gaps
+	data.UserTierDist, _ = q.QueryUserTierDist(params.From, params.To)
+	data.UserTokenPercentiles, _ = q.QueryUserTokenPercentiles(params.From, params.To)
+
 	// Generate rule-based insights
 	data.Insights = GenerateInsights(&data)
 

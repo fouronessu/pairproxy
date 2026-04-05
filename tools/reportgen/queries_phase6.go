@@ -20,7 +20,8 @@ func (q *Querier) QueryModelRadarData(from, to time.Time) ([]ModelRadarData, err
 			COALESCE(AVG(duration_ms), 0) as avg_lat,
 			COALESCE(SUM(cost_usd), 0) as total_cost,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
-			SUM(CASE WHEN status_code NOT IN (200,201,204) THEN 1 ELSE 0 END) as errors
+			SUM(CASE WHEN status_code NOT IN (200,201,204) THEN 1 ELSE 0 END) as errors,
+			COUNT(DISTINCT user_id) as distinct_users
 		FROM usage_logs
 		WHERE created_at >= ? AND created_at < ?
 		GROUP BY model
@@ -31,25 +32,30 @@ func (q *Querier) QueryModelRadarData(from, to time.Time) ([]ModelRadarData, err
 	defer rows.Close()
 
 	type modelStats struct {
-		model       string
-		count       int64
-		avgLatency  float64
-		totalCost   float64
-		totalTokens int64
-		errors      int64
+		model         string
+		count         int64
+		avgLatency    float64
+		totalCost     float64
+		totalTokens   int64
+		errors        int64
+		distinctUsers int64
 	}
 	var stats []modelStats
 	var totalRequests int64
+	var totalUsers int64
 	var maxLatency float64
 	var minCostPerToken float64 = math.MaxFloat64
 
 	for rows.Next() {
 		var m modelStats
-		if err := rows.Scan(&m.model, &m.count, &m.avgLatency, &m.totalCost, &m.totalTokens, &m.errors); err != nil {
+		if err := rows.Scan(&m.model, &m.count, &m.avgLatency, &m.totalCost, &m.totalTokens, &m.errors, &m.distinctUsers); err != nil {
 			continue
 		}
 		stats = append(stats, m)
 		totalRequests += m.count
+		if m.distinctUsers > totalUsers {
+			totalUsers = m.distinctUsers
+		}
 
 		if m.avgLatency > maxLatency {
 			maxLatency = m.avgLatency
@@ -105,8 +111,10 @@ func (q *Querier) QueryModelRadarData(from, to time.Time) ([]ModelRadarData, err
 			rd.ReliabilityScore = math.Round((1 - errorRate) * 100 * 10) / 10
 		}
 
-		// 5. Adoption Score: same as throughput score (request volume percentage)
-		rd.AdoptionScore = rd.ThroughputScore
+		// 5. Adoption Score: distinct users using this model / max distinct users any model
+		if totalUsers > 0 {
+			rd.AdoptionScore = math.Round(float64(ms.distinctUsers) / float64(totalUsers) * 100 * 10) / 10
+		}
 
 		result = append(result, rd)
 	}

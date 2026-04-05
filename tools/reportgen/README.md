@@ -4,8 +4,8 @@
 
 reportgen 是 PairProxy 的可视化分析报告生成工具，能够从 SQLite 数据库中提取使用数据，生成交互式 HTML 报告。报告包含 16+ 个可视化卡片，覆盖用户、运维和管理三个视角的分析需求。
 
-**最新版本**: v2.24.0  
-**发布日期**: 2026-04-04
+**最新版本**: v2.26.0  
+**发布日期**: 2026-04-07
 
 ---
 
@@ -231,6 +231,44 @@ CREATE TABLE usage_logs (
 
 ---
 
+## LLM 智能洞察
+
+除规则洞察外，reportgen 支持调用上游 LLM（Anthropic 或 OpenAI）对完整报告数据进行深度分析，生成三视角（使用者/运维/管理者）的中文洞察报告。
+
+### 启用条件
+
+1. **数据库中存在活跃 LLM 目标**：`llm_targets` 表需有 `is_active=1` 且 `provider` 为 `anthropic` 或 `openai` 的行，并关联有效的 `api_keys` 记录。
+2. **设置环境变量**：API Key 在数据库中以 AES-GCM 加密存储，解密需提供密钥加密密钥：
+
+```bash
+export KEY_ENCRYPTION_KEY="your-key-encryption-key"
+./reportgen -db pairproxy.db -from 2026-04-01 -to 2026-04-07
+```
+
+### 工作原理
+
+- reportgen 读取第一个活跃的 LLM 目标，解密 API Key。
+- 将完整报告 JSON 发送给 LLM，要求其从三个视角各给出 3~5 条洞察。
+- 若报告 JSON 超出 LLM 上下文窗口，自动去除 `error_requests`、`slow_requests`、`io_scatter_plot`、`retention_data` 等大数组后重试。
+- 洞察以纯文本形式附加到报告末尾的"🤖 AI 智能洞察"面板。
+
+### 模型选择
+
+| Provider | 使用模型 | 说明 |
+|---|---|---|
+| Anthropic | `claude-haiku-4-5-20251001` | 速度快、成本低，适合分析任务 |
+| OpenAI | `gpt-4o-mini` | 成本较低的替代方案 |
+
+### 跳过 LLM 洞察
+
+若不需要 LLM 洞察，不设置 `KEY_ENCRYPTION_KEY` 环境变量即可。reportgen 会在 stderr 打印提示并继续生成规则洞察：
+
+```
+⚠️  LLM insights skipped: KEY_ENCRYPTION_KEY env var not set; skipping LLM insights
+```
+
+---
+
 ## 进阶使用
 
 ### 构建自定义模板
@@ -442,9 +480,10 @@ tools/reportgen/
 ├── queries.go           # Phase 1-2 查询 (基础 + 延迟)
 ├── queries_phase3.go    # Phase 3 查询 (留存 + 成本)
 ├── queries_phase4.go    # Phase 4 查询 (趋势 + 配额)
-├── queries_phase6.go    # Phase 6 查询 (雷达 + 采用率)
+├── queries_phase6.go    # Phase 6 查询 (雷达 + 采用率 + 请求统计)
 ├── types.go             # 数据结构定义
-├── insights.go          # 洞察计算 (分层、Pareto等)
+├── insights.go          # 规则洞察计算 (分层、Pareto等)
+├── insights_llm.go      # LLM 智能洞察 (Anthropic/OpenAI)
 ├── templates/
 │   └── report.html      # HTML 模板
 ├── cmd/test_db/
@@ -510,6 +549,16 @@ A: 当前报告是全局视角。扩展功能可参考"开发和扩展"章节。
 
 ## 变更日志
 
+### v2.26.0 (2026-04-07)
+- ✨ 新增模型每日用量堆叠面积图（按模型×日期）
+- ✨ 新增峰值 RPM KPI 卡片
+- ✨ 全部设计文档特性补全，16 类图表 100% 实现
+
+### v2.25.0 (2026-04-07)
+- ✨ 新增 LLM 智能洞察 (Anthropic/OpenAI 双提供商，AES-GCM API Key 解密，上下文超限自动重试)
+- ✨ Phase 7: 用户请求次数箱线图统计
+- 📝 更新使用手册，补充 LLM 洞察配置说明
+
 ### v2.24.0 (2026-04-04)
 - ✨ 补充 6 阶段可视化覆盖 (从 52% → 90%)
 - ✨ 新增 Pareto 分析、用户分层、采用率等高级分析
@@ -529,4 +578,4 @@ A: 当前报告是全局视角。扩展功能可参考"开发和扩展"章节。
 
 ---
 
-**文档版本**: v2.24.0 | **最后更新**: 2026-04-04
+**文档版本**: v2.26.0 | **最后更新**: 2026-04-07

@@ -60,7 +60,48 @@ type ReportData struct {
 	ModelRadarData []ModelRadarData `json:"model_radar_data"`
 	AdoptionRate   AdoptionRateData `json:"adoption_rate"`
 
+	// Phase 8: 补全缺失特性
+	LatencyHistogram      []LatencyHistogramBucket  `json:"latency_histogram"`
+	LatencyScatter        []LatencyScatterPoint     `json:"latency_scatter"`
+	TokenThroughputHeatmap []TokenThroughputCell    `json:"token_throughput_heatmap"`
+	UpstreamShare         []UpstreamShareRow        `json:"upstream_share"`
+	UpstreamLatencyTrend  []UpstreamLatencyTrendRow `json:"upstream_latency_trend"`
+	CostPerTokenTrend     []CostPerTokenRow         `json:"cost_per_token_trend"`
+	IORatioTrend          []IORatioTrendRow         `json:"io_ratio_trend"`
+	ModelInputBoxPlots    []TokenBoxPlotRow         `json:"model_input_box_plots"`
+	ModelOutputBoxPlots   []TokenBoxPlotRow         `json:"model_output_box_plots"`
+	SourceNodeDist        []SourceNodeRow           `json:"source_node_dist"`
+	StreamingBoxPlot      []StreamingBoxPlotRow     `json:"streaming_box_plot"`
+	ModelDailyTrend       []ModelDailyRow           `json:"model_daily_trend"`
+
+	// Phase 9: 剩余缺口补全
+	UserTierDist          []UserTierRow             `json:"user_tier_dist"`
+	UserTokenPercentiles  []UserTokenPercentileRow  `json:"user_token_percentiles"`
+
 	Insights []Insight `json:"insights"`
+}
+
+// Phase 8: 按模型每日请求数/Token（堆叠面积图）
+type ModelDailyRow struct {
+	Date   string `json:"date"`
+	Model  string `json:"model"`
+	Count  int64  `json:"count"`
+	Tokens int64  `json:"tokens"`
+}
+
+// Phase 9: 用户分层（4 层：超级/活跃/普通/非活跃）
+type UserTierRow struct {
+	Tier       string  `json:"tier"`        // "超级用户","活跃用户","普通用户","非活跃"
+	UserCount  int     `json:"user_count"`
+	TokenShare float64 `json:"token_share"` // 该层用户 Token 占总量百分比
+	MinReqs    int64   `json:"min_reqs"`
+	MaxReqs    int64   `json:"max_reqs"`
+}
+
+// Phase 9: 用户 Token 用量百分位（P50/P75/P90/P95/P99）
+type UserTokenPercentileRow struct {
+	Percentile string `json:"percentile"` // "P50","P75","P90","P95","P99"
+	Tokens     int64  `json:"tokens"`
 }
 
 type KPIData struct {
@@ -77,6 +118,7 @@ type KPIData struct {
 	P95LatencyMs    int64   `json:"p95_latency_ms"`
 	P99LatencyMs    int64   `json:"p99_latency_ms"`
 	StreamingPct    float64 `json:"streaming_pct"`
+	PeakRPM         int64   `json:"peak_rpm"`
 
 	PrevTotalRequests int64   `json:"prev_total_requests"`
 	RequestsChange    float64 `json:"requests_change"`
@@ -310,6 +352,78 @@ type Insight struct {
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 	Emoji  string `json:"emoji"`
+}
+
+// Phase 8: 延迟直方图（duration_ms 分桶）
+type LatencyHistogramBucket struct {
+	Range string `json:"range"`
+	Count int64  `json:"count"`
+}
+
+// Phase 8: 延迟 vs Token 散点（采样）
+type LatencyScatterPoint struct {
+	TotalTokens int64 `json:"total_tokens"`
+	DurationMs  int64 `json:"duration_ms"`
+}
+
+// Phase 8: Token 吞吐热力图（hour × dow）
+type TokenThroughputCell struct {
+	Hour  int   `json:"hour"`
+	Day   int   `json:"day"`
+	Value int64 `json:"value"`
+}
+
+// Phase 8: 上游流量占比饼图
+type UpstreamShareRow struct {
+	URL      string `json:"url"`
+	Requests int64  `json:"requests"`
+}
+
+// Phase 8: 按上游逐日延迟趋势（多线）
+type UpstreamLatencyTrendRow struct {
+	URL        string  `json:"url"`
+	Date       string  `json:"date"`
+	AvgLatency float64 `json:"avg_latency"`
+}
+
+// Phase 8: 每 Token 费用逐日趋势
+type CostPerTokenRow struct {
+	Date         string  `json:"date"`
+	CostPerToken float64 `json:"cost_per_token"`
+}
+
+// Phase 8: I/O 比率逐日趋势
+type IORatioTrendRow struct {
+	Date    string  `json:"date"`
+	IORatio float64 `json:"io_ratio"`
+}
+
+// Phase 8: 按模型 Input/Output Token 箱线图
+type TokenBoxPlotRow struct {
+	Model  string `json:"model"`
+	Min    int64  `json:"min"`
+	Q1     int64  `json:"q1"`
+	Median int64  `json:"median"`
+	Q3     int64  `json:"q3"`
+	Max    int64  `json:"max"`
+	Count  int    `json:"count"`
+}
+
+// Phase 8: source_node 流量分布
+type SourceNodeRow struct {
+	SourceNode string `json:"source_node"`
+	Requests   int64  `json:"requests"`
+}
+
+// Phase 8: 流式 vs 非流式延迟箱线图
+type StreamingBoxPlotRow struct {
+	Label  string `json:"label"`
+	Min    int64  `json:"min"`
+	Q1     int64  `json:"q1"`
+	Median int64  `json:"median"`
+	Q3     int64  `json:"q3"`
+	Max    int64  `json:"max"`
+	Count  int    `json:"count"`
 }
 
 // QueryParams holds query parameters.
