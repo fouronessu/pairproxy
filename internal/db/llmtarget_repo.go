@@ -154,11 +154,11 @@ func (r *LLMTargetRepo) ComboExists(url string, apiKeyID *string) (bool, error) 
 	return count > 0, nil
 }
 
-// Seed 仅在 URL 不存在时插入 target。已存在则跳过，保留 WebUI 修改。
+// Seed 仅在 (URL, api_key_id) 组合不存在时插入 target。已存在则跳过，保留 WebUI 修改。
 // 用于配置文件启动同步：配置文件是种子，不是权威源。
 // 与 Upsert 不同的是，Seed 优先保留已存在的记录，不覆盖。
 func (r *LLMTargetRepo) Seed(target *LLMTarget) error {
-	exists, err := r.URLExists(target.URL)
+	exists, err := r.ComboExists(target.URL, target.APIKeyID)
 	if err != nil {
 		return fmt.Errorf("seed: check url exists: %w", err)
 	}

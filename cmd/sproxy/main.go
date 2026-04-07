@@ -1267,6 +1267,30 @@ func resolveTargetID(repo *db.LLMTargetRepo, urlOrID string) (string, error) {
 	}
 }
 
+// resolveUser 按用户名查找用户；在混合认证场景下若同名用户存在于多个 provider 则返回错误，
+// 要求调用方改用 --provider=local|ldap 参数明确指定。
+func resolveUser(repo *db.UserRepo, username string) (*db.User, error) {
+	users, err := repo.ListByUsername(username)
+	if err != nil {
+		return nil, fmt.Errorf("user lookup failed: %w", err)
+	}
+	switch len(users) {
+	case 0:
+		return nil, fmt.Errorf("user %q not found", username)
+	case 1:
+		return &users[0], nil
+	default:
+		providers := make([]string, len(users))
+		for i, u := range users {
+			providers[i] = u.AuthProvider
+		}
+		return nil, fmt.Errorf(
+			"username %q matches %d users from different auth providers: %s\n"+
+				"Use --provider=<provider> or specify by user ID to disambiguate.",
+			username, len(users), strings.Join(providers, ", "))
+	}
+}
+
 // readPassword 从终端读取密码（无回显），如果非终端则直接读取
 func readPassword(prompt string) (string, error) {
 	fmt.Print(prompt)
@@ -1452,12 +1476,9 @@ func setUserActive(username string, active bool) error {
 		return err
 	}
 	defer closeGormDB(logger, database)
-	user, err := userRepo.GetByUsername(username)
+	user, err := resolveUser(userRepo, username)
 	if err != nil {
 		return fmt.Errorf("lookup user: %w", err)
-	}
-	if user == nil {
-		return fmt.Errorf("user %q not found", username)
 	}
 	if err := userRepo.SetActive(user.ID, active); err != nil {
 		return err
@@ -1500,12 +1521,9 @@ var adminUserResetPasswordCmd = &cobra.Command{
 			return err
 		}
 		defer closeGormDB(logger, database)
-		user, err := userRepo.GetByUsername(username)
+		user, err := resolveUser(userRepo, username)
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)
-		}
-		if user == nil {
-			return fmt.Errorf("user %q not found", username)
 		}
 		hash, err := auth.HashPassword(logger, password)
 		if err != nil {
@@ -1550,14 +1568,10 @@ Examples:
 		}
 		defer closeGormDB(logger, database)
 
-		u, err := userRepo.GetByUsername(args[0])
+		u, err := resolveUser(userRepo, args[0])
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)
 		}
-		if u == nil {
-			return fmt.Errorf("user %q not found", args[0])
-		}
-
 		var groupID *string
 		if !userSetGroupRemove {
 			g, err := groupRepo.GetByName(userSetGroupName)
@@ -1843,12 +1857,9 @@ var adminStatsCmd = &cobra.Command{
 
 		if statsUser != "" {
 			// 单用户统计
-			user, err := userRepo.GetByUsername(statsUser)
+			user, err := resolveUser(userRepo, statsUser)
 			if err != nil {
 				return fmt.Errorf("lookup user: %w", err)
-			}
-			if user == nil {
-				return fmt.Errorf("user %q not found", statsUser)
 			}
 			input, output, err := usageRepo.SumTokens(user.ID, from, now)
 			if err != nil {
@@ -1999,12 +2010,9 @@ var adminTokenRevokeCmd = &cobra.Command{
 			return err
 		}
 		defer closeGormDB(logger, database)
-		user, err := userRepo.GetByUsername(username)
+		user, err := resolveUser(userRepo, username)
 		if err != nil {
 			return fmt.Errorf("lookup user: %w", err)
-		}
-		if user == nil {
-			return fmt.Errorf("user %q not found", username)
 		}
 		if err := tokenRepo.RevokeAllForUser(user.ID); err != nil {
 			return err
@@ -2053,12 +2061,9 @@ Examples:
 		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 		if quotaStatusUser != "" {
-			u, err := userRepo.GetByUsername(quotaStatusUser)
+			u, err := resolveUser(userRepo, quotaStatusUser)
 			if err != nil {
 				return fmt.Errorf("lookup user: %w", err)
-			}
-			if u == nil {
-				return fmt.Errorf("user %q not found", quotaStatusUser)
 			}
 
 			todayIn, todayOut, err := usageRepo.SumTokens(u.ID, todayStart, now)
@@ -3054,9 +3059,9 @@ var adminLLMBindCmd = &cobra.Command{
 			return fmt.Errorf("username or --group is required")
 		}
 		// 用户绑定
-		u, err := userRepo.GetByUsername(args[0])
-		if err != nil || u == nil {
-			return fmt.Errorf("user %q not found", args[0])
+		u, err := resolveUser(userRepo, args[0])
+		if err != nil {
+			return fmt.Errorf("resolve user: %w", err)
 		}
 		if err := llmBindingRepo.Set(targetID, &u.ID, nil); err != nil {
 			return fmt.Errorf("bind user: %w", err)
@@ -3085,9 +3090,9 @@ var adminLLMUnbindCmd = &cobra.Command{
 		}
 		defer closeGormDB(logger, database)
 
-		u, err := userRepo.GetByUsername(args[0])
-		if err != nil || u == nil {
-			return fmt.Errorf("user %q not found", args[0])
+		u, err := resolveUser(userRepo, args[0])
+		if err != nil {
+			return fmt.Errorf("resolve user: %w", err)
 		}
 		llmBindingRepo := db.NewLLMBindingRepo(database, logger)
 		bindings, err := llmBindingRepo.List()
@@ -3897,11 +3902,11 @@ var adminImportCmd = &cobra.Command{
 			}
 
 			for _, u := range sec.Users {
-				existing, err := userRepo.GetByUsername(u.Username)
+				existingUsers, err := userRepo.ListByUsername(u.Username)
 				if err != nil {
 					return fmt.Errorf("lookup user %q: %w", u.Username, err)
 				}
-				if existing != nil {
+				if len(existingUsers) > 0 {
 					usersSkipped++
 					skipDetails = append(skipDetails, fmt.Sprintf("用户 %q 已存在，跳过", u.Username))
 					continue

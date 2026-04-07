@@ -565,10 +565,9 @@ func TestURLExists_MultiKey_ReturnsTrue(t *testing.T) {
 	assert.True(t, exists, "URLExists 应返回 true（URL 存在，不论有几条）")
 }
 
-// TestSeed_MultiKey_SkipsOnURLExists 验证 Seed 行为：
-// 若同 URL 已有任何 target，直接跳过（不考虑 APIKeyID 是否不同）。
-// 这是当前设计的已知限制：Seed 不支持同 URL 多 Key。
-func TestSeed_MultiKey_SkipsOnURLExists(t *testing.T) {
+// TestSeed_MultiKey_AllowsDifferentAPIKeys 验证 Seed 行为：
+// 同 URL 不同 APIKey 的组合允许各自独立 Seed（ComboExists 检查复合键）。
+func TestSeed_MultiKey_AllowsDifferentAPIKeys(t *testing.T) {
 	logger := zap.NewNop()
 	gormDB, err := Open(logger, ":memory:")
 	require.NoError(t, err)
@@ -584,15 +583,22 @@ func TestSeed_MultiKey_SkipsOnURLExists(t *testing.T) {
 	err = repo.Seed(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database"})
 	require.NoError(t, err)
 
-	// 再 Seed 同 URL 但不同 Key（keyB）→ 应被跳过（不创建新记录）
+	// 再 Seed 同 URL 但不同 Key（keyB）→ (url, keyB) 不存在，应创建新记录
 	err = repo.Seed(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "database"})
-	require.NoError(t, err, "Seed 在 URL 已存在时应无错返回")
+	require.NoError(t, err, "Seed 对新的 (url, apiKeyID) 组合应成功创建")
 
-	// 验证：DB 中只有 1 条记录（keyB 的 Seed 被跳过）
+	// 验证：DB 中有 2 条记录（不同 APIKey 各一条）
 	targets, err := repo.ListAll()
 	require.NoError(t, err)
-	assert.Len(t, targets, 1,
-		"Seed 在 URL 存在时跳过（已知限制：不支持同 URL 多 Key 的 Seed）")
+	assert.Len(t, targets, 2,
+		"同 URL 不同 APIKey 应各自独立存在（ComboExists 按复合键检查）")
+
+	// 再次 Seed 已有的 (url, keyA) → 应跳过
+	err = repo.Seed(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database"})
+	require.NoError(t, err)
+	targets2, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, targets2, 2, "重复 Seed 相同 (url, apiKeyID) 应被跳过")
 }
 
 // TestDeleteConfigTargetsNotInList_MultiKey_Precision 验证：

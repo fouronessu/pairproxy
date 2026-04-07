@@ -101,13 +101,17 @@ var llmTargetAddCmd = &cobra.Command{
 
 		repo := db.NewLLMTargetRepo(gormDB, logger)
 
-		// 验证 URL 唯一性
-		exists, err := repo.URLExists(addURL)
+		// 验证 (URL, APIKeyID) 组合唯一性
+		var apiKeyIDPtr *string
+		if addAPIKeyID != "" {
+			apiKeyIDPtr = &addAPIKeyID
+		}
+		exists, err := repo.ComboExists(addURL, apiKeyIDPtr)
 		if err != nil {
 			return fmt.Errorf("check url exists: %w", err)
 		}
 		if exists {
-			return fmt.Errorf("URL already exists in config file or database: %s", addURL)
+			return fmt.Errorf("URL+API-key combination already exists: %s", addURL)
 		}
 
 		// 验证 API Key 存在性
