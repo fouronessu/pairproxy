@@ -14,6 +14,27 @@ import (
 	"github.com/l17728/pairproxy/internal/db"
 )
 
+// resolveTargetSet 解析目标集合。
+// groupFlag 为空字符串时表示全局/默认（group_id=NULL）；非空时表示指定组 ID。
+// 当 (group_id, name) 有复合唯一约束时，必须指定 groupFlag 才能精确匹配。
+func resolveTargetSet(repo *db.GroupTargetSetRepo, name, groupFlag string) (*db.GroupTargetSet, error) {
+	var groupIDPtr *string
+	if groupFlag != "" {
+		groupIDPtr = &groupFlag
+	}
+	set, err := repo.GetByGroupIDAndName(groupIDPtr, name)
+	if err != nil {
+		return nil, fmt.Errorf("get target set: %w", err)
+	}
+	if set == nil {
+		if groupFlag != "" {
+			return nil, fmt.Errorf("target set not found: name=%s group=%s", name, groupFlag)
+		}
+		return nil, fmt.Errorf("target set not found: %s (use --group to specify group)", name)
+	}
+	return set, nil
+}
+
 // targetsetCmd 代表 targetset 命令
 var targetsetCmd = &cobra.Command{
 	Use:   "targetset",
@@ -152,14 +173,12 @@ var targetsetDeleteCmd = &cobra.Command{
 		defer closeGormDB(logger, gormDB)
 
 		name := args[0]
+		groupFlag, _ := cmd.Flags().GetString("group")
 		repo := db.NewGroupTargetSetRepo(gormDB, logger)
 
-		set, err := repo.GetByName(name)
+		set, err := resolveTargetSet(repo, name, groupFlag)
 		if err != nil {
-			return fmt.Errorf("get target set: %w", err)
-		}
-		if set == nil {
-			return fmt.Errorf("target set not found: %s", name)
+			return err
 		}
 
 		if err := repo.Delete(set.ID); err != nil {
@@ -196,13 +215,11 @@ var targetsetAddTargetCmd = &cobra.Command{
 			return errors.New("--url is required")
 		}
 
+		groupFlag, _ := cmd.Flags().GetString("group")
 		repo := db.NewGroupTargetSetRepo(gormDB, logger)
-		set, err := repo.GetByName(setName)
+		set, err := resolveTargetSet(repo, setName, groupFlag)
 		if err != nil {
-			return fmt.Errorf("get target set: %w", err)
-		}
-		if set == nil {
-			return fmt.Errorf("target set not found: %s", setName)
+			return err
 		}
 
 		// 解析 URL → target ID
@@ -264,13 +281,11 @@ var targetsetRemoveTargetCmd = &cobra.Command{
 			return errors.New("--url is required")
 		}
 
+		groupFlag, _ := cmd.Flags().GetString("group")
 		repo := db.NewGroupTargetSetRepo(gormDB, logger)
-		set, err := repo.GetByName(setName)
+		set, err := resolveTargetSet(repo, setName, groupFlag)
 		if err != nil {
-			return fmt.Errorf("get target set: %w", err)
-		}
-		if set == nil {
-			return fmt.Errorf("target set not found: %s", setName)
+			return err
 		}
 
 		// 解析 URL → target ID
@@ -319,13 +334,11 @@ var targetsetSetWeightCmd = &cobra.Command{
 			return errors.New("--url is required")
 		}
 
+		groupFlag, _ := cmd.Flags().GetString("group")
 		repo := db.NewGroupTargetSetRepo(gormDB, logger)
-		set, err := repo.GetByName(setName)
+		set, err := resolveTargetSet(repo, setName, groupFlag)
 		if err != nil {
-			return fmt.Errorf("get target set: %w", err)
-		}
-		if set == nil {
-			return fmt.Errorf("target set not found: %s", setName)
+			return err
 		}
 
 		// 解析 URL → target ID
@@ -370,14 +383,12 @@ var targetsetShowCmd = &cobra.Command{
 		defer closeGormDB(logger, gormDB)
 
 		name := args[0]
+		groupFlag, _ := cmd.Flags().GetString("group")
 		repo := db.NewGroupTargetSetRepo(gormDB, logger)
 
-		set, err := repo.GetByName(name)
+		set, err := resolveTargetSet(repo, name, groupFlag)
 		if err != nil {
-			return fmt.Errorf("get target set: %w", err)
-		}
-		if set == nil {
-			return fmt.Errorf("target set not found: %s", name)
+			return err
 		}
 
 		members, err := repo.ListMembers(set.ID)
@@ -496,17 +507,23 @@ func init() {
 	targetsetCreateCmd.Flags().BoolP("default", "d", false, "Mark as default target set")
 	_ = targetsetCreateCmd.MarkFlagRequired("name")
 
+	targetsetDeleteCmd.Flags().StringP("group", "g", "", "Group ID (optional, empty = default/global)")
+	targetsetShowCmd.Flags().StringP("group", "g", "", "Group ID (optional, empty = default/global)")
+
 	targetsetAddTargetCmd.Flags().StringP("url", "u", "", "Target URL")
 	targetsetAddTargetCmd.Flags().IntP("weight", "w", 1, "Target weight (default: 1)")
 	targetsetAddTargetCmd.Flags().IntP("priority", "p", 0, "Target priority (default: 0)")
+	targetsetAddTargetCmd.Flags().StringP("group", "g", "", "Group ID (optional, empty = default/global)")
 	_ = targetsetAddTargetCmd.MarkFlagRequired("url")
 
 	targetsetRemoveTargetCmd.Flags().StringP("url", "u", "", "Target URL")
+	targetsetRemoveTargetCmd.Flags().StringP("group", "g", "", "Group ID (optional, empty = default/global)")
 	_ = targetsetRemoveTargetCmd.MarkFlagRequired("url")
 
 	targetsetSetWeightCmd.Flags().StringP("url", "u", "", "Target URL")
 	targetsetSetWeightCmd.Flags().IntP("weight", "w", 1, "Target weight")
 	targetsetSetWeightCmd.Flags().IntP("priority", "p", 0, "Target priority")
+	targetsetSetWeightCmd.Flags().StringP("group", "g", "", "Group ID (optional, empty = default/global)")
 	_ = targetsetSetWeightCmd.MarkFlagRequired("url")
 
 	// alert 子命令

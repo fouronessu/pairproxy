@@ -17,13 +17,13 @@ type Group struct {
 // User 系统用户
 type User struct {
 	ID           string     `gorm:"primarykey"`
-	Username     string     `gorm:"uniqueIndex;not null"`
+	Username     string     `gorm:"not null;uniqueIndex:idx_user_authprovider_username"` // 与 AuthProvider 组合唯一，支持混合认证
 	PasswordHash string     `gorm:"not null"`
 	GroupID      *string    `gorm:"index"` // NULL 表示未分配分组
 	Group        Group      `gorm:"foreignKey:GroupID"`
 	IsActive     bool       `gorm:"default:true"`
-	AuthProvider string     `gorm:"default:'local';uniqueIndex:idx_user_authprovider_externalid"` // "local" | "ldap"；与 ExternalID 组合唯一
-	ExternalID   string     `gorm:"index;uniqueIndex:idx_user_authprovider_externalid"`            // 外部系统唯一 ID（LDAP: uid）
+	AuthProvider string     `gorm:"default:'local';uniqueIndex:idx_user_authprovider_username;uniqueIndex:idx_user_authprovider_externalid"` // "local" | "ldap"；与 Username 和 ExternalID 各自组合唯一
+	ExternalID   string     `gorm:"index;uniqueIndex:idx_user_authprovider_externalid"`            // 外部系统唯一 ID（LDAP: uid）；与 AuthProvider 组合唯一
 	CreatedAt    time.Time
 	LastLoginAt  *time.Time
 }
@@ -99,9 +99,11 @@ type AuditLog struct {
 // 优先级：用户级绑定 > 分组级绑定 > 负载均衡。
 type LLMBinding struct {
 	ID       string  `gorm:"primarykey"`
-	TargetID string  `gorm:"not null;index"` // LLM target UUID（与 llm_targets.id 匹配）
-	UserID   *string `gorm:"index"`          // 用户级绑定（优先，与 GroupID 互斥使用）
-	GroupID  *string `gorm:"index"`          // 分组级绑定（兜底）
+	TargetID string  `gorm:"not null;index"`          // LLM target UUID（与 llm_targets.id 匹配）
+	UserID   *string `gorm:"index:idx_llmb_user;uniqueIndex:idx_llmb_user_target"`   // 用户级绑定（优先）；同一 user 只能绑定一个 target
+	GroupID  *string `gorm:"index:idx_llmb_group;uniqueIndex:idx_llmb_group_target"` // 分组级绑定（兜底）；同一 group 只能绑定一个 target
+	// UNIQUE(user_id, target_id) 和 UNIQUE(group_id, target_id) 由复合索引强制：
+	// 因 NULL 的 UNIQUE 特殊性（NULL != NULL），同时依赖应用层 Set() 的 delete-then-insert 保证
 	// TargetURL 仅用于展示（通过 JOIN 填充，不存储于此列）
 	TargetURL string `gorm:"-"`
 	CreatedAt time.Time

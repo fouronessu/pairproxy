@@ -48,7 +48,8 @@ func (r *UserRepo) Create(u *User) error {
 	return nil
 }
 
-// GetByUsername 按用户名查询（含关联 Group）
+// GetByUsername ⚠️ 已弃用：混合认证模式下 username 不再全局唯一。改用 GetByUsernameAndProvider。
+// 此方法仅供 backward compatibility 保留。
 func (r *UserRepo) GetByUsername(username string) (*User, error) {
 	var u User
 	err := r.db.Preload("Group").Where("username = ?", username).First(&u).Error
@@ -62,6 +63,31 @@ func (r *UserRepo) GetByUsername(username string) (*User, error) {
 			zap.Error(err),
 		)
 		return nil, fmt.Errorf("get user %q: %w", username, err)
+	}
+	return &u, nil
+}
+
+// GetByUsernameAndProvider 按用户名和认证提供商查询（复合唯一约束）。
+// 在混合认证模式下（local + ldap），同一 username 可能对应不同 provider 的用户。
+func (r *UserRepo) GetByUsernameAndProvider(username, provider string) (*User, error) {
+	var u User
+	err := r.db.Preload("Group").
+		Where("username = ? AND auth_provider = ?", username, provider).
+		First(&u).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			r.logger.Debug("user not found by username and provider",
+				zap.String("username", username),
+				zap.String("provider", provider),
+			)
+			return nil, nil
+		}
+		r.logger.Error("failed to get user by username and provider",
+			zap.String("username", username),
+			zap.String("provider", provider),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("get user %q (provider=%q): %w", username, provider, err)
 	}
 	return &u, nil
 }

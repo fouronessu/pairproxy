@@ -119,7 +119,9 @@ func (r *LLMTargetRepo) ListAll() ([]*LLMTarget, error) {
 	return targets, nil
 }
 
-// URLExists 检查 URL 是否已存在
+// URLExists 检查 URL 是否已存在（忽视 api_key_id）。
+// ⚠️ 注意：同一 URL 可以有多个不同 api_key_id 的 target（Issue #6）。
+// 如果需要检查 (url, api_key_id) 的唯一性，应使用 ComboExists。
 func (r *LLMTargetRepo) URLExists(url string) (bool, error) {
 	var count int64
 	if err := r.db.Model(&LLMTarget{}).Where("url = ?", url).Count(&count).Error; err != nil {
@@ -127,6 +129,27 @@ func (r *LLMTargetRepo) URLExists(url string) (bool, error) {
 			zap.String("url", url),
 			zap.Error(err))
 		return false, fmt.Errorf("check url exists: %w", err)
+	}
+	return count > 0, nil
+}
+
+// ComboExists 检查 (url, api_key_id) 复合键是否已存在。
+// api_key_id 为 nil 时匹配无 API Key 的记录（IS NULL）。
+// 用于创建新 target 前的重复检查，正确支持同 URL 多 Key 场景。
+func (r *LLMTargetRepo) ComboExists(url string, apiKeyID *string) (bool, error) {
+	var count int64
+	query := r.db.Model(&LLMTarget{}).Where("url = ?", url)
+	if apiKeyID == nil {
+		query = query.Where("api_key_id IS NULL")
+	} else {
+		query = query.Where("api_key_id = ?", *apiKeyID)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		r.logger.Error("failed to check (url, api_key_id) combo exists",
+			zap.String("url", url),
+			zap.Any("api_key_id", apiKeyID),
+			zap.Error(err))
+		return false, fmt.Errorf("check combo exists: %w", err)
 	}
 	return count > 0, nil
 }
