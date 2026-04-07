@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -82,6 +83,29 @@ func (r *GroupTargetSetRepo) GetByName(name string) (*GroupTargetSet, error) {
 	return &set, nil
 }
 
+// GetByGroupIDAndName 根据 group ID 和 name 获取 target set（复合唯一约束）
+func (r *GroupTargetSetRepo) GetByGroupIDAndName(groupID *string, name string) (*GroupTargetSet, error) {
+	var set GroupTargetSet
+	query := r.db
+	if groupID == nil {
+		query = query.Where("group_id IS NULL AND name = ?", name)
+	} else {
+		query = query.Where("group_id = ? AND name = ?", *groupID, name)
+	}
+	if err := query.First(&set).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		r.logger.Error("failed to get target set by group ID and name",
+			zap.Any("group_id", groupID),
+			zap.String("name", name),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("get target set by group ID and name: %w", err)
+	}
+	return &set, nil
+}
+
 // GetByGroupID 根据 group ID 获取 target set
 func (r *GroupTargetSetRepo) GetByGroupID(groupID string) (*GroupTargetSet, error) {
 	var set GroupTargetSet
@@ -156,12 +180,36 @@ func (r *GroupTargetSetRepo) ListAll() ([]GroupTargetSet, error) {
 }
 
 // AddMember 添加 member 到 target set
+func (r *GroupTargetSetRepo) GetMember(setID, targetID string) (*GroupTargetSetMember, error) {
+	var member GroupTargetSetMember
+	if err := r.db.Where("target_set_id = ? AND target_id = ?", setID, targetID).First(&member).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		r.logger.Error("failed to get target set member",
+			zap.String("set_id", setID),
+			zap.String("target_id", targetID),
+			zap.Error(err))
+		return nil, fmt.Errorf("get target set member: %w", err)
+	}
+	return &member, nil
+}
+
 func (r *GroupTargetSetRepo) AddMember(setID string, member *GroupTargetSetMember) error {
 	if setID == "" {
 		return fmt.Errorf("target set ID cannot be empty")
 	}
 	if member.TargetID == "" {
 		return fmt.Errorf("target ID cannot be empty")
+	}
+
+	// 检查是否已存在（复合唯一约束：target_set_id + target_id）
+	existing, err := r.GetMember(setID, member.TargetID)
+	if err != nil {
+		return fmt.Errorf("check duplicate member: %w", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("target already in set: set_id=%s, target_id=%s", setID, member.TargetID)
 	}
 
 	member.TargetSetID = setID

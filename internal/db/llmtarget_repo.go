@@ -39,7 +39,10 @@ func (r *LLMTargetRepo) Create(target *LLMTarget) error {
 	return nil
 }
 
-// GetByURL 根据 URL 查询 LLM target（返回第一条匹配记录）
+// GetByURL 根据 URL 查询 LLM target（返回第一条匹配记录）。
+// ⚠️ 已弃用：当 (url, api_key_id) 有复合唯一约束时，仅 URL 查询会产生歧义。
+// 改用 ListByURL() 获取所有匹配记录，调用方处理歧义（len > 1 时返回错误）。
+// 此方法仅供 backward compatibility 和测试保留。
 func (r *LLMTargetRepo) GetByURL(url string) (*LLMTarget, error) {
 	var target LLMTarget
 	if err := r.db.Where("url = ?", url).First(&target).Error; err != nil {

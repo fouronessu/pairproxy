@@ -133,6 +133,7 @@ func (r *UserRepo) UpdatePassword(id string, hash string) error {
 // 未找到时返回 nil, nil。
 func (r *UserRepo) GetByExternalID(provider, externalID string) (*User, error) {
 	var u User
+	// 查询复合唯一约束 (auth_provider, external_id)
 	err := r.db.Preload("Group").
 		Where("auth_provider = ? AND external_id = ?", provider, externalID).
 		First(&u).Error

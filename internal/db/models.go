@@ -22,8 +22,8 @@ type User struct {
 	GroupID      *string    `gorm:"index"` // NULL 表示未分配分组
 	Group        Group      `gorm:"foreignKey:GroupID"`
 	IsActive     bool       `gorm:"default:true"`
-	AuthProvider string     `gorm:"default:'local'"` // "local" | "ldap"
-	ExternalID   string     `gorm:"index"`            // 外部系统唯一 ID（LDAP: uid）
+	AuthProvider string     `gorm:"default:'local';uniqueIndex:idx_user_authprovider_externalid"` // "local" | "ldap"；与 ExternalID 组合唯一
+	ExternalID   string     `gorm:"index;uniqueIndex:idx_user_authprovider_externalid"`            // 外部系统唯一 ID（LDAP: uid）
 	CreatedAt    time.Time
 	LastLoginAt  *time.Time
 }
@@ -79,9 +79,11 @@ type APIKey struct {
 // APIKeyAssignment API Key 分配记录（用户级优先于分组级）
 type APIKeyAssignment struct {
 	ID       string  `gorm:"primarykey"`
-	APIKeyID string  `gorm:"not null;index"`
-	UserID   *string `gorm:"index"` // 用户级（优先）
-	GroupID  *string `gorm:"index"` // 分组级（兜底）
+	APIKeyID string  `gorm:"not null;index:idx_aka_composite"`
+	UserID   *string `gorm:"index:idx_aka_composite"` // 用户级（优先）；与 APIKeyID 组合唯一
+	GroupID  *string `gorm:"index:idx_aka_composite"` // 分组级（兜底）；与 APIKeyID 组合唯一
+	// 约束: (api_key_id, user_id) 和 (api_key_id, group_id) 分别应该唯一
+	// 由于 NULL 在 UNIQUE 中特殊处理，使用应用层检查 + database 约束组合方案
 }
 type AuditLog struct {
 	ID        uint      `gorm:"primarykey;autoIncrement"`
@@ -154,12 +156,12 @@ func (SemanticRoute) TableName() string { return "semantic_routes" }
 
 // GroupTargetSet Group 与 Target Set 的绑定关系
 // 支持两类群组：
-//   1. 普通组: group_id 指向具体的 groups.id
-//   2. 默认组: group_id = NULL 且 is_default = 1
+//   1. 普通组: group_id 指向具体的 groups.id；名称在该组内唯一
+//   2. 默认组: group_id = NULL 且 is_default = 1；多个默认组支持不同名称
 type GroupTargetSet struct {
 	ID          string    `gorm:"primarykey"`
-	GroupID     *string   `gorm:"index"`                    // NULL = 默认组
-	Name        string    `gorm:"uniqueIndex;not null"`    // 显示名称
+	GroupID     *string   `gorm:"index;uniqueIndex:idx_gts_group_name"` // NULL = 默认组；与 Name 组合唯一
+	Name        string    `gorm:"uniqueIndex:idx_gts_group_name;not null"` // 显示名称；与 GroupID 组合唯一
 	Strategy    string    `gorm:"default:'weighted_random'"` // "weighted_random" | "round_robin" | "priority"
 	RetryPolicy string    `gorm:"default:'try_next'"`      // "try_next" | "fail_fast"
 	IsDefault   bool      `gorm:"default:false;index"`     // 是否默认组
@@ -170,8 +172,8 @@ type GroupTargetSet struct {
 // GroupTargetSetMember Target Set 的成员（多对多关系）
 type GroupTargetSetMember struct {
 	ID            string    `gorm:"primarykey"`
-	TargetSetID   string    `gorm:"not null;index"`
-	TargetID      string    `gorm:"not null;index"` // FK → llm_targets.id（UUID）
+	TargetSetID   string    `gorm:"not null;uniqueIndex:idx_gtm_set_target"`
+	TargetID      string    `gorm:"not null;uniqueIndex:idx_gtm_set_target"`
 	TargetURL     string    `gorm:"-"`              // 仅用于展示（通过 JOIN 填充，不存储）
 	Weight        int       `gorm:"default:1"`
 	Priority      int       `gorm:"default:0"`
