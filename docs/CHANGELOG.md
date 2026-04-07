@@ -1,5 +1,27 @@
 # PairProxy Changelog
 
+## [v2.24.2] - 2026-04-07
+
+### ✨ New Features
+
+#### Reportgen PostgreSQL Support
+- **数据库支持扩展**: reportgen 工具现已支持 SQLite 和 PostgreSQL 两种数据库
+- **灵活的连接方式**:
+  - SQLite: `-db <path>` (原有方式，保持兼容)
+  - PostgreSQL DSN: `-pg-dsn "postgres://user:pass@host:5432/dbname"`
+  - PostgreSQL 独立字段: `-pg-host -pg-port -pg-user -pg-password -pg-dbname -pg-sslmode`
+- **数据库抽象层**: 实现 `Querier` 结构体自动处理 SQL 方言差异
+  - `rebind()`: 自动转换占位符 `?` → `$1, $2, ...` (PostgreSQL)
+  - `sqlDate()`, `sqlHour()`, `sqlDow()`, `sqlYearMonth()` 等辅助函数处理日期/时间函数差异
+  - SQLite 特定优化: WAL 模式启用
+- **完全向后兼容**: 现有 SQLite 工作流无需任何改动
+
+### 📚 Documentation
+- 更新 reportgen README 文档，补充 PostgreSQL 使用示例和参数说明
+- 新增 PostgreSQL 连接配置详解和常见问题排查
+
+---
+
 ## [v2.24.1] - 2026-04-05
 
 ### 🔧 CI/CD
