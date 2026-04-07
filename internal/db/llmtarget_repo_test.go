@@ -418,8 +418,11 @@ func TestLLMTargetRepo_DeleteConfigTargetsNotInList(t *testing.T) {
 	}
 
 	// Keep only config1 and config2, delete config3
-	keepURLs := []string{"http://config1.local", "http://config2.local"}
-	deleted, err := repo.DeleteConfigTargetsNotInList(keepURLs)
+	keepKeys := []ConfigTargetKey{
+		{URL: "http://config1.local"},
+		{URL: "http://config2.local"},
+	}
+	deleted, err := repo.DeleteConfigTargetsNotInList(keepKeys)
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted) // Only config3 should be deleted
 
@@ -458,7 +461,7 @@ func TestLLMTargetRepo_DeleteConfigTargetsNotInList_EmptyList(t *testing.T) {
 	}
 
 	// Empty list - should delete all config-sourced targets
-	deleted, err := repo.DeleteConfigTargetsNotInList([]string{})
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, deleted) // Both config targets deleted
 
@@ -492,7 +495,7 @@ func TestLLMTargetRepo_DeleteConfigTargetsNotInList_NoConfigTargets(t *testing.T
 	require.NoError(t, err)
 
 	// Should delete nothing
-	deleted, err := repo.DeleteConfigTargetsNotInList([]string{})
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, deleted)
 

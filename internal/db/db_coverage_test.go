@@ -499,7 +499,7 @@ func TestLLMTargetRepo_DeleteConfigTargetsNotInList_KeepAll(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(target))
 
-	deleted, err := repo.DeleteConfigTargetsNotInList([]string{"http://keep-all-config-cov.local"})
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{{URL: "http://keep-all-config-cov.local"}})
 	require.NoError(t, err)
 	assert.Equal(t, 0, deleted)
 }
@@ -1374,7 +1374,7 @@ func TestLLMTargetRepo_ErrorPaths_OnClosedDB(t *testing.T) {
 	})
 
 	t.Run("DeleteConfigTargetsNotInList error", func(t *testing.T) {
-		_, err := repo.DeleteConfigTargetsNotInList([]string{})
+		_, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{})
 		assert.Error(t, err)
 	})
 }

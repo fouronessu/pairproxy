@@ -1,0 +1,243 @@
+- generic [ref=e2]:
+  - heading "📊 PairProxy 分析报告" [level=1] [ref=e3]
+  - generic [ref=e4]: 2026-03-28 至 2026-04-04 | 生成于 2026-04-05 23:53:57
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]: "191"
+      - generic [ref=e8]: 总请求
+      - generic [ref=e9]: → 0.0%
+    - generic [ref=e10]:
+      - generic [ref=e11]: 1.3M
+      - generic [ref=e12]: 总 Token
+      - generic [ref=e13]: → 0.0%
+    - generic [ref=e14]:
+      - generic [ref=e15]: $4037.76
+      - generic [ref=e16]: 总费用
+      - generic [ref=e17]: → 0.0%
+    - generic [ref=e18]:
+      - generic [ref=e19]: "6"
+      - generic [ref=e20]: 活跃用户
+      - generic [ref=e21]: → 0.0%
+    - generic [ref=e22]:
+      - generic [ref=e23]: 14.1%
+      - generic [ref=e24]: 错误率
+      - generic [ref=e25]: → 0.0%
+    - generic [ref=e26]:
+      - generic [ref=e27]: 2726ms
+      - generic [ref=e28]: 平均延迟
+      - generic [ref=e29]: → 0.0%
+    - generic [ref=e30]:
+      - generic [ref=e31]: 4890ms
+      - generic [ref=e32]: P95延迟
+      - generic [ref=e33]: → 0.0%
+    - generic [ref=e34]:
+      - generic [ref=e35]: 5214ms
+      - generic [ref=e36]: P99延迟
+      - generic [ref=e37]: → 0.0%
+    - generic [ref=e38]:
+      - generic [ref=e39]: "2"
+      - generic [ref=e40]: 峰值 RPM
+      - generic [ref=e41]: → 0.0%
+  - generic [ref=e42]:
+    - heading "📈 Token 用量趋势" [level=3] [ref=e44]
+    - heading "💰 费用趋势 (USD)" [level=3] [ref=e49]
+  - heading "🤖 模型每日用量趋势（堆叠面积）" [level=3] [ref=e55]
+  - generic [ref=e59]:
+    - heading "📊 每日请求数趋势" [level=3] [ref=e61]
+    - heading "💡 每 Token 费用趋势" [level=3] [ref=e66]
+  - generic [ref=e70]:
+    - heading "📐 I/O 比率每日趋势" [level=3] [ref=e72]
+    - heading "⏱️ 延迟分布直方图" [level=3] [ref=e77]
+  - generic [ref=e81]:
+    - heading "🕐 24h×7天 请求热力图" [level=3] [ref=e83]
+    - heading "🔥 Token 吞吐热力图" [level=3] [ref=e88]
+  - generic [ref=e92]:
+    - heading "🏆 TOP10 用户 Token 用量" [level=3] [ref=e94]
+    - heading "💰 TOP10 用户费用" [level=3] [ref=e99]
+  - generic [ref=e103]:
+    - heading "👥 用户分层分布" [level=3] [ref=e105]
+    - heading "📊 Token 用量百分位数 (P50–P99)" [level=3] [ref=e110]
+  - generic [ref=e114]:
+    - heading "🔢 TOP10 请求人（按请求次数）" [level=3] [ref=e116]
+    - heading "📦 用户请求数分布（箱线统计）" [level=3] [ref=e121]
+  - generic [ref=e125]:
+    - heading "🤖 模型使用分布" [level=3] [ref=e127]
+    - generic [ref=e131]:
+      - heading "📡 Source Node 流量分布" [level=3] [ref=e132]
+      - generic [ref=e134]: "单节点: node-1 (191 请求)"
+  - generic [ref=e135]:
+    - heading "🌐 上游流量占比" [level=3] [ref=e137]
+    - heading "🌐 上游端点状态" [level=3] [ref=e142]
+  - heading "📈 上游延迟趋势（多线）" [level=3] [ref=e148]
+  - generic [ref=e152]:
+    - heading "📊 状态码分布" [level=3] [ref=e154]
+    - heading "⚡ 流式 vs 非流式对比" [level=3] [ref=e159]
+  - generic [ref=e163]:
+    - heading "⚡ 流式 vs 非流式 延迟箱线图" [level=3] [ref=e165]
+    - heading "📊 I/O Token 比率分布" [level=3] [ref=e170]
+  - generic [ref=e174]:
+    - heading "🏢 分组对比" [level=3] [ref=e176]
+    - heading "📦 分组用量箱线图（组内差异）" [level=3] [ref=e181]
+  - generic [ref=e185]:
+    - heading "⏱️ 延迟箱线图（按模型）" [level=3] [ref=e187]
+    - heading "📊 P50/P95/P99 延迟趋势" [level=3] [ref=e192]
+  - generic [ref=e196]:
+    - heading "⏱️ 每日平均/最大延迟趋势" [level=3] [ref=e198]
+    - heading "📥 模型输入 Token 箱线图" [level=3] [ref=e203]
+  - heading "📤 模型输出 Token 箱线图" [level=3] [ref=e209]
+  - heading "🔬 延迟 vs Token 散点图（采样 1000）" [level=3] [ref=e215]
+  - generic [ref=e219]:
+    - heading "👤 用户请求频次分布" [level=3] [ref=e221]
+    - heading "📈 帕累托图（累积贡献%）" [level=3] [ref=e226]
+  - generic [ref=e230]:
+    - heading "📈 模型费用占比" [level=3] [ref=e232]
+    - heading "💧 Input vs Output Token 相关性" [level=3] [ref=e237]
+  - generic [ref=e241]:
+    - heading "📊 DAU/WAU/MAU 趋势" [level=3] [ref=e243]
+    - heading "⏱️ 上游延迟箱线图" [level=3] [ref=e248]
+  - generic [ref=e252]:
+    - heading "🎯 模型能力雷达图" [level=3] [ref=e254]
+    - heading "📊 用户采纳率" [level=3] [ref=e259]
+  - generic [ref=e263]:
+    - heading "🎯 DAU/MAU 粘性指数" [level=3] [ref=e265]
+    - heading "📅 用户留存曲线" [level=3] [ref=e270]
+  - generic [ref=e272]:
+    - heading "🚨 错误请求明细" [level=3] [ref=e273]
+    - generic [ref=e274]:
+      - combobox [ref=e275]:
+        - option "全部状态码" [selected]
+      - combobox [ref=e276]:
+        - option "全部模型" [selected]
+      - combobox [ref=e277]:
+        - option "全部上游" [selected]
+    - table [ref=e279]:
+      - rowgroup [ref=e280]:
+        - row "时间 用户 模型 状态码 延迟(ms) 输入Token 上游 RequestID" [ref=e281]:
+          - columnheader "时间" [ref=e282]
+          - columnheader "用户" [ref=e283]
+          - columnheader "模型" [ref=e284]
+          - columnheader "状态码" [ref=e285]
+          - columnheader "延迟(ms)" [ref=e286]
+          - columnheader "输入Token" [ref=e287]
+          - columnheader "上游" [ref=e288]
+          - columnheader "RequestID" [ref=e289]
+      - rowgroup
+  - generic [ref=e290]:
+    - heading "🐌 慢请求 TOP10" [level=3] [ref=e291]
+    - table [ref=e293]:
+      - rowgroup [ref=e294]:
+        - row "时间 用户 模型 输入Token 输出Token 延迟(ms) 状态码 上游" [ref=e295]:
+          - columnheader "时间" [ref=e296]
+          - columnheader "用户" [ref=e297]
+          - columnheader "模型" [ref=e298]
+          - columnheader "输入Token" [ref=e299]
+          - columnheader "输出Token" [ref=e300]
+          - columnheader "延迟(ms)" [ref=e301]
+          - columnheader "状态码" [ref=e302]
+          - columnheader "上游" [ref=e303]
+      - rowgroup [ref=e304]:
+        - row "2026-04-01 14:54:00 eve claude-opus-4-5 2,192 2,022 5,259 200 https://api.anthropic.com" [ref=e305]:
+          - cell "2026-04-01 14:54:00" [ref=e306]
+          - cell "eve" [ref=e307]
+          - cell "claude-opus-4-5" [ref=e308]
+          - cell "2,192" [ref=e309]
+          - cell "2,022" [ref=e310]
+          - cell "5,259" [ref=e311]
+          - cell "200" [ref=e312]
+          - cell "https://api.anthropic.com" [ref=e313]
+        - row "2026-03-31 19:13:00 carol gpt-4o 4,949 2,078 5,242 200 https://api.anthropic.com" [ref=e314]:
+          - cell "2026-03-31 19:13:00" [ref=e315]
+          - cell "carol" [ref=e316]
+          - cell "gpt-4o" [ref=e317]
+          - cell "4,949" [ref=e318]
+          - cell "2,078" [ref=e319]
+          - cell "5,242" [ref=e320]
+          - cell "200" [ref=e321]
+          - cell "https://api.anthropic.com" [ref=e322]
+        - row "2026-04-02 10:24:00 carol gpt-4o 9,509 1,921 5,214 200 https://api.anthropic.com" [ref=e323]:
+          - cell "2026-04-02 10:24:00" [ref=e324]
+          - cell "carol" [ref=e325]
+          - cell "gpt-4o" [ref=e326]
+          - cell "9,509" [ref=e327]
+          - cell "1,921" [ref=e328]
+          - cell "5,214" [ref=e329]
+          - cell "200" [ref=e330]
+          - cell "https://api.anthropic.com" [ref=e331]
+        - row "2026-04-03 08:20:00 dave claude-sonnet-4-5 8,531 1,328 5,200 200 https://api.openai.com/v1" [ref=e332]:
+          - cell "2026-04-03 08:20:00" [ref=e333]
+          - cell "dave" [ref=e334]
+          - cell "claude-sonnet-4-5" [ref=e335]
+          - cell "8,531" [ref=e336]
+          - cell "1,328" [ref=e337]
+          - cell "5,200" [ref=e338]
+          - cell "200" [ref=e339]
+          - cell "https://api.openai.com/v1" [ref=e340]
+        - row "2026-03-30 20:31:00 alice claude-sonnet-4-5 3,739 1,691 5,196 429 https://api.anthropic.com" [ref=e341]:
+          - cell "2026-03-30 20:31:00" [ref=e342]
+          - cell "alice" [ref=e343]
+          - cell "claude-sonnet-4-5" [ref=e344]
+          - cell "3,739" [ref=e345]
+          - cell "1,691" [ref=e346]
+          - cell "5,196" [ref=e347]
+          - cell "429" [ref=e348]
+          - cell "https://api.anthropic.com" [ref=e349]
+        - row "2026-04-01 08:00:00 alice claude-sonnet-4-5 4,411 2,111 5,187 200 https://api.anthropic.com" [ref=e350]:
+          - cell "2026-04-01 08:00:00" [ref=e351]
+          - cell "alice" [ref=e352]
+          - cell "claude-sonnet-4-5" [ref=e353]
+          - cell "4,411" [ref=e354]
+          - cell "2,111" [ref=e355]
+          - cell "5,187" [ref=e356]
+          - cell "200" [ref=e357]
+          - cell "https://api.anthropic.com" [ref=e358]
+        - row "2026-04-01 17:19:00 carol gpt-4o 8,744 1,383 5,045 200 https://api.anthropic.com" [ref=e359]:
+          - cell "2026-04-01 17:19:00" [ref=e360]
+          - cell "carol" [ref=e361]
+          - cell "gpt-4o" [ref=e362]
+          - cell "8,744" [ref=e363]
+          - cell "1,383" [ref=e364]
+          - cell "5,045" [ref=e365]
+          - cell "200" [ref=e366]
+          - cell "https://api.anthropic.com" [ref=e367]
+        - row "2026-04-02 22:27:00 eve claude-opus-4-5 6,770 1,581 5,035 200 https://api.anthropic.com" [ref=e368]:
+          - cell "2026-04-02 22:27:00" [ref=e369]
+          - cell "eve" [ref=e370]
+          - cell "claude-opus-4-5" [ref=e371]
+          - cell "6,770" [ref=e372]
+          - cell "1,581" [ref=e373]
+          - cell "5,035" [ref=e374]
+          - cell "200" [ref=e375]
+          - cell "https://api.anthropic.com" [ref=e376]
+        - row "2026-04-02 15:51:00 dave claude-sonnet-4-5 6,235 1,249 4,995 200 https://api.openai.com/v1" [ref=e377]:
+          - cell "2026-04-02 15:51:00" [ref=e378]
+          - cell "dave" [ref=e379]
+          - cell "claude-sonnet-4-5" [ref=e380]
+          - cell "6,235" [ref=e381]
+          - cell "1,249" [ref=e382]
+          - cell "4,995" [ref=e383]
+          - cell "200" [ref=e384]
+          - cell "https://api.openai.com/v1" [ref=e385]
+        - row "2026-04-04 13:29:00 bob claude-opus-4-5 9,726 1,351 4,930 200 https://api.openai.com/v1" [ref=e386]:
+          - cell "2026-04-04 13:29:00" [ref=e387]
+          - cell "bob" [ref=e388]
+          - cell "claude-opus-4-5" [ref=e389]
+          - cell "9,726" [ref=e390]
+          - cell "1,351" [ref=e391]
+          - cell "4,930" [ref=e392]
+          - cell "200" [ref=e393]
+          - cell "https://api.openai.com/v1" [ref=e394]
+  - heading "📝 智能洞察" [level=3] [ref=e396]
+  - generic [ref=e397]:
+    - heading "📋 用户配额使用情况" [level=3] [ref=e398]
+    - table [ref=e400]:
+      - rowgroup [ref=e401]:
+        - row "用户 日配额 日已用 日使用率 月配额 月已用 月使用率" [ref=e402]:
+          - columnheader "用户" [ref=e403]
+          - columnheader "日配额" [ref=e404]
+          - columnheader "日已用" [ref=e405]
+          - columnheader "日使用率" [ref=e406]
+          - columnheader "月配额" [ref=e407]
+          - columnheader "月已用" [ref=e408]
+          - columnheader "月使用率" [ref=e409]
+      - rowgroup
+  - generic [ref=e410]: "报告生成时间: 2026-04-05 23:53:57 | 数据周期: 2026-03-28 至 2026-04-04 | PairProxy Report Generator"

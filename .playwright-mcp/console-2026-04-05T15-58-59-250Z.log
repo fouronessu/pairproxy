@@ -1,0 +1,5 @@
+[    7397ms] ReferenceError: c is not defined
+    at initRetentionCurve (http://localhost:8765/test-report.html:1179:3)
+    at init (http://localhost:8765/test-report.html:307:3)
+    at HTMLDocument.<anonymous> (http://localhost:8765/test-report.html:839:3)
+[    7871ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8765/favicon.ico:0

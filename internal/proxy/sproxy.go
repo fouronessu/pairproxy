@@ -274,8 +274,13 @@ func (sp *SProxy) resolveAPIKeyID(apiKey, provider, targetURL string) (*string, 
 	}
 
 	// 不存在，创建新记录（混淆存储）
-	// Name 使用 "Auto-{targetURL}" 保证 uniqueIndex 不冲突
-	autoName := fmt.Sprintf("Auto-%s", targetURL)
+	// Name 使用 "Auto-{provider}-{obfuscated_suffix}" 保证 uniqueIndex 不冲突。
+	// 取混淆后 key 的后 8 位作为区分后缀（同一 URL 不同 key 可共存）。
+	suffix := obfuscated
+	if len(suffix) > 8 {
+		suffix = suffix[len(suffix)-8:]
+	}
+	autoName := fmt.Sprintf("Auto-%s-%s", provider, suffix)
 	newKey := &db.APIKey{
 		ID:             uuid.NewString(),
 		Name:           autoName,
@@ -307,7 +312,7 @@ func (sp *SProxy) syncConfigTargetsToDatabase(repo *db.LLMTargetRepo) error {
 		zap.Int("count", len(configTargets)))
 
 	// 2. 同步到数据库
-	configURLs := make([]string, 0, len(configTargets))
+	keepKeys := make([]db.ConfigTargetKey, 0, len(configTargets))
 	for _, ct := range configTargets {
 		// 解析 API Key ID
 		apiKeyID, err := sp.resolveAPIKeyID(ct.APIKey, ct.Provider, ct.URL)
@@ -346,13 +351,14 @@ func (sp *SProxy) syncConfigTargetsToDatabase(repo *db.LLMTargetRepo) error {
 			continue
 		}
 
-		configURLs = append(configURLs, ct.URL)
+		keepKeys = append(keepKeys, db.ConfigTargetKey{URL: ct.URL, APIKeyID: apiKeyID})
 		logger.Debug("config target synced",
 			zap.String("url", ct.URL))
 	}
 
 	// 3. 清理：删除数据库中 source='config' 但不在配置文件中的记录
-	deleted, err := repo.DeleteConfigTargetsNotInList(configURLs)
+	// 使用 (url, api_key_id) 复合键精确匹配，支持同 URL 多 Key 场景
+	deleted, err := repo.DeleteConfigTargetsNotInList(keepKeys)
 	if err != nil {
 		logger.Error("failed to clean up config targets", zap.Error(err))
 	} else if deleted > 0 {
@@ -360,7 +366,7 @@ func (sp *SProxy) syncConfigTargetsToDatabase(repo *db.LLMTargetRepo) error {
 	}
 
 	logger.Info("config targets sync completed",
-		zap.Int("synced", len(configURLs)),
+		zap.Int("synced", len(keepKeys)),
 		zap.Int("deleted", deleted))
 
 	return nil

@@ -39,7 +39,7 @@ func (r *LLMTargetRepo) Create(target *LLMTarget) error {
 	return nil
 }
 
-// GetByURL 根据 URL 查询 LLM target
+// GetByURL 根据 URL 查询 LLM target（返回第一条匹配记录）
 func (r *LLMTargetRepo) GetByURL(url string) (*LLMTarget, error) {
 	var target LLMTarget
 	if err := r.db.Where("url = ?", url).First(&target).Error; err != nil {
@@ -50,6 +50,28 @@ func (r *LLMTargetRepo) GetByURL(url string) (*LLMTarget, error) {
 			zap.String("url", url),
 			zap.Error(err))
 		return nil, fmt.Errorf("get llm target by url: %w", err)
+	}
+	return &target, nil
+}
+
+// GetByURLAndAPIKeyID 根据 (url, api_key_id) 复合键查询 LLM target。
+// apiKeyID 为 nil 时匹配 api_key_id IS NULL 的记录。
+func (r *LLMTargetRepo) GetByURLAndAPIKeyID(url string, apiKeyID *string) (*LLMTarget, error) {
+	var target LLMTarget
+	q := r.db.Where("url = ?", url)
+	if apiKeyID == nil {
+		q = q.Where("api_key_id IS NULL")
+	} else {
+		q = q.Where("api_key_id = ?", *apiKeyID)
+	}
+	if err := q.First(&target).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, err
+		}
+		r.logger.Error("failed to get llm target by url and api_key_id",
+			zap.String("url", url),
+			zap.Error(err))
+		return nil, fmt.Errorf("get llm target by url and api_key_id: %w", err)
 	}
 	return &target, nil
 }
@@ -164,10 +186,12 @@ func (r *LLMTargetRepo) Delete(id string) error {
 	return nil
 }
 
-// Upsert 插入或更新 LLM target（用于配置文件同步）
+// Upsert 插入或更新 LLM target（用于配置文件同步）。
+// 按 (url, api_key_id) 复合键查重，相同组合 → 更新，不同组合 → 新增。
+// 这允许同一 URL 绑定多个不同的 API Key。
 func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
-	// 检查是否存在
-	existing, err := r.GetByURL(target.URL)
+	// 按 (url, api_key_id) 查重
+	existing, err := r.GetByURLAndAPIKeyID(target.URL, target.APIKeyID)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
@@ -228,29 +252,63 @@ func (r *LLMTargetRepo) Upsert(target *LLMTarget) error {
 	return nil
 }
 
-// DeleteConfigTargetsNotInList 删除不在列表中的配置文件来源的 targets
-// 用于配置文件同步时清理已移除的 targets
-func (r *LLMTargetRepo) DeleteConfigTargetsNotInList(keepURLs []string) (int, error) {
-	query := r.db.Where("source = ?", "config")
+// ConfigTargetKey 标识一条配置来源的 target，用于 cleanup 时精确匹配。
+type ConfigTargetKey struct {
+	URL      string
+	APIKeyID *string // nil 表示无 API Key
+}
 
-	// 如果 keepURLs 不为空，添加 NOT IN 条件
-	if len(keepURLs) > 0 {
-		query = query.Where("url NOT IN ?", keepURLs)
+// DeleteConfigTargetsNotInList 删除不在列表中的配置文件来源的 targets。
+// 按 (url, api_key_id) 复合键匹配，精确删除已从配置文件移除的条目。
+// 支持同一 URL 有多个不同 API Key 的场景。
+func (r *LLMTargetRepo) DeleteConfigTargetsNotInList(keepKeys []ConfigTargetKey) (int, error) {
+	// 查出所有 source='config' 的 targets
+	var configTargets []*LLMTarget
+	if err := r.db.Where("source = ?", "config").Find(&configTargets).Error; err != nil {
+		return 0, fmt.Errorf("list config targets: %w", err)
 	}
 
-	result := query.Delete(&LLMTarget{})
-	if result.Error != nil {
-		r.logger.Error("failed to delete config targets not in list",
-			zap.Int("keep_count", len(keepURLs)),
-			zap.Error(result.Error))
-		return 0, fmt.Errorf("delete config targets not in list: %w", result.Error)
+	// 构建保留集合
+	type key struct {
+		url      string
+		apiKeyID string // 空字符串表示 nil
+	}
+	keepSet := make(map[key]struct{}, len(keepKeys))
+	for _, k := range keepKeys {
+		apiKeyStr := ""
+		if k.APIKeyID != nil {
+			apiKeyStr = *k.APIKeyID
+		}
+		keepSet[key{url: k.URL, apiKeyID: apiKeyStr}] = struct{}{}
 	}
 
-	deleted := int(result.RowsAffected)
+	// 删除不在保留集合中的
+	deleted := 0
+	for _, t := range configTargets {
+		apiKeyStr := ""
+		if t.APIKeyID != nil {
+			apiKeyStr = *t.APIKeyID
+		}
+		if _, keep := keepSet[key{url: t.URL, apiKeyID: apiKeyStr}]; keep {
+			continue
+		}
+		if err := r.db.Delete(&LLMTarget{}, "id = ?", t.ID).Error; err != nil {
+			r.logger.Error("failed to delete stale config target",
+				zap.String("id", t.ID),
+				zap.String("url", t.URL),
+				zap.Error(err))
+			continue
+		}
+		deleted++
+		r.logger.Debug("deleted stale config target",
+			zap.String("id", t.ID),
+			zap.String("url", t.URL))
+	}
+
 	if deleted > 0 {
 		r.logger.Info("deleted config targets not in list",
 			zap.Int("deleted", deleted),
-			zap.Int("kept", len(keepURLs)))
+			zap.Int("kept", len(keepKeys)))
 	}
 
 	return deleted, nil
