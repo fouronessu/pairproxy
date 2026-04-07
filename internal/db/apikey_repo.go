@@ -101,9 +101,20 @@ func (r *APIKeyRepo) Assign(keyID string, userID, groupID *string) error {
 		} else {
 			q = q.Where("group_id IS NULL")
 		}
-		if err := q.Delete(&APIKeyAssignment{}).Error; err != nil {
-			r.logger.Error("assign: failed to remove old assignment", zap.Error(err))
-			return fmt.Errorf("remove old assignment: %w", err)
+		deleteResult := q.Delete(&APIKeyAssignment{})
+		if deleteResult.Error != nil {
+			r.logger.Error("assign: failed to remove old assignment",
+				zap.String("key_id", keyID),
+				zap.Error(deleteResult.Error))
+			return fmt.Errorf("remove old assignment: %w", deleteResult.Error)
+		}
+
+		// 记录删除的旧分配数
+		if deleteResult.RowsAffected > 0 {
+			r.logger.Debug("old api key assignments removed",
+				zap.String("key_id", keyID),
+				zap.Int64("removed_count", deleteResult.RowsAffected),
+			)
 		}
 
 		assign := &APIKeyAssignment{
@@ -115,6 +126,8 @@ func (r *APIKeyRepo) Assign(keyID string, userID, groupID *string) error {
 		if err := tx.Create(assign).Error; err != nil {
 			r.logger.Error("failed to assign api key",
 				zap.String("key_id", keyID),
+				zap.Any("user_id", userID),
+				zap.Any("group_id", groupID),
 				zap.Error(err),
 			)
 			return fmt.Errorf("assign api key: %w", err)

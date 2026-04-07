@@ -457,3 +457,192 @@ func TestGroupTargetSetRepo_UpdateTargetHealth(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "healthy", members[0].HealthStatus)
 }
+
+// TestGroupTargetSetRepo_GetByName_AmbiguousWithDifferentGroups 测试 GetByName 的歧义问题
+// Name 与 GroupID 组成复合唯一约束，GetByName 只按 Name 查询会导致多个结果
+func TestGroupTargetSetRepo_GetByName_AmbiguousWithDifferentGroups(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	// 创建两个不同 GroupID 但相同 Name 的 target set
+	groupID1 := uuid.New().String()
+	groupID2 := uuid.New().String()
+
+	set1 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "shared-name",
+		GroupID:  &groupID1,
+		Strategy: "weighted_random",
+	}
+	set2 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "shared-name",
+		GroupID:  &groupID2,
+		Strategy: "weighted_random",
+	}
+
+	require.NoError(t, repo.Create(set1))
+	require.NoError(t, repo.Create(set2))
+
+	// GetByName 应该返回多个结果，但当前实现只返回第一个
+	// 这表现为与 User.ListByUsername() 相同的歧义问题
+	retrieved, err := repo.GetByName("shared-name")
+	require.NoError(t, err)
+
+	// 当前实现返回第一个结果，应该改为检测歧义或改用 GetByGroupIDAndName
+	assert.NotNil(t, retrieved)
+	// 实际上，这暴露了设计缺陷：GetByName 不应该在存在复合约束时使用
+}
+
+// TestGroupTargetSetRepo_GetByGroupID_AmbiguousMultipleSets 测试 GetByGroupID 的歧义问题
+// 一个 GroupID 可能关联多个 target set（Name 不同），GetByGroupID 只返回 LIMIT 1
+func TestGroupTargetSetRepo_GetByGroupID_AmbiguousMultipleSets(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	groupID := uuid.New().String()
+
+	// 创建两个不同 Name 但相同 GroupID 的 target set
+	set1 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "set-1",
+		GroupID:  &groupID,
+		Strategy: "weighted_random",
+	}
+	set2 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "set-2",
+		GroupID:  &groupID,
+		Strategy: "weighted_random",
+	}
+
+	require.NoError(t, repo.Create(set1))
+	require.NoError(t, repo.Create(set2))
+
+	// GetByGroupID 只返回第一个，隐藏了实际有多个的事实
+	retrieved, err := repo.GetByGroupID(groupID)
+	require.NoError(t, err)
+	assert.NotNil(t, retrieved)
+
+	// 应该使用列表方法或明确哪个 Name 的 set
+}
+
+// TestGroupTargetSetRepo_GetByGroupIDAndName_UniqueComposite 测试复合约束正确查询
+// GetByGroupIDAndName 正确利用复合唯一约束，应该返回唯一结果
+func TestGroupTargetSetRepo_GetByGroupIDAndName_UniqueComposite(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	groupID := uuid.New().String()
+
+	// 创建两个不同 Name 但相同 GroupID 的 target set
+	set1 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "set-1",
+		GroupID:  &groupID,
+		Strategy: "weighted_random",
+	}
+	set2 := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "set-2",
+		GroupID:  &groupID,
+		Strategy: "weighted_random",
+	}
+
+	require.NoError(t, repo.Create(set1))
+	require.NoError(t, repo.Create(set2))
+
+	// GetByGroupIDAndName 应该唯一地返回 set1
+	retrieved, err := repo.GetByGroupIDAndName(&groupID, "set-1")
+	require.NoError(t, err)
+	assert.NotNil(t, retrieved)
+	assert.Equal(t, set1.ID, retrieved.ID)
+
+	// 验证可以唯一地检索 set2
+	retrieved2, err := repo.GetByGroupIDAndName(&groupID, "set-2")
+	require.NoError(t, err)
+	assert.NotNil(t, retrieved2)
+	assert.Equal(t, set2.ID, retrieved2.ID)
+}
+
+// TestGroupTargetSetRepo_AddMember_DuplicateRejected 测试 AddMember 的复合唯一约束强制
+// (target_set_id, target_id) 组合必须唯一
+func TestGroupTargetSetRepo_AddMember_DuplicateRejected(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	set := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "test-set",
+		Strategy: "weighted_random",
+	}
+	require.NoError(t, repo.Create(set))
+
+	targetID := "test-target-uuid"
+	member1 := &GroupTargetSetMember{
+		ID:        uuid.New().String(),
+		TargetID:  targetID,
+		Weight:    1,
+		IsActive:  true,
+	}
+
+	// 第一次添加应成功
+	err := repo.AddMember(set.ID, member1)
+	require.NoError(t, err)
+
+	// 第二次添加相同 (set_id, target_id) 应失败
+	member2 := &GroupTargetSetMember{
+		ID:        uuid.New().String(),
+		TargetID:  targetID,
+		Weight:    2,
+		IsActive:  true,
+	}
+	err = repo.AddMember(set.ID, member2)
+	assert.Error(t, err, "AddMember 应拒绝重复的 (target_set_id, target_id) 组合")
+}
+
+// TestGroupTargetSetRepo_AddMember_TransactionalCheck 测试 AddMember 的事务性检查
+// 确保检查和插入在同一事务中执行，避免 TOCTOU 问题
+func TestGroupTargetSetRepo_AddMember_TransactionalCheck(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	set := &GroupTargetSet{
+		ID:       uuid.New().String(),
+		Name:     "test-set",
+		Strategy: "weighted_random",
+	}
+	require.NoError(t, repo.Create(set))
+
+	targetID := "test-target-uuid"
+	member := &GroupTargetSetMember{
+		ID:        uuid.New().String(),
+		TargetID:  targetID,
+		Weight:    1,
+		IsActive:  true,
+	}
+
+	// 第一次添加成功
+	err := repo.AddMember(set.ID, member)
+	require.NoError(t, err)
+
+	// 验证成功添加
+	members, err := repo.ListMembers(set.ID)
+	require.NoError(t, err)
+	assert.Len(t, members, 1)
+
+	// 尝试再次添加相同成员（应在事务中被检查）
+	member2 := &GroupTargetSetMember{
+		ID:        uuid.New().String(),
+		TargetID:  targetID,
+		Weight:    2,
+		IsActive:  true,
+	}
+	err = repo.AddMember(set.ID, member2)
+	require.Error(t, err, "应拒绝添加")
+
+	// 验证仍然只有一条记录（没有部分成功）
+	members, err = repo.ListMembers(set.ID)
+	require.NoError(t, err)
+	assert.Len(t, members, 1, "事务应确保要么全部成功，要么全部失败")
+}

@@ -263,3 +263,146 @@ func TestUser_AuthProviderExternalIDComposite(t *testing.T) {
 	}).Error
 	assert.NoError(t, err, "same external_id with different provider must be allowed")
 }
+
+// ---------------------------------------------------------------------------
+// Fix 6: UserRepo.Create() 返回语义化错误（非原始 GORM 错误）
+// ---------------------------------------------------------------------------
+
+// TestUserRepo_Create_DuplicateReturnsSemanticError 验证 userRepo.Create() 在唯一约束冲突时
+// 返回包含 "user already exists" 的错误，而非原始数据库错误字符串。
+func TestUserRepo_Create_DuplicateReturnsSemanticError(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewUserRepo(gormDB, logger)
+
+	// 第一次创建成功
+	require.NoError(t, repo.Create(&User{
+		Username: "alice", PasswordHash: "h1", AuthProvider: "local",
+	}))
+
+	// 第二次相同 (username, auth_provider) → 应返回含 "user already exists" 的错误
+	err = repo.Create(&User{
+		Username: "alice", PasswordHash: "h2", AuthProvider: "local",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "user already exists",
+		"Create() 应返回语义化错误而非原始 GORM 错误")
+	// 确保不是泄露原始 DB 错误
+	assert.NotContains(t, err.Error(), "UNIQUE constraint failed",
+		"不应暴露原始数据库错误细节给调用方")
+}
+
+// TestUserRepo_ListByUsername_MultipleProviders 验证 ListByUsername 在混合认证下返回所有匹配用户。
+func TestUserRepo_ListByUsername_MultipleProviders(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewUserRepo(gormDB, logger)
+
+	extID := "ldap-alice-uid"
+	require.NoError(t, repo.Create(&User{Username: "alice", PasswordHash: "h1", AuthProvider: "local"}))
+	require.NoError(t, repo.Create(&User{Username: "alice", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID}))
+	require.NoError(t, repo.Create(&User{Username: "bob", PasswordHash: "h3", AuthProvider: "local"}))
+
+	// alice 存在于两个 provider → 返回 2 个
+	users, err := repo.ListByUsername("alice")
+	require.NoError(t, err)
+	assert.Len(t, users, 2, "ListByUsername 应返回所有同名不同 provider 的用户")
+
+	providers := map[string]bool{}
+	for _, u := range users {
+		providers[u.AuthProvider] = true
+	}
+	assert.True(t, providers["local"], "应包含 local provider 的 alice")
+	assert.True(t, providers["ldap"], "应包含 ldap provider 的 alice")
+
+	// bob 只有一个 → 返回 1 个
+	bobs, err := repo.ListByUsername("bob")
+	require.NoError(t, err)
+	assert.Len(t, bobs, 1)
+
+	// 不存在 → 返回空切片，无错误
+	nobody, err := repo.ListByUsername("nobody")
+	require.NoError(t, err)
+	assert.Empty(t, nobody)
+}
+
+// ---------------------------------------------------------------------------
+// Fix 7: User.ExternalID 改为 *string，本地用户 NULL 不冲突
+// ---------------------------------------------------------------------------
+
+// TestUserRepo_Create_TwoLocalUsers_NilExternalID_NoConflict 验证两个本地用户都可以
+// 拥有 ExternalID=nil（NULL），不会触发 (auth_provider, external_id) 唯一约束冲突。
+// 这是 ExternalID string→*string 修复的直接回归测试。
+func TestUserRepo_Create_TwoLocalUsers_NilExternalID_NoConflict(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewUserRepo(gormDB, logger)
+
+	// 创建多个本地用户，均不设 ExternalID（nil）
+	require.NoError(t, repo.Create(&User{Username: "alice", PasswordHash: "h1", AuthProvider: "local"}),
+		"第一个本地用户应创建成功")
+	require.NoError(t, repo.Create(&User{Username: "bob", PasswordHash: "h2", AuthProvider: "local"}),
+		"第二个本地用户应创建成功（ExternalID=nil 不应触发唯一约束）")
+	require.NoError(t, repo.Create(&User{Username: "carol", PasswordHash: "h3", AuthProvider: "local"}),
+		"第三个本地用户应创建成功")
+
+	// 确认三个用户均存在
+	users, err := repo.ListAll()
+	require.NoError(t, err)
+	count := 0
+	for _, u := range users {
+		if u.AuthProvider == "local" {
+			count++
+		}
+	}
+	assert.GreaterOrEqual(t, count, 3, "三个本地用户应全部存在于数据库")
+}
+
+// ---------------------------------------------------------------------------
+// 增强日志记录覆盖
+// ---------------------------------------------------------------------------
+
+// TestUserRepo_ListByUsername_LogsAmbiguity 验证 ListByUsername 在检测到歧义时正确记录警告日志
+func TestUserRepo_ListByUsername_LogsAmbiguity(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewUserRepo(gormDB, logger)
+
+	// 创建混合认证用户
+	u1 := &User{Username: "alice", PasswordHash: "h1", AuthProvider: "local"}
+	u2 := &User{Username: "alice", PasswordHash: "h2", AuthProvider: "ldap"}
+	require.NoError(t, repo.Create(u1))
+	require.NoError(t, repo.Create(u2))
+
+	// ListByUsername 应返回 2 个结果
+	users, err := repo.ListByUsername("alice")
+	require.NoError(t, err)
+	assert.Len(t, users, 2, "应返回 local 和 ldap 的 alice")
+}
+
+// TestUserRepo_ListByUsername_NoAmbiguity 验证 ListByUsername 在单一匹配时正确记录
+func TestUserRepo_ListByUsername_NoAmbiguity(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewUserRepo(gormDB, logger)
+
+	// 创建单个用户
+	u := &User{Username: "bob", PasswordHash: "h1", AuthProvider: "local"}
+	require.NoError(t, repo.Create(u))
+
+	// ListByUsername 应返回 1 个结果
+	users, err := repo.ListByUsername("bob")
+	require.NoError(t, err)
+	assert.Len(t, users, 1)
+	assert.Equal(t, "bob", users[0].Username)
+}

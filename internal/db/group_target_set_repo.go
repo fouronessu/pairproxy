@@ -211,6 +211,10 @@ func (r *GroupTargetSetRepo) AddMember(setID string, member *GroupTargetSetMembe
 				return fmt.Errorf("check duplicate member: %w", err)
 			}
 		} else {
+			r.logger.Warn("rejected duplicate member addition (composite constraint violation)",
+				zap.String("target_set_id", setID),
+				zap.String("target_id", member.TargetID),
+			)
 			return fmt.Errorf("target already in set: set_id=%s, target_id=%s", setID, member.TargetID)
 		}
 
@@ -228,6 +232,7 @@ func (r *GroupTargetSetRepo) AddMember(setID string, member *GroupTargetSetMembe
 			r.logger.Error("failed to add member",
 				zap.String("target_set_id", setID),
 				zap.String("target_id", member.TargetID),
+				zap.String("member_id", member.ID),
 				zap.Error(err),
 			)
 			return fmt.Errorf("add member: %w", err)
@@ -236,6 +241,8 @@ func (r *GroupTargetSetRepo) AddMember(setID string, member *GroupTargetSetMembe
 		r.logger.Debug("member added",
 			zap.String("target_set_id", setID),
 			zap.String("target_id", member.TargetID),
+			zap.String("member_id", member.ID),
+			zap.Bool("is_active", member.IsActive),
 		)
 		return nil
 	})

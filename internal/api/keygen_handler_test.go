@@ -263,3 +263,60 @@ func TestKeygenWorkerAllowsStaticPage(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
+
+// ---------------------------------------------------------------------------
+// Fix 2: keygen login uses GetByUsernameAndProvider("local") — mixed-auth regression
+// ---------------------------------------------------------------------------
+
+// TestKeygenLogin_MixedAuth_LocalAndLDAP_LocalWins verifies that when both a local
+// and LDAP user share the same username, keygen login with local password succeeds
+// and matches the local account only.
+func TestKeygenLogin_MixedAuth_LocalAndLDAP_LocalWins(t *testing.T) {
+	h, userRepo := setupKeygenTest(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	localPass, err := auth.HashPassword(zap.NewNop(), "localpass")
+	require.NoError(t, err)
+
+	// Create local "alice"
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: localPass, AuthProvider: "local", IsActive: true,
+	}))
+	// Create LDAP "alice" (no password hash — LDAP auth doesn't use it)
+	extID := "ldap-alice-uid"
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}))
+
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "localpass"})
+	req := httptest.NewRequest(http.MethodPost, "/keygen/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code,
+		"keygen login should succeed with local password when both local and ldap 'alice' exist; body: "+rr.Body.String())
+}
+
+// TestKeygenLogin_MixedAuth_LDAPOnlyUser_Returns401 verifies that an LDAP-only user
+// (no local account) cannot login via keygen (which uses local password auth).
+func TestKeygenLogin_MixedAuth_LDAPOnlyUser_Returns401(t *testing.T) {
+	h, userRepo := setupKeygenTest(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	extID := "ldap-bob-uid"
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "bob", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}))
+
+	body, _ := json.Marshal(map[string]string{"username": "bob", "password": "anypassword"})
+	req := httptest.NewRequest(http.MethodPost, "/keygen/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code,
+		"LDAP-only user should not be able to login via keygen (no local account); body: "+rr.Body.String())
+}

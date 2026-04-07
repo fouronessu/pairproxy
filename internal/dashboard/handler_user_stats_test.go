@@ -315,3 +315,67 @@ func TestHandleUserStats_DateFields(t *testing.T) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Fix 11: dashboard usage_handler uses ListByUsername — 409 on ambiguous username
+// ---------------------------------------------------------------------------
+
+// TestDashboardUserQuota_AmbiguousUsername_Returns409 verifies that when two users
+// share the same username (different auth providers), the dashboard user-quota
+// endpoint returns 409 Conflict with an ambiguity message.
+func TestDashboardUserQuota_AmbiguousUsername_Returns409(t *testing.T) {
+	env := setupUserStatsEnv(t)
+
+	extID := "ldap-alice"
+	if err := env.uRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "h1", AuthProvider: "local", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create local alice: %v", err)
+	}
+	if err := env.uRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}); err != nil {
+		t.Fatalf("create ldap alice: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/user-quota?username=alice", nil)
+	req.AddCookie(env.cookie)
+	rr := httptest.NewRecorder()
+	env.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("ambiguous username: status = %d, want 409; body: %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if msg, _ := body["error"].(string); msg == "" {
+		t.Error("response should contain error message for ambiguous username")
+	}
+}
+
+// TestDashboardUserHistory_AmbiguousUsername_Returns409 verifies the same
+// ambiguity detection for the usage-history endpoint.
+func TestDashboardUserHistory_AmbiguousUsername_Returns409(t *testing.T) {
+	env := setupUserStatsEnv(t)
+
+	extID := "ldap-bob"
+	if err := env.uRepo.Create(&db.User{
+		Username: "bob", PasswordHash: "h1", AuthProvider: "local", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create local bob: %v", err)
+	}
+	if err := env.uRepo.Create(&db.User{
+		Username: "bob", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}); err != nil {
+		t.Fatalf("create ldap bob: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/user-history?username=bob", nil)
+	req.AddCookie(env.cookie)
+	rr := httptest.NewRecorder()
+	env.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("ambiguous username: status = %d, want 409; body: %s", rr.Code, rr.Body.String())
+	}
+}

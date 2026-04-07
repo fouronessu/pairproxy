@@ -81,8 +81,28 @@ func (r *UserRepo) GetByUsername(username string) (*User, error) {
 func (r *UserRepo) ListByUsername(username string) ([]User, error) {
 	var users []User
 	if err := r.db.Preload("Group").Where("username = ?", username).Find(&users).Error; err != nil {
+		r.logger.Error("failed to list users by username",
+			zap.String("username", username),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("list users by username %q: %w", username, err)
 	}
+	// 记录歧义情况：同一用户名对应多个认证提供商
+	if len(users) > 1 {
+		providers := make([]string, len(users))
+		for i, u := range users {
+			providers[i] = u.AuthProvider
+		}
+		r.logger.Warn("ambiguous username found in multiple auth providers",
+			zap.String("username", username),
+			zap.Int("count", len(users)),
+			zap.Strings("providers", providers),
+		)
+	}
+	r.logger.Debug("users listed by username",
+		zap.String("username", username),
+		zap.Int("count", len(users)),
+	)
 	return users, nil
 }
 

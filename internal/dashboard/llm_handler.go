@@ -409,11 +409,18 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 	}
 	exists, err := h.llmTargetRepo.ComboExists(targetURL, apiKeyIDPtr)
 	if err != nil {
-		h.logger.Error("check url exists", zap.Error(err))
+		h.logger.Error("failed to check combo exists",
+			zap.String("url", targetURL),
+			zap.Any("api_key_id", apiKeyIDPtr),
+			zap.Error(err))
 		http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
 		return
 	}
 	if exists {
+		h.logger.Warn("rejected duplicate llm target",
+			zap.String("url", targetURL),
+			zap.Any("api_key_id", apiKeyIDPtr),
+		)
 		http.Redirect(w, r, "/dashboard/llm?error=URL+already+exists", http.StatusSeeOther)
 		return
 	}
@@ -508,11 +515,20 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 		}
 		exists, err := h.llmTargetRepo.ComboExists(targetURL, apiKeyIDPtr)
 		if err != nil {
-			h.logger.Error("check url exists", zap.Error(err))
+			h.logger.Error("failed to check combo exists during update",
+				zap.String("id", id),
+				zap.String("new_url", targetURL),
+				zap.Any("api_key_id", apiKeyIDPtr),
+				zap.Error(err))
 			http.Redirect(w, r, "/dashboard/llm?error=internal+error", http.StatusSeeOther)
 			return
 		}
 		if exists {
+			h.logger.Warn("rejected duplicate llm target during update",
+				zap.String("id", id),
+				zap.String("new_url", targetURL),
+				zap.Any("api_key_id", apiKeyIDPtr),
+			)
 			http.Redirect(w, r, "/dashboard/llm?error=URL+already+exists", http.StatusSeeOther)
 			return
 		}

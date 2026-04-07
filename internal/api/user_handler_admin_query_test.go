@@ -107,3 +107,92 @@ func TestUserHandler_QuotaStatus_RegularUserCannotQueryOthers(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	// 应该返回 user1 自己的数据，而不是 user2 的
 }
+
+// ---------------------------------------------------------------------------
+// Fix 9: user handler uses ListByUsername — 409 on ambiguous username
+// ---------------------------------------------------------------------------
+
+func setupUserHandlerWithDB(t *testing.T) (*UserHandler, *auth.Manager, *db.UserRepo) {
+	t.Helper()
+	logger := zap.NewNop()
+	gormDB, err := db.Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Migrate(logger, gormDB))
+	jwtMgr, err := auth.NewManager(logger, "test-secret")
+	require.NoError(t, err)
+	userRepo := db.NewUserRepo(gormDB, logger)
+	groupRepo := db.NewGroupRepo(gormDB, logger)
+	usageRepo := db.NewUsageRepo(gormDB, logger)
+	h := NewUserHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo)
+	return h, jwtMgr, userRepo
+}
+
+func adminJWT(t *testing.T, jwtMgr *auth.Manager, userID, username string) string {
+	t.Helper()
+	tok, err := jwtMgr.Sign(auth.JWTClaims{UserID: userID, Username: username, Role: "admin"}, time.Hour)
+	require.NoError(t, err)
+	return tok
+}
+
+// TestUserHandler_QuotaStatus_AmbiguousUsername_Returns409 verifies that when two
+// users share the same username (different auth providers), the user-handler
+// quota-status endpoint returns 409 Conflict.
+func TestUserHandler_QuotaStatus_AmbiguousUsername_Returns409(t *testing.T) {
+	h, jwtMgr, userRepo := setupUserHandlerWithDB(t)
+
+	extID := "ldap-alice"
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "h1", AuthProvider: "local", IsActive: true,
+	}))
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}))
+
+	adminID := "admin-id"
+	require.NoError(t, userRepo.Create(&db.User{
+		ID: adminID, Username: "admin", PasswordHash: "x", AuthProvider: "local", IsActive: true,
+	}))
+	tok := adminJWT(t, jwtMgr, adminID, "admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/quota-status?username=alice", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	h.requireUser(http.HandlerFunc(h.handleQuotaStatus)).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code,
+		"ambiguous username should return 409; body: "+w.Body.String())
+	var body map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	assert.Equal(t, "username_ambiguous", body["error"], "error key should be username_ambiguous")
+}
+
+// TestUserHandler_UsageHistory_AmbiguousUsername_Returns409 verifies the same
+// ambiguity detection for the usage-history endpoint.
+func TestUserHandler_UsageHistory_AmbiguousUsername_Returns409(t *testing.T) {
+	h, jwtMgr, userRepo := setupUserHandlerWithDB(t)
+
+	extID := "ldap-bob"
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "bob", PasswordHash: "h1", AuthProvider: "local", IsActive: true,
+	}))
+	require.NoError(t, userRepo.Create(&db.User{
+		Username: "bob", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}))
+
+	adminID := "admin-id"
+	require.NoError(t, userRepo.Create(&db.User{
+		ID: adminID, Username: "admin", PasswordHash: "x", AuthProvider: "local", IsActive: true,
+	}))
+	tok := adminJWT(t, jwtMgr, adminID, "admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/usage-history?username=bob", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	h.requireUser(http.HandlerFunc(h.handleUsageHistory)).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code,
+		"ambiguous username should return 409 on usage-history; body: "+w.Body.String())
+	var body map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	assert.Equal(t, "username_ambiguous", body["error"], "error key should be username_ambiguous")
+}

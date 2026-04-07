@@ -892,3 +892,117 @@ func TestDeleteConfigTargetsNotInList_EmptyKeepList_DeletesAll(t *testing.T) {
 	assert.Len(t, remaining, 1, "只有 database 来源的 target 应保留")
 	assert.Equal(t, "database", remaining[0].Source)
 }
+
+// TestLLMTargetRepo_ListByURL_MultipleKeys 验证 ListByURL 能返回同 URL 不同 Key 的所有记录
+func TestLLMTargetRepo_ListByURL_MultipleKeys(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// 创建两个 API Key
+	keyA := uuid.NewString()
+	keyB := uuid.NewString()
+	gormDB.Create(&APIKey{ID: keyA, Name: "keyA", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "keyB", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+
+	// 创建两个同 URL 但不同 APIKeyID 的 target
+	target1 := &LLMTarget{
+		ID:        uuid.NewString(),
+		URL:       url,
+		APIKeyID:  &keyA,
+		Provider:  "anthropic",
+		Source:    "database",
+		IsEditable: true,
+		IsActive:  true,
+	}
+	target2 := &LLMTarget{
+		ID:        uuid.NewString(),
+		URL:       url,
+		APIKeyID:  &keyB,
+		Provider:  "anthropic",
+		Source:    "database",
+		IsEditable: true,
+		IsActive:  true,
+	}
+
+	require.NoError(t, repo.Create(target1))
+	require.NoError(t, repo.Create(target2))
+
+	// ListByURL 应该返回两条记录
+	results, err := repo.ListByURL(url)
+	require.NoError(t, err)
+	assert.Len(t, results, 2, "ListByURL 应返回所有同 URL 的记录")
+
+	// 验证返回的是我们创建的两条记录
+	ids := make(map[string]bool)
+	for _, r := range results {
+		ids[r.ID] = true
+	}
+	assert.True(t, ids[target1.ID], "应包含 target1")
+	assert.True(t, ids[target2.ID], "应包含 target2")
+}
+
+// TestLLMTargetRepo_ListByURL_WithNilKey 验证 ListByURL 正确处理 nil api_key_id 的情况
+func TestLLMTargetRepo_ListByURL_WithNilKey(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	const url = "https://api.example.com"
+
+	// 创建同 URL 的两条记录：一条 nil key，一条有 key
+	keyA := uuid.NewString()
+	gormDB.Create(&APIKey{ID: keyA, Name: "keyA", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+
+	targetNil := &LLMTarget{
+		ID:        uuid.NewString(),
+		URL:       url,
+		APIKeyID:  nil,
+		Provider:  "anthropic",
+		Source:    "database",
+		IsEditable: true,
+		IsActive:  true,
+	}
+	targetWithKey := &LLMTarget{
+		ID:        uuid.NewString(),
+		URL:       url,
+		APIKeyID:  &keyA,
+		Provider:  "anthropic",
+		Source:    "database",
+		IsEditable: true,
+		IsActive:  true,
+	}
+
+	require.NoError(t, repo.Create(targetNil))
+	require.NoError(t, repo.Create(targetWithKey))
+
+	// ListByURL 应返回两条
+	results, err := repo.ListByURL(url)
+	require.NoError(t, err)
+	assert.Len(t, results, 2, "ListByURL 应返回所有同 URL 的记录，包括 nil key")
+
+	// 使用 GetByURLAndAPIKeyID 精确查询 nil key
+	found, err := repo.GetByURLAndAPIKeyID(url, nil)
+	require.NoError(t, err)
+	assert.Equal(t, targetNil.ID, found.ID)
+}
+
+// TestLLMTargetRepo_ListByURL_Empty 验证 ListByURL 在没有匹配记录时返回空列表
+func TestLLMTargetRepo_ListByURL_Empty(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	// 查询不存在的 URL
+	results, err := repo.ListByURL("https://nonexistent.com")
+	require.NoError(t, err)
+	assert.Len(t, results, 0, "不存在的 URL 应返回空列表")
+}

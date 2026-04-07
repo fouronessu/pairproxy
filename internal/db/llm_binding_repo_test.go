@@ -3,6 +3,9 @@ package db
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -272,4 +275,94 @@ func TestLLMBindingRepo_EvenDistribute_SkipsExistingBindings(t *testing.T) {
 			t.Errorf("%s binding = %q, want one of the distribute targets", uid, gotID)
 		}
 	}
+}
+
+// TestLLMBindingRepo_SetReplace_UserMultipleBindings_DeletesOld 验证 Set 正确替换用户的旧绑定
+// 这测试 (user_id, target_id) 复合唯一约束的使用
+func TestLLMBindingRepo_SetReplace_UserMultipleBindings_DeletesOld(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMBindingRepo(gormDB, logger)
+
+	userID := "user-123"
+	oldTargetID := "target-old"
+	newTargetID := "target-new"
+
+	// 第一次 Set：user-123 → target-old
+	err = repo.Set(oldTargetID, &userID, nil)
+	require.NoError(t, err)
+
+	// 验证初始绑定
+	found, foundUser, err := repo.FindForUser(userID, "")
+	require.NoError(t, err)
+	assert.True(t, foundUser)
+	assert.Equal(t, oldTargetID, found)
+
+	// 第二次 Set：user-123 → target-new（应替换）
+	err = repo.Set(newTargetID, &userID, nil)
+	require.NoError(t, err)
+
+	// 验证绑定已更新
+	found, foundUser, err = repo.FindForUser(userID, "")
+	require.NoError(t, err)
+	assert.True(t, foundUser)
+	assert.Equal(t, newTargetID, found, "Set 应替换用户的旧绑定")
+
+	// 验证旧绑定已删除
+	bindings, err := repo.List()
+	require.NoError(t, err)
+	userBindings := 0
+	for _, b := range bindings {
+		if b.UserID != nil && *b.UserID == userID {
+			userBindings++
+		}
+	}
+	assert.Equal(t, 1, userBindings, "用户应只有一条绑定记录（旧的已删除）")
+}
+
+// TestLLMBindingRepo_SetReplace_GroupMultipleBindings_DeletesOld 验证 Set 正确替换分组的旧绑定
+// 这测试 (group_id, target_id) 复合唯一约束的使用
+func TestLLMBindingRepo_SetReplace_GroupMultipleBindings_DeletesOld(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMBindingRepo(gormDB, logger)
+
+	groupID := "group-456"
+	oldTargetID := "target-old"
+	newTargetID := "target-new"
+
+	// 第一次 Set：group-456 → target-old
+	err = repo.Set(oldTargetID, nil, &groupID)
+	require.NoError(t, err)
+
+	// 验证初始绑定
+	found, foundGroup, err := repo.FindForUser("", groupID)
+	require.NoError(t, err)
+	assert.True(t, foundGroup)
+	assert.Equal(t, oldTargetID, found)
+
+	// 第二次 Set：group-456 → target-new（应替换）
+	err = repo.Set(newTargetID, nil, &groupID)
+	require.NoError(t, err)
+
+	// 验证绑定已更新
+	found, foundGroup, err = repo.FindForUser("", groupID)
+	require.NoError(t, err)
+	assert.True(t, foundGroup)
+	assert.Equal(t, newTargetID, found, "Set 应替换分组的旧绑定")
+
+	// 验证分组只有一条绑定
+	bindings, err := repo.List()
+	require.NoError(t, err)
+	groupBindings := 0
+	for _, b := range bindings {
+		if b.GroupID != nil && *b.GroupID == groupID {
+			groupBindings++
+		}
+	}
+	assert.Equal(t, 1, groupBindings, "分组应只有一条绑定记录")
 }

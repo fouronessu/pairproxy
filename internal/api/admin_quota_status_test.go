@@ -101,3 +101,40 @@ func TestAdminQuotaStatus(t *testing.T) {
 		}
 	})
 }
+
+// TestAdminQuotaStatus_AmbiguousUsername_Returns409 verifies that when two users
+// share the same username (different auth providers), the quota-status endpoint
+// returns HTTP 409 Conflict with "username_ambiguous" error code.
+// This is the regression test for Fix 8 (ListByUsername ambiguity detection).
+func TestAdminQuotaStatus_AmbiguousUsername_Returns409(t *testing.T) {
+	_, jwtMgr, mux, userRepo, _ := setupAdminTestWithTokenRepo(t)
+	tok := adminToken(t, jwtMgr)
+
+	extID := "ldap-alice"
+	// Create local "alice"
+	if err := userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "h1", AuthProvider: "local", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create local alice: %v", err)
+	}
+	// Create LDAP "alice"
+	if err := userRepo.Create(&db.User{
+		Username: "alice", PasswordHash: "", AuthProvider: "ldap", ExternalID: &extID, IsActive: true,
+	}); err != nil {
+		t.Fatalf("create ldap alice: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/quota/status?user=alice", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("ambiguous username: status = %d, want 409; body: %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if code, _ := body["error"].(string); code != "username_ambiguous" {
+		t.Errorf("error code = %q, want username_ambiguous", code)
+	}
+}
