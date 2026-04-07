@@ -503,3 +503,386 @@ func TestLLMTargetRepo_DeleteConfigTargetsNotInList_NoConfigTargets(t *testing.T
 	_, err = repo.GetByURL("http://database1.local")
 	assert.NoError(t, err)
 }
+
+// ============================================================
+// 同 URL 多 Key 场景：举一反三测试
+// 揭示哪些操作在多 Key 时行为明确、哪些存在歧义
+// ============================================================
+
+// TestGetByURLAndAPIKeyID_Disambiguates 验证 GetByURLAndAPIKeyID 能精确区分同 URL 不同 Key。
+func TestGetByURLAndAPIKeyID_Disambiguates(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	tA := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database", IsEditable: true}
+	tB := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "database", IsEditable: true}
+	require.NoError(t, repo.Create(tA))
+	require.NoError(t, repo.Create(tB))
+
+	// GetByURLAndAPIKeyID 能精确定位
+	got, err := repo.GetByURLAndAPIKeyID(url, &keyA)
+	require.NoError(t, err)
+	assert.Equal(t, tA.ID, got.ID, "应返回 keyA 对应的 target")
+
+	got, err = repo.GetByURLAndAPIKeyID(url, &keyB)
+	require.NoError(t, err)
+	assert.Equal(t, tB.ID, got.ID, "应返回 keyB 对应的 target")
+
+	// GetByURL 只返回其中一条（歧义）—— 此测试记录该行为
+	gotAmbiguous, err := repo.GetByURL(url)
+	require.NoError(t, err)
+	assert.Contains(t, []string{tA.ID, tB.ID}, gotAmbiguous.ID,
+		"GetByURL 在多 Key 时返回其中一条（歧义行为，调用方不应依赖具体是哪条）")
+}
+
+// TestURLExists_MultiKey_ReturnsTrue 验证 URLExists 在同 URL 多 Key 时返回 true。
+// 用于判断 Seed() 的行为：只要该 URL 有任何 target 存在，就跳过（不管 Key 是否不同）。
+func TestURLExists_MultiKey_ReturnsTrue(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database", IsEditable: true}))
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "database", IsEditable: true}))
+
+	exists, err := repo.URLExists(url)
+	require.NoError(t, err)
+	assert.True(t, exists, "URLExists 应返回 true（URL 存在，不论有几条）")
+}
+
+// TestSeed_MultiKey_SkipsOnURLExists 验证 Seed 行为：
+// 若同 URL 已有任何 target，直接跳过（不考虑 APIKeyID 是否不同）。
+// 这是当前设计的已知限制：Seed 不支持同 URL 多 Key。
+func TestSeed_MultiKey_SkipsOnURLExists(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	// 先 Seed 一条（keyA）
+	err = repo.Seed(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database"})
+	require.NoError(t, err)
+
+	// 再 Seed 同 URL 但不同 Key（keyB）→ 应被跳过（不创建新记录）
+	err = repo.Seed(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "database"})
+	require.NoError(t, err, "Seed 在 URL 已存在时应无错返回")
+
+	// 验证：DB 中只有 1 条记录（keyB 的 Seed 被跳过）
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, targets, 1,
+		"Seed 在 URL 存在时跳过（已知限制：不支持同 URL 多 Key 的 Seed）")
+}
+
+// TestDeleteConfigTargetsNotInList_MultiKey_Precision 验证：
+// 同 URL 两个 Key，删除列表中不包含其中一个 (url, key) → 精确删除那一条，不误删另一条。
+func TestDeleteConfigTargetsNotInList_MultiKey_Precision(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	tA := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "config", IsEditable: false}
+	tB := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "config", IsEditable: false}
+	require.NoError(t, repo.Create(tA))
+	require.NoError(t, repo.Create(tB))
+
+	// 只保留 keyA → 应精确删除 keyB 那条，不误删 keyA
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{
+		{URL: url, APIKeyID: &keyA},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted, "应精确删除 1 条（keyB）")
+
+	// 验证 keyA 还在
+	got, err := repo.GetByURLAndAPIKeyID(url, &keyA)
+	require.NoError(t, err)
+	assert.Equal(t, tA.ID, got.ID, "keyA 对应的 target 应保留")
+
+	// 验证 keyB 已删除
+	_, err = repo.GetByURLAndAPIKeyID(url, &keyB)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "keyB 对应的 target 应已删除")
+}
+
+// TestDeleteConfigTargetsNotInList_OldURLOnlyBehavior_WouldBreakMultiKey 文档化测试：
+// 记录若使用旧的"仅按 URL 匹配"删除逻辑时，同 URL 多 Key 会被全部删除（破坏性）。
+// 此测试验证新实现的正确性，并作为回归防护。
+func TestDeleteConfigTargetsNotInList_SameURL_BothPreserved(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "config"}))
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "config"}))
+
+	// 保留列表包含两个 (url, key) 对 → 都不删
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{
+		{URL: url, APIKeyID: &keyA},
+		{URL: url, APIKeyID: &keyB},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted, "两个 (url,key) 都在保留列表中，不应删除任何一条")
+
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, targets, 2, "两条记录应都保留")
+}
+
+// TestGetByID_StillWorks_MultiKey 验证 GetByID 在多 Key 场景下仍能精确定位。
+func TestGetByID_StillWorks_MultiKey(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	idA, idB := uuid.NewString(), uuid.NewString()
+	require.NoError(t, repo.Create(&LLMTarget{ID: idA, URL: url, APIKeyID: &keyA, Source: "database", IsEditable: true}))
+	require.NoError(t, repo.Create(&LLMTarget{ID: idB, URL: url, APIKeyID: &keyB, Source: "database", IsEditable: true}))
+
+	gotA, err := repo.GetByID(idA)
+	require.NoError(t, err)
+	assert.Equal(t, idA, gotA.ID)
+	assert.Equal(t, keyA, *gotA.APIKeyID)
+
+	gotB, err := repo.GetByID(idB)
+	require.NoError(t, err)
+	assert.Equal(t, idB, gotB.ID)
+	assert.Equal(t, keyB, *gotB.APIKeyID)
+}
+
+// TestListAll_MultiKey_ReturnsAll 验证 ListAll 在多 Key 场景下返回所有记录。
+func TestListAll_MultiKey_ReturnsAll(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "database", IsEditable: true, IsActive: true}))
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "database", IsEditable: true, IsActive: true}))
+
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, targets, 2, "ListAll 应返回全部 target，包括同 URL 不同 Key 的")
+
+	urls := make(map[string]int)
+	for _, tgt := range targets {
+		urls[tgt.URL]++
+	}
+	assert.Equal(t, 2, urls[url], "两条记录都应有相同的 URL")
+}
+
+// TestUpsert_SameURLSameKey_Updates 验证 Upsert 幂等：同 (url, key) 再次 Upsert → 更新，不新增。
+func TestUpsert_SameURLSameKey_Updates(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA := "key-a"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	t1 := &LLMTarget{URL: url, APIKeyID: &keyA, Source: "config", Weight: 1}
+	require.NoError(t, repo.Upsert(t1))
+	originalID := t1.ID
+
+	// 再次 Upsert 相同 (url, key)，仅改 Weight → 应更新，不新增
+	t2 := &LLMTarget{URL: url, APIKeyID: &keyA, Source: "config", Weight: 5}
+	require.NoError(t, repo.Upsert(t2))
+
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	require.Len(t, targets, 1, "同 (url,key) Upsert 应更新，不新增")
+	assert.Equal(t, originalID, targets[0].ID, "ID 应保持不变（保留原有记录）")
+	assert.Equal(t, 5, targets[0].Weight, "Weight 应被更新")
+}
+
+// TestUpsert_SameURLDifferentKey_Creates 验证 Upsert 在不同 Key 时创建新记录（与 TestUpsert_SameURLSameKey_Updates 对比）。
+func TestUpsert_SameURLDifferentKey_Creates(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	require.NoError(t, repo.Upsert(&LLMTarget{URL: url, APIKeyID: &keyA, Source: "config", Weight: 2}))
+	require.NoError(t, repo.Upsert(&LLMTarget{URL: url, APIKeyID: &keyB, Source: "config", Weight: 1}))
+
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, targets, 2, "不同 Key 的 Upsert 应创建两条独立记录")
+}
+
+// TestDeleteConfigTargetsNotInList_KeyNilVsNonNil 验证：
+// api_key_id IS NULL 和 api_key_id = 'xxx' 被视为不同的 (url, key) 对，互不影响。
+func TestDeleteConfigTargetsNotInList_KeyNilVsNonNil(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA := "key-a"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	// 一条 key=nil，一条 key=keyA
+	tNil := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: nil, Source: "config"}
+	tA := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "config"}
+	require.NoError(t, repo.Create(tNil))
+	require.NoError(t, repo.Create(tA))
+
+	// 只保留 keyA 对，删除 nil-key 那条
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{
+		{URL: url, APIKeyID: &keyA},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted, "应精确删除 nil-key 那条")
+
+	_, err = repo.GetByURLAndAPIKeyID(url, &keyA)
+	assert.NoError(t, err, "keyA 对应记录应保留")
+
+	_, err = repo.GetByURLAndAPIKeyID(url, nil)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "nil-key 对应记录应删除")
+}
+
+// TestGetByURLAndAPIKeyID_NilKey 验证 nil api_key_id 场景的查询。
+func TestGetByURLAndAPIKeyID_NilKey(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	const url = "https://api.anthropic.com"
+	tNil := &LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: nil, Source: "database", IsEditable: true}
+	require.NoError(t, repo.Create(tNil))
+
+	got, err := repo.GetByURLAndAPIKeyID(url, nil)
+	require.NoError(t, err)
+	assert.Equal(t, tNil.ID, got.ID)
+	assert.Nil(t, got.APIKeyID)
+
+	// 查不到不存在的
+	keyA := "key-a"
+	_, err = repo.GetByURLAndAPIKeyID(url, &keyA)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// TestGetByURLAndAPIKeyID_NotFound 验证查询不存在记录时返回 ErrRecordNotFound。
+func TestGetByURLAndAPIKeyID_NotFound(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA := "key-a"
+	_, err = repo.GetByURLAndAPIKeyID("https://nonexistent.com", &keyA)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// TestUpsert_Idempotent_NoAPIKey 验证 Upsert 在 api_key_id 为 nil 时的幂等行为。
+func TestUpsert_Idempotent_NoAPIKey(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	const url = "https://api.anthropic.com"
+	t1 := &LLMTarget{URL: url, APIKeyID: nil, Source: "config", Weight: 1}
+	require.NoError(t, repo.Upsert(t1))
+	id1 := t1.ID
+
+	// 再次 Upsert 相同 (url, nil-key) → 更新
+	t2 := &LLMTarget{URL: url, APIKeyID: nil, Source: "config", Weight: 3}
+	require.NoError(t, repo.Upsert(t2))
+
+	targets, err := repo.ListAll()
+	require.NoError(t, err)
+	require.Len(t, targets, 1, "nil-key 的幂等 Upsert 不应新增记录")
+	assert.Equal(t, id1, targets[0].ID)
+	assert.Equal(t, 3, targets[0].Weight, "Weight 应被更新")
+}
+
+// TestDeleteConfigTargetsNotInList_EmptyKeepList_DeletesAll 验证：
+// 空的保留列表 → 删除所有 config 来源的 target（包括同 URL 多 Key 的情况）。
+func TestDeleteConfigTargetsNotInList_EmptyKeepList_DeletesAll(t *testing.T) {
+	logger := zap.NewNop()
+	gormDB, err := Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, Migrate(logger, gormDB))
+	repo := NewLLMTargetRepo(gormDB, logger)
+
+	keyA, keyB := "key-a", "key-b"
+	gormDB.Create(&APIKey{ID: keyA, Name: "A", Provider: "anthropic", EncryptedValue: "sk-A", IsActive: true})
+	gormDB.Create(&APIKey{ID: keyB, Name: "B", Provider: "anthropic", EncryptedValue: "sk-B", IsActive: true})
+
+	const url = "https://api.anthropic.com"
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyA, Source: "config"}))
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: url, APIKeyID: &keyB, Source: "config"}))
+	// 一条 database 来源（不应被删）
+	require.NoError(t, repo.Create(&LLMTarget{ID: uuid.NewString(), URL: "https://other.com", APIKeyID: nil, Source: "database", IsEditable: true}))
+
+	deleted, err := repo.DeleteConfigTargetsNotInList([]ConfigTargetKey{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted, "空保留列表应删除全部 config 来源的记录（两条）")
+
+	remaining, err := repo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, remaining, 1, "只有 database 来源的 target 应保留")
+	assert.Equal(t, "database", remaining[0].Source)
+}
