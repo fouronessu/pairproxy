@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap/zaptest"
 
 	"github.com/l17728/pairproxy/internal/auth"
@@ -310,4 +312,278 @@ func TestAdminLLMDistribute(t *testing.T) {
 			t.Errorf("status = %d, want 400 when no targets configured", rr.Code)
 		}
 	})
+}
+
+// These will be appended to admin_llm_handler_test.go to test Issue #6 disambiguation
+
+// ---------------------------------------------------------------------------
+// setupLLMTestWithTargetRepo — extends setupLLMTest with a real LLMTargetRepo.
+// Used for Issue #6 multi-key disambiguation tests.
+// ---------------------------------------------------------------------------
+
+func setupLLMTestWithTargetRepo(t *testing.T) (*AdminHandler, *auth.Manager, *http.ServeMux, *db.LLMTargetRepo) {
+	t.Helper()
+	logger := zaptest.NewLogger(t)
+
+	jwtMgr, err := auth.NewManager(logger, "llm-multi-secret")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+	writer.Start(ctx)
+	t.Cleanup(func() { cancel(); writer.Wait() })
+
+	userRepo := db.NewUserRepo(gormDB, logger)
+	groupRepo := db.NewGroupRepo(gormDB, logger)
+	usageRepo := db.NewUsageRepo(gormDB, logger)
+	auditRepo := db.NewAuditRepo(logger, gormDB)
+	llmRepo := db.NewLLMBindingRepo(gormDB, logger)
+	targetRepo := db.NewLLMTargetRepo(gormDB, logger)
+
+	hash, _ := auth.HashPassword(logger, "adminpass")
+	handler := NewAdminHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo, auditRepo, hash, time.Hour)
+	handler.SetLLMBindingRepo(llmRepo)
+	handler.SetLLMTargetRepo(targetRepo)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	handler.RegisterLLMRoutes(mux)
+
+	return handler, jwtMgr, mux, targetRepo
+}
+
+// ---------------------------------------------------------------------------
+// TestSetBinding_SameURL_TwoKeys_Returns409
+// Issue #6: POST /api/admin/llm/bindings with target_url that matches two
+// targets (same URL, different API keys) must return 409 Conflict.
+// ---------------------------------------------------------------------------
+
+func TestSetBinding_SameURL_TwoKeys_Returns409(t *testing.T) {
+	_, jwtMgr, mux, targetRepo := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+	authHdr := "Bearer " + tok
+
+	sharedURL := "https://api.openai.com/v1"
+
+	keyID1 := "key-uuid-1111"
+	keyID2 := "key-uuid-2222"
+	t1 := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "OpenAI-Key1", Provider: "openai", Weight: 1, APIKeyID: &keyID1}
+	t2 := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "OpenAI-Key2", Provider: "openai", Weight: 1, APIKeyID: &keyID2}
+	if err := targetRepo.Create(t1); err != nil {
+		t.Fatalf("Create t1: %v", err)
+	}
+	if err := targetRepo.Create(t2); err != nil {
+		t.Fatalf("Create t2: %v", err)
+	}
+
+	uid := "user-conflict"
+	body, _ := json.Marshal(createLLMBindingRequest{
+		TargetURL: sharedURL,
+		UserID:    &uid,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/bindings", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", authHdr)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 Conflict; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "target_url_ambiguous") {
+		t.Errorf("body should contain 'target_url_ambiguous', got: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), t1.ID) || !strings.Contains(rr.Body.String(), t2.ID) {
+		t.Errorf("body should list both target IDs; got: %s", rr.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestSetBinding_SameURL_OneKey_Resolves
+// When exactly one target matches the URL, the binding is created normally.
+// ---------------------------------------------------------------------------
+
+func TestSetBinding_SameURL_OneKey_Resolves(t *testing.T) {
+	_, jwtMgr, mux, targetRepo := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+	authHdr := "Bearer " + tok
+
+	url := "https://unique.openai.example.com/v1"
+	keyID := "only-key-id"
+	target := &db.LLMTarget{ID: uuid.NewString(), URL: url, Name: "Solo", Provider: "openai", Weight: 1, APIKeyID: &keyID}
+	if err := targetRepo.Create(target); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	uid := "user-solo"
+	body, _ := json.Marshal(createLLMBindingRequest{
+		TargetURL: url,
+		UserID:    &uid,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/bindings", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", authHdr)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestSetBinding_UnknownURL_Returns400
+// target_url matches no record — 400 target_not_found.
+// ---------------------------------------------------------------------------
+
+func TestSetBinding_UnknownURL_Returns400(t *testing.T) {
+	_, jwtMgr, mux, _ := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+
+	uid := "user-x"
+	body, _ := json.Marshal(createLLMBindingRequest{
+		TargetURL: "https://nonexistent.example.com",
+		UserID:    &uid,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/bindings", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "target_not_found") {
+		t.Errorf("body should contain 'target_not_found', got: %s", rr.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestSetBinding_ByTargetID_Bypasses409
+// Providing target_id (UUID) directly bypasses URL lookup entirely.
+// ---------------------------------------------------------------------------
+
+func TestSetBinding_ByTargetID_Bypasses409(t *testing.T) {
+	_, jwtMgr, mux, targetRepo := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+
+	sharedURL := "https://api.anthropic.com/v1"
+	k1, k2 := "key-aaa", "key-bbb"
+	ta := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "Claude-K1", Provider: "anthropic", Weight: 1, APIKeyID: &k1}
+	tb := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "Claude-K2", Provider: "anthropic", Weight: 1, APIKeyID: &k2}
+	if err := targetRepo.Create(ta); err != nil {
+		t.Fatalf("Create ta: %v", err)
+	}
+	if err := targetRepo.Create(tb); err != nil {
+		t.Fatalf("Create tb: %v", err)
+	}
+
+	uid := "user-uuid-direct"
+	body, _ := json.Marshal(createLLMBindingRequest{
+		TargetID: ta.ID,
+		UserID:   &uid,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/bindings", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201 when providing target_id directly; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDistribute_SameURL_TwoKeys_ExpandsAll
+// Issue #6: distribute with a URL matching two targets must expand both.
+// ---------------------------------------------------------------------------
+
+func TestDistribute_SameURL_TwoKeys_ExpandsAll(t *testing.T) {
+	_, jwtMgr, mux, targetRepo := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+
+	sharedURL := "https://api.openai.com/v1"
+	k1, k2 := "key-dist-1", "key-dist-2"
+	ta := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "Dist-K1", Provider: "openai", Weight: 1, APIKeyID: &k1}
+	tb := &db.LLMTarget{ID: uuid.NewString(), URL: sharedURL, Name: "Dist-K2", Provider: "openai", Weight: 1, APIKeyID: &k2}
+	if err := targetRepo.Create(ta); err != nil {
+		t.Fatalf("Create ta: %v", err)
+	}
+	if err := targetRepo.Create(tb); err != nil {
+		t.Fatalf("Create tb: %v", err)
+	}
+
+	body, _ := json.Marshal(llmDistributeRequest{
+		UserIDs:    []string{"ua", "ub", "uc", "ud"},
+		TargetURLs: []string{sharedURL},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/distribute", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]int
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["assigned"] != 4 {
+		t.Errorf("assigned = %d, want 4", resp["assigned"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDistribute_MultipleURLs_EachMultiKey_ExpandsAll
+// Multiple URLs in target_urls, each with multiple keys — all expanded.
+// ---------------------------------------------------------------------------
+
+func TestDistribute_MultipleURLs_EachMultiKey_ExpandsAll(t *testing.T) {
+	_, jwtMgr, mux, targetRepo := setupLLMTestWithTargetRepo(t)
+	tok := adminToken(t, jwtMgr)
+
+	url1 := "https://llm-host-1.example.com"
+	url2 := "https://llm-host-2.example.com"
+
+	k11, k12 := "key-h1-1", "key-h1-2"
+	k21 := "key-h2-1"
+	targets := []*db.LLMTarget{
+		{ID: uuid.NewString(), URL: url1, Name: "H1-K1", Provider: "openai", Weight: 1, APIKeyID: &k11},
+		{ID: uuid.NewString(), URL: url1, Name: "H1-K2", Provider: "openai", Weight: 1, APIKeyID: &k12},
+		{ID: uuid.NewString(), URL: url2, Name: "H2-K1", Provider: "openai", Weight: 1, APIKeyID: &k21},
+	}
+	for _, tgt := range targets {
+		if err := targetRepo.Create(tgt); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	body, _ := json.Marshal(llmDistributeRequest{
+		UserIDs:    []string{"u1", "u2", "u3", "u4", "u5", "u6"},
+		TargetURLs: []string{url1, url2},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/llm/distribute", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]int
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["assigned"] != 6 {
+		t.Errorf("assigned = %d, want 6 (3 targets, 6 users round-robin)", resp["assigned"])
+	}
 }

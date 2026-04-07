@@ -230,11 +230,15 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 解析 target URL → target ID
+	// 同一 URL 可能有多个 target（Issue #6），此时重定向错误页提示用户用 UUID。
 	targetID := targetURL
 	if h.llmTargetRepo != nil {
-		t, err := h.llmTargetRepo.GetByURL(targetURL)
-		if err == nil && t != nil {
-			targetID = t.ID
+		matches, err := h.llmTargetRepo.ListByURL(targetURL)
+		if err == nil && len(matches) == 1 {
+			targetID = matches[0].ID
+		} else if err == nil && len(matches) > 1 {
+			http.Redirect(w, r, "/dashboard/llm?error=target_url_ambiguous", http.StatusSeeOther)
+			return
 		}
 	}
 

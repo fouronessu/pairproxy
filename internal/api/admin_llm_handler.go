@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -142,15 +143,25 @@ func (h *AdminHandler) handleCreateLLMBinding(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 解析 target_id：若未提供，则通过 URL 查找
+	// 解析 target_id：若未提供，则通过 URL 查找。
+	// 同一 URL 可能有多个 APIKey 对应的 target（Issue #6），此时必须用 target_id 精确指定。
 	targetID := req.TargetID
 	if targetID == "" && h.llmTargetRepo != nil {
-		t, err := h.llmTargetRepo.GetByURL(req.TargetURL)
-		if err != nil || t == nil {
+		matches, err := h.llmTargetRepo.ListByURL(req.TargetURL)
+		if err != nil || len(matches) == 0 {
 			writeJSONError(w, http.StatusBadRequest, "target_not_found", "LLM target not found for given target_url")
 			return
 		}
-		targetID = t.ID
+		if len(matches) > 1 {
+			ids := make([]string, len(matches))
+			for i, m := range matches {
+				ids[i] = m.ID
+			}
+			writeJSONError(w, http.StatusConflict, "target_url_ambiguous",
+				"target_url matches multiple targets; use target_id instead: "+strings.Join(ids, ", "))
+			return
+		}
+		targetID = matches[0].ID
 	}
 	if targetID == "" {
 		// 无 llmTargetRepo 时退化到 URL（兼容测试环境）
@@ -229,11 +240,14 @@ func (h *AdminHandler) handleLLMDistribute(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 若 target_ids 为空，尝试从 target_urls 解析（兼容旧版）
+	// 同一 URL 可能匹配多个 target（Issue #6），全部展开参与均分。
 	if len(req.TargetIDs) == 0 && len(req.TargetURLs) > 0 && h.llmTargetRepo != nil {
 		for _, url := range req.TargetURLs {
-			t, err := h.llmTargetRepo.GetByURL(url)
-			if err == nil && t != nil {
-				req.TargetIDs = append(req.TargetIDs, t.ID)
+			matches, err := h.llmTargetRepo.ListByURL(url)
+			if err == nil {
+				for _, m := range matches {
+					req.TargetIDs = append(req.TargetIDs, m.ID)
+				}
 			}
 		}
 	}

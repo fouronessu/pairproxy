@@ -54,6 +54,19 @@ func (r *LLMTargetRepo) GetByURL(url string) (*LLMTarget, error) {
 	return &target, nil
 }
 
+// ListByURL 根据 URL 查询所有匹配的 LLM target（支持同 URL 多 Key 场景）。
+// 返回所有记录，调用方负责判断是否有歧义（len > 1）。
+func (r *LLMTargetRepo) ListByURL(url string) ([]*LLMTarget, error) {
+	var targets []*LLMTarget
+	if err := r.db.Where("url = ?", url).Order("created_at ASC").Find(&targets).Error; err != nil {
+		r.logger.Error("failed to list llm targets by url",
+			zap.String("url", url),
+			zap.Error(err))
+		return nil, fmt.Errorf("list llm targets by url: %w", err)
+	}
+	return targets, nil
+}
+
 // GetByURLAndAPIKeyID 根据 (url, api_key_id) 复合键查询 LLM target。
 // apiKeyID 为 nil 时匹配 api_key_id IS NULL 的记录。
 func (r *LLMTargetRepo) GetByURLAndAPIKeyID(url string, apiKeyID *string) (*LLMTarget, error) {
