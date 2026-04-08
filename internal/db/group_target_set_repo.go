@@ -140,7 +140,9 @@ func (r *GroupTargetSetRepo) ListByGroupID(groupID string) ([]GroupTargetSet, er
 	return sets, nil
 }
 
-// GetDefault 获取默认 target set
+// GetDefault 获取默认 target set（group_id IS NULL 且 is_default=true）。
+// ⚠️ 可能存在多个默认 set（名称不同），此方法返回第一个；若需要确定性，
+// 使用 ListDefaults() 并在调用方根据名称/策略选择。
 func (r *GroupTargetSetRepo) GetDefault() (*GroupTargetSet, error) {
 	var set GroupTargetSet
 	if err := r.db.First(&set, "is_default = ? AND group_id IS NULL", true).Error; err != nil {
@@ -151,6 +153,20 @@ func (r *GroupTargetSetRepo) GetDefault() (*GroupTargetSet, error) {
 		return nil, fmt.Errorf("get default target set: %w", err)
 	}
 	return &set, nil
+}
+
+// ListDefaults 获取所有全局默认 target set（group_id IS NULL 且 is_default=true）。
+// 允许多个默认 set（以不同 name 区分），调用方根据业务逻辑选择。
+func (r *GroupTargetSetRepo) ListDefaults() ([]GroupTargetSet, error) {
+	var sets []GroupTargetSet
+	if err := r.db.Where("is_default = ? AND group_id IS NULL", true).Find(&sets).Error; err != nil {
+		r.logger.Error("failed to list default target sets", zap.Error(err))
+		return nil, fmt.Errorf("list default target sets: %w", err)
+	}
+	r.logger.Debug("default target sets listed",
+		zap.Int("count", len(sets)),
+	)
+	return sets, nil
 }
 
 // Update 更新 target set

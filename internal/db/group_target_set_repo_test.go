@@ -719,3 +719,59 @@ func TestGroupTargetSetRepo_AddMember_TransactionalCheck(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, members, 1, "事务应确保要么全部成功，要么全部失败")
 }
+
+// TestGroupTargetSetRepo_ListDefaults 测试获取所有全局默认 target set
+// 问题 #30 修复：GetDefault() 在多个 is_default=true 时不确定，ListDefaults() 返回全部
+func TestGroupTargetSetRepo_ListDefaults_MultipleDefaults(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	// 创建多个 is_default=true、group_id=NULL 的 set（名称不同，合法）
+	set1 := &GroupTargetSet{
+		ID:        uuid.New().String(),
+		Name:      "default-set-1",
+		IsDefault: true,
+		Strategy:  "weighted_random",
+	}
+	set2 := &GroupTargetSet{
+		ID:        uuid.New().String(),
+		Name:      "default-set-2",
+		IsDefault: true,
+		Strategy:  "round_robin",
+	}
+	set3 := &GroupTargetSet{
+		ID:        uuid.New().String(),
+		Name:      "non-default-set",
+		IsDefault: false,
+		Strategy:  "weighted_random",
+	}
+
+	require.NoError(t, repo.Create(set1))
+	require.NoError(t, repo.Create(set2))
+	require.NoError(t, repo.Create(set3))
+
+	// ListDefaults 应该返回 2 个（set1 和 set2）
+	defaults, err := repo.ListDefaults()
+	require.NoError(t, err)
+	assert.Len(t, defaults, 2)
+
+	ids := make(map[string]bool)
+	for _, s := range defaults {
+		ids[s.ID] = true
+		assert.True(t, s.IsDefault, "ListDefaults 应只返回 is_default=true")
+		assert.Nil(t, s.GroupID, "ListDefaults 应只返回 group_id=NULL 的 set")
+	}
+	assert.True(t, ids[set1.ID])
+	assert.True(t, ids[set2.ID])
+	assert.False(t, ids[set3.ID], "非默认 set 不应出现")
+}
+
+// TestGroupTargetSetRepo_ListDefaults_Empty 测试无默认 set 时的情况
+func TestGroupTargetSetRepo_ListDefaults_Empty(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewGroupTargetSetRepo(testDB, zap.NewNop())
+
+	defaults, err := repo.ListDefaults()
+	require.NoError(t, err)
+	assert.Len(t, defaults, 0)
+}

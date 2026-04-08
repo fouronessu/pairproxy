@@ -228,14 +228,22 @@ func (s *GroupTargetSelector) SelectTarget(
 	// 获取 target set 以确定选择策略
 	var targetSet *db.GroupTargetSet
 	if groupID == "" {
-		ts, err := s.repo.GetDefault()
+		// 全局默认 set：可能有多个（不同 name），选 is_default=true 的第一个
+		defaults, err := s.repo.ListDefaults()
 		if err != nil {
-			s.logger.Error("failed to get default target set",
+			s.logger.Error("failed to list default target sets",
 				zap.Error(err),
 			)
-			return nil, false, fmt.Errorf("get default target set: %w", err)
+			return nil, false, fmt.Errorf("list default target sets: %w", err)
 		}
-		targetSet = ts
+		if len(defaults) > 0 {
+			targetSet = &defaults[0]
+			if len(defaults) > 1 {
+				s.logger.Warn("multiple default target sets found, using first",
+					zap.Int("count", len(defaults)),
+				)
+			}
+		}
 	} else {
 		// 获取该 group 的所有 target set，选择默认的或第一个
 		sets, err := s.repo.ListByGroupID(groupID)
