@@ -1,8 +1,8 @@
 # PairProxy 项目验收报告
 
 **项目名称**: PairProxy - 企业级 LLM API 代理网关
-**版本**: v2.24.1 (Model-Aware Routing + Reportgen CI Release)
-**提交日期**: 2026-04-05
+**版本**: v2.24.3 (Issue #6 修复 + reportgen 容错增强)
+**提交日期**: 2026-04-08
 **开发语言**: Go 1.24
 **代码规模**: 62,000+ 行非空非注释 Go 代码（含测试）
 
@@ -34,6 +34,7 @@ PairProxy 是一个企业级的 LLM API 代理网关系统，提供统一的 API
 - **WebUI 健康检查运行时同步 (v2.19.0)**: 修复通过 WebUI/API 添加 LLM target 后健康检查永远不健康的问题；每次 Create/Update/Delete/Enable/Disable 后 `SyncLLMTargets()` 同步 llmBalancer 和 llmHC；有 HealthCheckPath 的新节点以 Healthy=false 入场并立即触发单次主动检查（秒级，无需等 30s ticker）；存量节点健康/排水状态在 Sync 时完整保留
 - **Model-Aware Routing (v2.24.0)**: 每个 LLM target 可声明 `supported_models`（支持通配符）和 `auto_model`；网关按模型过滤候选池，双级 Fail-Open 保障请求不被阻塞；配置文件 targets 首次启动自动种子化入库（Config-as-Seed）
 - **Reportgen 可视化报告工具 (v2.24.x)**: 从 SQLite 数据库生成交互式 HTML 分析报告，16+ 可视化卡片，覆盖用户/运维/管理三视角；v2.24.1 起提供 6 平台预编译二进制，无需自行编译
+- **reportgen 直接 LLM 配置 + 容错增强 (v2.24.3)**: 新增 `-llm-url`/`-llm-key`/`-llm-model` 命令行参数，无需修改数据库即可指定 LLM 端点；完整容错机制（DB失败、LLM连接错、模板缺失、无数据），任何故障都优雅降级；自动支持 OpenAI 和 Anthropic 两种 API 格式
 
 ---
 

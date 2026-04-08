@@ -1,7 +1,7 @@
 # PairProxy 测试报告
 
-**生成时间**: 2026-04-05
-**测试版本**: v2.24.1 (Model-Aware Routing + Reportgen CI Release)
+**生成时间**: 2026-04-08
+**测试版本**: v2.24.3 (Issue #6 修复 + reportgen 容错增强)
 **测试环境**: Windows 11, Go 1.24
 
 ---
@@ -12,7 +12,7 @@
 
 | 测试类型 | 状态 | 测试数 | 通过 | 跳过 | 失败 | 说明 |
 |---------|------|--------|------|------|------|------|
-| 单元测试 (UT) | ✅ PASS | 1,956+ | 1,956+ | 0 | 0 | 含 Model-Aware Routing 单元测试（v2.24.0 累计） |
+| 单元测试 (UT) | ✅ PASS | 2,077+ | 2,077+ | 0 | 0 | 含 Issue #6 修复 + 复合约束一致性测试（v2.24.3 +50） |
 | 子测试 (subtests) | ✅ PASS | 580+ | 580+ | 0 | 0 | t.Run 表驱动子测试 |
 | 集成测试 | ✅ PASS | 8 | 8 | 0 | 0 | integration_by_GLM5_test.go |
 | E2E测试 (httptest) | ✅ PASS | 90+ | 90+ | 0 | 0 | 含 Direct Proxy E2E + 用户流量 + LLM Target |

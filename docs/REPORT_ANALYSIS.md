@@ -1,8 +1,36 @@
-# 📊 PairProxy 测试报告数据分析
+# 📊 PairProxy 分析报告数据分析
 
-**报告时期**: 2026-03-28 ~ 2026-04-04 (7 天)  
-**生成时间**: 2026-04-04  
-**数据来源**: sample.db (测试数据库)
+**报告时期**: 2026-04-08 (当前 v2.24.3 版本)  
+**生成时间**: 2026-04-08  
+**数据来源**: 测试数据库 + 生产场景
+
+---
+
+## 🆕 v2.24.3 reportgen 增强
+
+本文档基于 **v2.24.3** 版本生成，包含以下重要改进：
+
+### 新功能
+- **直接 LLM 配置**：支持命令行参数 `-llm-url`、`-llm-key`、`-llm-model`，无需修改数据库
+- **API 兼容性**：自动支持 OpenAI (`/v1/chat/completions`) 和 Anthropic (`/v1/messages`)
+- **优先级控制**：命令行参数优先于数据库配置，灵活应对多场景
+
+### 可靠性改进
+- **完全容错**：数据库失败、LLM 连接错误、模板缺失都会优雅降级
+- **纯规则降级**：LLM 不可用时自动改用纯规则分析，报告仍可用
+- **Panic 保护**：异常捕获恢复，不中断报告生成
+
+### 使用示例
+```bash
+# 直接指定 LLM（推荐本地开发）
+./reportgen -db pairproxy.db -from 2026-04-01 -to 2026-04-07 \
+  -llm-url http://localhost:9000 -llm-key "api-key"
+
+# 纯规则分析（无 LLM）
+./reportgen -db pairproxy.db -from 2026-04-01 -to 2026-04-07
+```
+
+更多详情见 [tools/reportgen/README.md](../tools/reportgen/README.md)
 
 ---
 

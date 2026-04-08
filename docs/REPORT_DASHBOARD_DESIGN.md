@@ -1,7 +1,7 @@
 # PairProxy 分析报告大屏设计文档
 
-> 版本: v1.0 | 日期: 2026-04-04  
-> 状态: 已完成 (v2.25.0)
+> 版本: v2.24.3 | 日期: 2026-04-08  
+> 状态: 已完成 (v2.25.0+) | 最后更新: 2026-04-08
 
 ---
 
@@ -529,36 +529,40 @@ internal/report/
 
 ### 7.2 CLI 命令
 
+#### 基础用法（从数据库配置读取 LLM）
 ```bash
 # 生成周报
-sproxy report generate \
-  --db ./data/pairproxy.db \
-  --period weekly \
-  --from 2026-04-01 \
-  --to 2026-04-07 \
-  --output report-2026-W14.html
+./reportgen -db ./pairproxy.db -from 2026-04-01 -to 2026-04-07 -output report-2026-W14.html
 
 # 生成月报
-sproxy report generate \
-  --db ./data/pairproxy.db \
-  --period monthly \
-  --from 2026-03-01 \
-  --to 2026-03-31 \
-  --output report-2026-03.html
-
-# 自定义周期
-sproxy report generate \
-  --db ./data/pairproxy.db \
-  --from 2026-03-15 \
-  --to 2026-04-15 \
-  --output report-custom.html
-
-# 仅输出 JSON 数据（供外部 BI 使用）
-sproxy report data \
-  --db ./data/pairproxy.db \
-  --period weekly \
-  --output report-data.json
+./reportgen -db ./pairproxy.db -from 2026-03-01 -to 2026-03-31 -output report-2026-03.html
 ```
+
+#### 新增：直接指定 LLM 端点（v2.24.3+）
+```bash
+# 使用本地 LLM（无需数据库配置）
+./reportgen -db ./pairproxy.db -from 2026-04-01 -to 2026-04-07 \
+  -llm-url http://localhost:9000 \
+  -llm-key "your-api-key" \
+  -llm-model gpt-4o-mini
+
+# 指定 Anthropic 端点
+./reportgen -db ./pairproxy.db -from 2026-04-01 -to 2026-04-07 \
+  -llm-url https://api.anthropic.com \
+  -llm-key "sk-ant-xxx" \
+  -llm-model claude-haiku-4-5-20251001
+```
+
+#### 纯规则分析（跳过 LLM）
+```bash
+# 不指定任何 LLM 参数时，自动降级为纯规则分析
+./reportgen -db ./pairproxy.db -from 2026-04-01 -to 2026-04-07
+```
+
+**优先级说明**：
+1. 命令行 `-llm-url` 和 `-llm-key` 优先使用
+2. 否则从数据库查询 LLM 配置（需 KEY_ENCRYPTION_KEY）
+3. 两者均未指定时，降级为纯规则洞察
 
 ### 7.3 核心数据流
 
@@ -592,7 +596,34 @@ sproxy report data \
 | 雷达图 | `type: 'radar'` | 多维对比 |
 | 仪表盘 | `type: 'gauge'` | 比率指标 |
 
-### 7.5 SQLite 关键查询示例
+### 7.6 容错机制 (v2.24.3+)
+
+reportgen 包含全面的容错设计，确保即使部分功能失败也能生成报告：
+
+| 故障场景 | 处理方案 | 结果 |
+|---------|---------|------|
+| 数据库查询失败 | 跳过该查询，继续处理其他数据 | 报告缺少部分图表，但仍可用 |
+| LLM 连接失败 | 自动降级到纯规则分析 | 无 AI 智能洞察，仅规则洞察 |
+| LLM 返回 HTTP 错误 | 记录错误，跳过 LLM 调用 | 规则洞察完整可用 |
+| LLM 调用异常 (panic) | defer/recover 捕获异常 | 不中断主流程 |
+| 报告模板缺失 | 使用内置最小 HTML 模板 | 基础报告结构可用 |
+| 时间段无数据 | 自动生成"暂无数据"提示 | 空报告但不出错 |
+
+**目标**：0 故障中断，所有失败都优雅降级
+
+### 7.7 LLM API 兼容性 (v2.24.3+)
+
+reportgen 自动识别 LLM 提供商并使用正确的 API：
+
+| Provider | API 端点 | 请求格式 | 认证方式 | 模型示例 |
+|----------|---------|---------|---------|----------|
+| **OpenAI** | `/v1/chat/completions` | messages | `Authorization: Bearer` | gpt-4o-mini |
+| **OpenAI 兼容** | `/v1/chat/completions` | messages | `Authorization: Bearer` | (任何兼容端点) |
+| **Anthropic** | `/v1/messages` | messages | `x-api-key` | claude-haiku-4-5 |
+
+**自动判断**：
+- 若 provider 被检测为 "anthropic" 且命令行未指定模型 → 使用 `/v1/messages`
+- 其他情况 → 默认使用 `/v1/chat/completions` (OpenAI 兼容格式)
 
 #### 7.5.1 箱线图数据（延迟分布按模型）
 
