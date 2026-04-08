@@ -79,6 +79,52 @@ func buildCProxy(t *testing.T, balancer lb.Balancer) (*httptest.Server, *auth.To
 	return srv, tokenStore, accessToken
 }
 
+// buildCProxyWithInstance is like buildCProxy but also returns the cproxy instance
+// so callers can inspect internal state like routingVersion for synchronization.
+func buildCProxyWithInstance(t *testing.T, balancer lb.Balancer) (*httptest.Server, *proxy.CProxy, *auth.TokenStore, string) {
+	t.Helper()
+	logger := zaptest.NewLogger(t)
+
+	// Issue a JWT for the fake user.
+	jwtMgr, err := auth.NewManager(logger, "failover-jwt-secret")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	accessToken, err := jwtMgr.Sign(auth.JWTClaims{
+		UserID:   "failover-user",
+		Username: "failover",
+		Role:     "user",
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("Sign JWT: %v", err)
+	}
+
+	tokenStore := auth.NewTokenStore(logger, 30*time.Minute)
+	tokenDir := t.TempDir()
+	tf := &auth.TokenFile{
+		AccessToken:  accessToken,
+		RefreshToken: "unused",
+		ExpiresAt:    time.Now().Add(24 * time.Hour),
+		ServerAddr:   "http://placeholder:9000",
+		Username:     "failover",
+	}
+	if err := tokenStore.Save(tokenDir, tf); err != nil {
+		t.Fatalf("Save token: %v", err)
+	}
+
+	cp, err := proxy.NewCProxy(logger, tokenStore, tokenDir, balancer, "")
+	if err != nil {
+		t.Fatalf("NewCProxy: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", cp.Handler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return srv, cp, tokenStore, accessToken
+}
+
 // mockSProxyWorker creates a mock s-proxy that accepts requests with the
 // X-PairProxy-Auth header and returns a minimal JSON response.
 // Returns the test server; caller is responsible for closing it.

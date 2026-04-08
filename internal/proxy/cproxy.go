@@ -743,3 +743,9 @@ func (cp *CProxy) Balancer() lb.Balancer {
 func (cp *CProxy) ApplyRoutingTable(rt *cluster.RoutingTable) {
 	cp.applyRoutingTable(rt)
 }
+
+// RoutingVersion returns the current routing table version for testing/synchronization
+func (cp *CProxy) RoutingVersion() int64 {
+	return cp.routingVersion.Load()
+}
+

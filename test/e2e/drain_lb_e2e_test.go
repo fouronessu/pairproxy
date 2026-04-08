@@ -466,7 +466,7 @@ func TestE2EUndrain(t *testing.T) {
 	balancer := lb.NewWeightedRandom([]lb.Target{
 		{ID: drainingNode.URL, Addr: drainingNode.URL, Weight: 1, Healthy: true},
 	})
-	cpSrv, _, accessToken := buildCProxy(t, balancer)
+	cpSrv, cp, _, accessToken := buildCProxyWithInstance(t, balancer)
 
 	// req1 → drainingNode (drain routing update applied)
 	resp1 := doClaudeRequest(t, cpSrv, accessToken)
@@ -491,7 +491,20 @@ func TestE2EUndrain(t *testing.T) {
 	// req4 from worker injects the undrain routing update (version=2).
 	// After this, drainingNode is healthy again.
 
-	// req5–req10: both nodes should be eligible; verify drainingNode is reachable again
+	// Wait for the routing version to be applied (version=2) before sending more requests.
+	// In -race mode, this propagation can be slow, so we poll with a reasonable timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cp.RoutingVersion() >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cp.RoutingVersion() < 2 {
+		t.Logf("warning: routing version did not reach 2 within timeout (got %d)", cp.RoutingVersion())
+	}
+
+	// req5–req14: both nodes should be eligible; verify drainingNode is reachable again
 	// by checking that at least one request is served by it in 10 attempts.
 	sawDrainingNodeAgain := false
 	for i := 5; i <= 14; i++ {
@@ -510,3 +523,4 @@ func TestE2EUndrain(t *testing.T) {
 		t.Error("after undrain, drainingNode never received a request in 10 tries (undrain may not have worked)")
 	}
 }
+
