@@ -325,3 +325,46 @@ func TestAPIKeyRepo_Assign_UserAndGroupSeparate(t *testing.T) {
 	require.NotNil(t, groupKey)
 	require.Equal(t, key.ID, groupKey.ID)
 }
+
+// TestAPIKeyRepo_FindByProviderAndValue_Found 测试查到唯一结果的情况
+func TestAPIKeyRepo_FindByProviderAndValue_Found(t *testing.T) {
+	repo, _, _, cleanup := setupAPIKeyTest(t)
+	defer cleanup()
+
+	key, err := repo.Create("test-key", "encrypted-value-abc", "anthropic")
+	require.NoError(t, err)
+
+	found, err := repo.FindByProviderAndValue("anthropic", "encrypted-value-abc")
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	require.Equal(t, key.ID, found.ID)
+}
+
+// TestAPIKeyRepo_FindByProviderAndValue_NotFound 测试未找到的情况
+func TestAPIKeyRepo_FindByProviderAndValue_NotFound(t *testing.T) {
+	repo, _, _, cleanup := setupAPIKeyTest(t)
+	defer cleanup()
+
+	found, err := repo.FindByProviderAndValue("anthropic", "nonexistent-encrypted-value")
+	require.NoError(t, err)
+	require.Nil(t, found)
+}
+
+// TestAPIKeyRepo_FindByProviderAndValue_DifferentProvider 测试 provider 不同时不匹配
+func TestAPIKeyRepo_FindByProviderAndValue_DifferentProvider(t *testing.T) {
+	repo, _, _, cleanup := setupAPIKeyTest(t)
+	defer cleanup()
+
+	_, err := repo.Create("test-key-openai", "same-encrypted-value", "openai")
+	require.NoError(t, err)
+
+	// 用 anthropic 查相同值，不应找到
+	found, err := repo.FindByProviderAndValue("anthropic", "same-encrypted-value")
+	require.NoError(t, err)
+	require.Nil(t, found, "不同 provider 不应匹配")
+
+	// 用 openai 查，应该找到
+	found, err = repo.FindByProviderAndValue("openai", "same-encrypted-value")
+	require.NoError(t, err)
+	require.NotNil(t, found, "正确 provider 应该匹配")
+}

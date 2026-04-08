@@ -223,14 +223,21 @@ func (r *APIKeyRepo) findByAssignment(id string, isUser bool) (*APIKey, error) {
 // FindByProviderAndValue 按 (provider, encrypted_value) 查找 API Key。
 // 用于 config-sync 时检查相同 key 值是否已存在，避免重复创建。
 // 返回 nil 表示不存在（不是错误）。
+// 防御性检查：若找到多条（无 UNIQUE 约束），记录 Error 并返回 ErrAmbiguous。
 func (r *APIKeyRepo) FindByProviderAndValue(provider, encryptedValue string) (*APIKey, error) {
-	var key APIKey
-	err := r.db.Where("provider = ? AND encrypted_value = ?", provider, encryptedValue).First(&key).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
+	var keys []APIKey
+	if err := r.db.Where("provider = ? AND encrypted_value = ?", provider, encryptedValue).Find(&keys).Error; err != nil {
 		return nil, fmt.Errorf("find api key by provider and value: %w", err)
 	}
-	return &key, nil
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if len(keys) > 1 {
+		r.logger.Error("data integrity issue: multiple api keys with same provider and encrypted_value",
+			zap.String("provider", provider),
+			zap.Int("count", len(keys)),
+		)
+		return nil, fmt.Errorf("ambiguous api key: %d keys found for provider %q", len(keys), provider)
+	}
+	return &keys[0], nil
 }
