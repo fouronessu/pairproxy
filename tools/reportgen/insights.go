@@ -176,7 +176,7 @@ func engagementInsight(data *ReportData) *Insight {
 			e.DAU, e.MAU, stickiness, sticknessComment(stickiness)))
 	}
 
-	// ROI: per-user cost
+	// ROI: per-user cost (guard against zero WAU)
 	if e.WAU > 0 && data.KPI.TotalCost > 0 {
 		perUserCost := data.KPI.TotalCost / float64(e.WAU)
 		lines = append(lines, fmt.Sprintf(

@@ -147,11 +147,16 @@ func GenerateLLMInsights(data *ReportData, params QueryParams) *Insight {
 	if err != nil {
 		if isContextTooLong(err) {
 			// Attempt 2: strip large detail arrays.
-			fmt.Fprintf(os.Stderr, "⚠️  LLM context too long, retrying without error/slow details...\n")
+			fmt.Fprintf(os.Stderr, "⚠️  LLM 上下文过长，重试（已裁剪详情数组）...\n")
 			result, err = callLLM(target, data, true)
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  LLM insights failed: %v\n", err)
+			var le *llmError
+			if errors.As(err, &le) {
+				fmt.Fprintf(os.Stderr, "⚠️  LLM 调用失败（HTTP %d），跳过 AI 洞察，使用纯规则分析\n", le.status)
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️  LLM 连接失败（%v），跳过 AI 洞察，使用纯规则分析\n", err)
+			}
 			return nil
 		}
 	}
@@ -165,7 +170,14 @@ func GenerateLLMInsights(data *ReportData, params QueryParams) *Insight {
 }
 
 // callLLM serialises ReportData (optionally stripping large arrays) and sends it to the LLM.
-func callLLM(target *llmTarget, data *ReportData, stripDetails bool) (string, error) {
+// Panics from JSON marshalling or unexpected states are recovered and returned as errors.
+func callLLM(target *llmTarget, data *ReportData, stripDetails bool) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("LLM call panicked: %v", r)
+		}
+	}()
+
 	payload := data
 	if stripDetails {
 		// Shallow copy and zero out the large detail slices.
