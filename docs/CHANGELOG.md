@@ -1,5 +1,48 @@
 # PairProxy Changelog
 
+## [v2.24.7] - 2026-04-14
+
+### ✨ New Features
+
+#### Direct Proxy API Key — Per-User Password Hash Derivation (v2.24.7)
+
+**Breaking change for Direct Proxy users (sk-pp- Key holders)**：API Key 生成策略已变更，**已有 sk-pp- Key 全部失效**，用户需重新获取。
+
+- **旧机制**：`HMAC-SHA256(username, keygenSecret)` — 所有用户的 Key 依赖同一个管理员 secret；轮换 secret 导致所有人 Key 同时失效
+- **新机制**：`HMAC-SHA256(username, user.PasswordHash)` — 每个用户的 Key 由自己的 bcrypt 密码哈希派生；改密码自动轮换 Key，互不影响
+- `auth.keygen_secret` 配置字段保留（兼容旧 YAML），不再读取或校验，可安全删除
+- LDAP 用户（无本地 PasswordHash）无法持有 sk-pp- Key
+
+#### 用户自助修改密码并更新 Key（Keygen WebUI）
+
+新增 `POST /keygen/api/change-password` 端点：
+
+- 用户通过 Keygen WebUI（`/keygen/`）自行修改密码
+- 修改成功后立即：① 更新数据库密码哈希 ② 清空旧 Key 缓存 ③ 返回新派生的 API Key
+- 客户端复制新 Key 后即可继续使用，无需管理员介入
+- LDAP 用户调用此端点返回 403（本地账号限定功能）
+- Worker 节点调用此端点返回 503（写操作仅限 Primary）
+
+#### Admin 重置密码后立即清空 Key 缓存
+
+管理员通过 `POST /api/admin/users/{id}/reset-password` 重置用户密码后，`AdminHandler` 现在会主动调用 `KeyCache.InvalidateByUserID(id)` 清除该用户的旧 Key，使旧 Key 即时失效，无需等待缓存 TTL。
+
+### 🔧 改动详情
+
+| 模块 | 变更 |
+|------|------|
+| `internal/keygen/validator.go` | `UserEntry` 新增 `PasswordHash` 字段；`ValidateAndGetUser` 签名去掉 `secret []byte`，改用 `u.PasswordHash` |
+| `internal/keygen/cache.go` | 新增 `InvalidateByUserID(userID string)` 方法 |
+| `internal/proxy/db_adapter.go` | `ListActive()` 填充 `UserEntry.PasswordHash` |
+| `internal/proxy/keyauth_middleware.go` | 去掉 `keygenSecret` 参数 |
+| `internal/proxy/direct_handler.go` | 去掉 `keygenSecret` 参数 |
+| `internal/api/keygen_handler.go` | 去掉 `keygenSecret`，新增 `SetKeyCache()`，新增 `handleChangePassword`，WebUI 更新 |
+| `internal/api/admin_handler.go` | 新增 `SetKeyCache()`，密码重置后调用 `InvalidateByUserID` |
+| `internal/config/config.go` | 移除 `keygen_secret` 校验要求（字段保留但已弃用） |
+| `cmd/sproxy/main.go` | 调整各 handler 初始化：移除 `keygenSecret`，调用 `SetKeyCache()` |
+
+---
+
 ## [v2.24.6] - 2026-04-10
 
 ### 🐛 Bug Fixes

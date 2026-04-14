@@ -12,6 +12,7 @@ import (
 
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/keygen"
 	"github.com/l17728/pairproxy/internal/proxy"
 )
 
@@ -40,12 +41,16 @@ type AdminHandler struct {
 	drainStatusFn     func() proxy.DrainStatus       // 可选，查询排水状态
 	adminPasswordHash string
 	tokenTTL          time.Duration
-	limiter           *LoginLimiter // 管理员登录失败速率限制
-	isWorkerNode      bool          // Worker 节点：写操作被封锁
+	limiter           *LoginLimiter    // 管理员登录失败速率限制
+	keyCache          *keygen.KeyCache // 可选，密码重置后立即踢出旧 API Key 缓存
+	isWorkerNode      bool             // Worker 节点：写操作被封锁
 }
 
 // SetTokenRepo 注入 RefreshTokenRepo（用于 token 吊销端点）
 func (h *AdminHandler) SetTokenRepo(repo *db.RefreshTokenRepo) { h.tokenRepo = repo }
+
+// SetKeyCache 注入 API Key 缓存（密码重置后立即踢出旧 Key，不等 TTL 自然过期）。
+func (h *AdminHandler) SetKeyCache(cache *keygen.KeyCache) { h.keyCache = cache }
 
 // SetWorkerMode 设置 Worker 节点模式：所有写操作将被 RequireWritableNode 中间件拒绝。
 func (h *AdminHandler) SetWorkerMode(isWorkerNode bool) {
@@ -406,6 +411,10 @@ func (h *AdminHandler) handleResetPassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.logger.Info("admin reset user password", zap.String("user_id", id))
+	// 密码改变后旧 API Key 立即失效（Key 由 PasswordHash 派生）
+	if h.keyCache != nil {
+		h.keyCache.InvalidateByUserID(id)
+	}
 	if aerr := h.auditRepo.Create("admin", "user.reset_password", id, ""); aerr != nil {
 		h.logger.Warn("audit write failed", zap.Error(aerr))
 	}

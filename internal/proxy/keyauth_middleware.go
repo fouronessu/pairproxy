@@ -31,11 +31,11 @@ type ActiveUserLister interface {
 //
 // 中间件链：cache.Get → (hit) IsUserActive 二次校验 → (miss) ListActive + ValidateAndGetUser → cache.Set → 注入 claims → next
 // 缓存命中后仍调用 IsUserActive 校验，确保用户被禁用后立即拒绝，不等 TTL 自然过期。
+// API Key 由用户自己的 PasswordHash 派生（HMAC-SHA256），与共享密钥无关。
 func NewKeyAuthMiddleware(
 	logger *zap.Logger,
 	users ActiveUserLister,
 	cache *keygen.KeyCache,
-	keygenSecret string,
 	next http.Handler,
 ) http.Handler {
 	log := logger.Named("key_auth")
@@ -114,7 +114,7 @@ func NewKeyAuthMiddleware(
 				return
 			}
 
-			matched, valErr := keygen.ValidateAndGetUser(token, activeUsers, []byte(keygenSecret))
+			matched, valErr := keygen.ValidateAndGetUser(token, activeUsers)
 			if valErr != nil {
 				log.Warn("direct auth: key collision",
 					zap.String("request_id", reqID),

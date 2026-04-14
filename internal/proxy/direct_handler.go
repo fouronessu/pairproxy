@@ -45,7 +45,6 @@ func NewDirectProxyHandler(
 	server DirectServer,
 	users ActiveUserLister,
 	cache *keygen.KeyCache,
-	keygenSecret string,
 ) *DirectProxyHandler {
 	log := logger.Named("direct_proxy")
 
@@ -73,7 +72,7 @@ func NewDirectProxyHandler(
 
 	// 组装中间件链（从内到外）：core → KeyAuth → RequestID → Recovery
 	buildChain := func(core http.Handler) http.Handler {
-		withAuth := NewKeyAuthMiddleware(log, users, cache, keygenSecret, core)
+		withAuth := NewKeyAuthMiddleware(log, users, cache, core)
 		withReqID := RequestIDMiddleware(log, withAuth)
 		return RecoveryMiddleware(log, withReqID)
 	}

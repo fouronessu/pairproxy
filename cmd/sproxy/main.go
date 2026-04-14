@@ -614,6 +614,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	adminHandler.SetLLMBindingRepo(llmBindingRepo)
 	adminHandler.SetLLMHealthFn(sp.LLMTargetStatuses)
 	adminHandler.SetTokenRepo(tokenRepo)
+	adminHandler.SetKeyCache(apiKeyCache) // 密码重置后立即踢出旧 API Key 缓存
 	logger.Info("LLM binding repo configured")
 
 	// LLM Target 管理仓库
@@ -947,7 +948,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// 构建用户查询适配器和直连处理器（在此预构建 handler）
 	dbUserLister := proxy.NewDBUserLister(userRepo)
-	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache, cfg.Auth.KeygenSecret)
+	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache)
 	openAIDirectHandler := directHandler.HandlerOpenAI()
 	anthropicDirectHandler := directHandler.HandlerAnthropic()
 
@@ -993,7 +994,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	logger.Info("hybrid route registered", zap.String("path", "/v1/"), zap.String("modes", "cproxy+direct"))
 
 	// Key 生成 WebUI（用户自助服务）
-	keygenAPIHandler := api.NewKeygenHandler(logger, userRepo, jwtMgr, cfg.Auth.KeygenSecret)
+	keygenAPIHandler := api.NewKeygenHandler(logger, userRepo, jwtMgr)
+	keygenAPIHandler.SetKeyCache(apiKeyCache) // 改密后立即踢出旧 Key 缓存
 	keygenAPIHandler.SetWorkerMode(isWorker)
 	keygenAPIHandler.RegisterRoutes(mux)
 	logger.Info("keygen WebUI registered at /keygen/")

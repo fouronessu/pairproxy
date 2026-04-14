@@ -286,11 +286,8 @@ func (c *SProxyFullConfig) Validate() error {
 		errs = append(errs, "auth.jwt_secret should be at least 32 characters for security (current length is too short)")
 	}
 
-	if c.Auth.KeygenSecret == "" {
-		errs = append(errs, "auth.keygen_secret is required (set ${KEYGEN_SECRET} or provide the value directly)")
-	} else if len(c.Auth.KeygenSecret) < 32 {
-		errs = append(errs, "auth.keygen_secret should be at least 32 characters for security (current length is too short)")
-	}
+	// keygen_secret 已弃用：API Key 现由用户自己的 PasswordHash 派生，不再依赖共享密钥。
+	// 保留字段以兼容旧配置文件，但不再校验或使用。
 
 	switch c.Database.Driver {
 	case "postgres":

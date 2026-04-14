@@ -16,28 +16,32 @@ import (
 // KeygenHandler 提供用户自助 API Key 生成功能。
 //
 // 路由：
-//   - GET  /keygen/              — 静态 HTML 页面
-//   - POST /keygen/api/login     — 用户名+密码登录，返回 key + session token
-//   - POST /keygen/api/regenerate — 用 session token 重新生成 key
+//   - GET  /keygen/                    — 静态 HTML 页面
+//   - POST /keygen/api/login           — 用户名+密码登录，返回 key + session token
+//   - POST /keygen/api/regenerate      — 用 session token 查看当前 key
+//   - POST /keygen/api/change-password — 修改密码，旧 Key 立即失效，返回新 Key
 //
 // 与 Dashboard 完全独立：使用普通用户密码，不使用管理员密码。
+// API Key 由用户自己的 PasswordHash 派生（HMAC-SHA256），改密码即自动轮换 Key。
 type KeygenHandler struct {
 	logger       *zap.Logger
 	userRepo     *db.UserRepo
 	jwtMgr       *auth.Manager
-	keygenSecret string
+	keyCache     *keygen.KeyCache // 可选，改密后立即踢出旧 Key 缓存
 	isWorkerNode bool
 }
 
 // NewKeygenHandler 创建 KeygenHandler。
-func NewKeygenHandler(logger *zap.Logger, userRepo *db.UserRepo, jwtMgr *auth.Manager, keygenSecret string) *KeygenHandler {
+func NewKeygenHandler(logger *zap.Logger, userRepo *db.UserRepo, jwtMgr *auth.Manager) *KeygenHandler {
 	return &KeygenHandler{
-		logger:       logger.Named("keygen_handler"),
-		userRepo:     userRepo,
-		jwtMgr:       jwtMgr,
-		keygenSecret: keygenSecret,
+		logger:   logger.Named("keygen_handler"),
+		userRepo: userRepo,
+		jwtMgr:   jwtMgr,
 	}
 }
+
+// SetKeyCache 注入 API Key 缓存（改密后立即踢出旧 Key，不等 TTL 自然过期）。
+func (h *KeygenHandler) SetKeyCache(cache *keygen.KeyCache) { h.keyCache = cache }
 
 // SetWorkerMode 设置 Worker 节点模式；Worker 节点不允许写操作（API Key 生成/重置）。
 //
@@ -62,9 +66,11 @@ func (h *KeygenHandler) RegisterRoutes(mux *http.ServeMux) {
 		})
 		mux.Handle("POST /keygen/api/login", blockHandler)
 		mux.Handle("POST /keygen/api/regenerate", blockHandler)
+		mux.Handle("POST /keygen/api/change-password", blockHandler)
 	} else {
 		mux.HandleFunc("POST /keygen/api/login", h.handleLogin)
 		mux.HandleFunc("POST /keygen/api/regenerate", h.handleRegenerate)
+		mux.HandleFunc("POST /keygen/api/change-password", h.handleChangePassword)
 	}
 }
 
@@ -131,8 +137,8 @@ func (h *KeygenHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 生成 API Key
-	apiKey, err := keygen.GenerateKey(req.Username, []byte(h.keygenSecret))
+	// 生成 API Key（由用户自己的 PasswordHash 派生，改密码即自动轮换）
+	apiKey, err := keygen.GenerateKey(req.Username, []byte(user.PasswordHash))
 	if err != nil {
 		h.logger.Error("keygen login: key generation failed",
 			zap.String("username", req.Username), zap.Error(err))
@@ -189,24 +195,138 @@ func (h *KeygenHandler) handleRegenerate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	apiKey, err := keygen.GenerateKey(claims.Username, []byte(h.keygenSecret))
+	// 从 DB 重新取用户以获取最新 PasswordHash（密码可能已被管理员重置）
+	user, err := h.userRepo.GetByID(claims.UserID)
+	if err != nil {
+		h.logger.Error("keygen regenerate: user lookup failed",
+			zap.String("user_id", claims.UserID), zap.Error(err))
+		writeKeygenError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
+		return
+	}
+	if user == nil || !user.IsActive {
+		h.logger.Warn("keygen regenerate: user not found or inactive",
+			zap.String("user_id", claims.UserID))
+		writeKeygenError(w, http.StatusUnauthorized, "account_disabled", "user account not found or disabled")
+		return
+	}
+
+	apiKey, err := keygen.GenerateKey(user.Username, []byte(user.PasswordHash))
 	if err != nil {
 		h.logger.Error("keygen regenerate: key generation failed",
-			zap.String("username", claims.Username), zap.Error(err))
+			zap.String("username", user.Username), zap.Error(err))
 		writeKeygenError(w, http.StatusInternalServerError, "key_gen_error", "failed to generate API key")
 		return
 	}
 
-	h.logger.Info("keygen regenerate: new key generated",
-		zap.String("username", claims.Username),
-		zap.String("user_id", claims.UserID),
+	h.logger.Info("keygen regenerate: key derived",
+		zap.String("username", user.Username),
+		zap.String("user_id", user.ID),
 	)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(keygenRegenerateResponse{
-		Username: claims.Username,
+		Username: user.Username,
 		Key:      apiKey,
-		Message:  "新 Key 已生成",
+		Message:  "Key 已获取（由密码派生，改密码可轮换）",
+	})
+}
+
+// keygenChangePasswordRequest 修改密码请求体
+type keygenChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+// keygenChangePasswordResponse 修改密码响应体
+type keygenChangePasswordResponse struct {
+	Key     string `json:"key"`
+	Message string `json:"message"`
+}
+
+func (h *KeygenHandler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeKeygenError(w, http.StatusUnauthorized, "missing_token", "Authorization: Bearer <token> required")
+		return
+	}
+	claims, err := h.jwtMgr.Parse(strings.TrimPrefix(authHeader, "Bearer "))
+	if err != nil {
+		h.logger.Warn("keygen change-password: invalid session token", zap.Error(err))
+		writeKeygenError(w, http.StatusUnauthorized, "session_expired", "会话已过期，请重新登录")
+		return
+	}
+
+	var req keygenChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeKeygenError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.OldPassword == "" || req.NewPassword == "" {
+		writeKeygenError(w, http.StatusBadRequest, "missing_fields", "old_password and new_password required")
+		return
+	}
+	if req.OldPassword == req.NewPassword {
+		writeKeygenError(w, http.StatusBadRequest, "same_password", "新密码不能与旧密码相同")
+		return
+	}
+
+	// 从 DB 取用户（仅本地账户可修改密码）
+	user, err := h.userRepo.GetByID(claims.UserID)
+	if err != nil {
+		h.logger.Error("keygen change-password: db error", zap.String("user_id", claims.UserID), zap.Error(err))
+		writeKeygenError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
+		return
+	}
+	if user == nil || !user.IsActive {
+		writeKeygenError(w, http.StatusUnauthorized, "account_disabled", "账户不存在或已被禁用")
+		return
+	}
+	if user.AuthProvider != "local" {
+		writeKeygenError(w, http.StatusForbidden, "ldap_user", "LDAP 用户请通过 LDAP 管理平台修改密码")
+		return
+	}
+
+	// 验证旧密码
+	if !auth.VerifyPassword(h.logger, user.PasswordHash, req.OldPassword) {
+		h.logger.Warn("keygen change-password: wrong old password", zap.String("username", user.Username))
+		writeKeygenError(w, http.StatusUnauthorized, "wrong_password", "旧密码错误")
+		return
+	}
+
+	// Hash 新密码并更新 DB
+	newHash, err := auth.HashPassword(h.logger, req.NewPassword)
+	if err != nil {
+		writeKeygenError(w, http.StatusBadRequest, "invalid_password", "invalid new password")
+		return
+	}
+	if err := h.userRepo.UpdatePassword(user.ID, newHash); err != nil {
+		h.logger.Error("keygen change-password: update failed", zap.String("user_id", user.ID), zap.Error(err))
+		writeKeygenError(w, http.StatusInternalServerError, "internal_error", "failed to update password")
+		return
+	}
+
+	// 旧 Key 立即失效
+	if h.keyCache != nil {
+		h.keyCache.InvalidateByUserID(user.ID)
+	}
+
+	// 用新 PasswordHash 派生新 Key
+	newKey, err := keygen.GenerateKey(user.Username, []byte(newHash))
+	if err != nil {
+		h.logger.Error("keygen change-password: key generation failed", zap.String("username", user.Username), zap.Error(err))
+		writeKeygenError(w, http.StatusInternalServerError, "key_gen_error", "failed to generate new API key")
+		return
+	}
+
+	h.logger.Info("keygen change-password: success",
+		zap.String("username", user.Username),
+		zap.String("user_id", user.ID),
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(keygenChangePasswordResponse{
+		Key:     newKey,
+		Message: "密码已修改，新 Key 已生成，旧 Key 立即失效",
 	})
 }
 
@@ -232,11 +352,15 @@ const keygenHTML = `<!DOCTYPE html>
   button:hover{background:#4338ca}
   button.secondary{background:#6b7280}
   button.secondary:hover{background:#4b5563}
+  button.danger{background:#dc2626}
+  button.danger:hover{background:#b91c1c}
   .key-box{font-family:monospace;background:#f8f9fa;border:1px solid #e9ecef;padding:14px;border-radius:6px;word-break:break-all;font-size:13px;margin:8px 0}
   .section{border-top:1px solid #eee;margin-top:24px;padding-top:16px}
   pre{background:#1e1e2e;color:#cdd6f4;padding:14px;border-radius:6px;font-size:12px;overflow-x:auto}
   .hidden{display:none}
   .error{color:#dc2626;font-size:13px;margin-top:6px}
+  .success{color:#16a34a;font-size:13px;margin-top:6px}
+  .tip{color:#6b7280;font-size:12px;margin-top:4px}
 </style>
 </head>
 <body>
@@ -252,10 +376,9 @@ const keygenHTML = `<!DOCTYPE html>
 
 <div id="key-section" class="hidden">
   <p>欢迎，<strong id="welcome-name"></strong>！</p>
-  <p>您的 API Key：</p>
+  <p>您的 API Key（由密码派生，改密码自动更新）：</p>
   <div class="key-box" id="api-key-display"></div>
   <button onclick="copyKey()">复制</button>
-  <button class="secondary" onclick="regenerate()">重新生成</button>
 
   <div class="section">
     <h3>Claude Code 配置</h3>
@@ -264,7 +387,20 @@ const keygenHTML = `<!DOCTYPE html>
     <pre id="oc-snippet"></pre>
   </div>
 
-  <button class="secondary" style="margin-top:16px" onclick="logout()">退出登录</button>
+  <div class="section">
+    <h3>修改密码 <span class="tip">（修改后旧 Key 立即失效，将生成新 Key）</span></h3>
+    <label>当前密码</label><input type="password" id="old-password" autocomplete="current-password">
+    <label>新密码</label><input type="password" id="new-password" autocomplete="new-password">
+    <label>确认新密码</label><input type="password" id="confirm-password" autocomplete="new-password">
+    <br><br>
+    <button class="danger" onclick="changePassword()">修改密码并更新 Key</button>
+    <div class="error" id="change-error"></div>
+    <div class="success hidden" id="change-success"></div>
+  </div>
+
+  <div class="section">
+    <button class="secondary" onclick="logout()">退出登录</button>
+  </div>
 </div>
 
 <script>
@@ -305,16 +441,53 @@ function copyKey() {
   navigator.clipboard.writeText(currentKey).then(() => alert('已复制到剪贴板'));
 }
 
-async function regenerate() {
-  if (!confirm('重新生成后旧 Key 将失效。继续？')) return;
-  const r = await fetch('/keygen/api/regenerate', {
-    method: 'POST',
-    headers: {'Authorization': 'Bearer ' + sessionToken}
-  });
-  const data = await r.json();
-  if (!r.ok) { alert(data.message || '重新生成失败'); return; }
-  showKey(document.getElementById('welcome-name').textContent, data.key);
-  alert('新 Key 已生成');
+async function changePassword() {
+  const oldPassword = document.getElementById('old-password').value;
+  const newPassword = document.getElementById('new-password').value;
+  const confirmPassword = document.getElementById('confirm-password').value;
+  const errEl = document.getElementById('change-error');
+  const okEl = document.getElementById('change-success');
+  errEl.textContent = '';
+  okEl.classList.add('hidden');
+
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    errEl.textContent = '请填写所有密码字段'; return;
+  }
+  if (newPassword !== confirmPassword) {
+    errEl.textContent = '两次输入的新密码不一致'; return;
+  }
+  if (newPassword === oldPassword) {
+    errEl.textContent = '新密码不能与旧密码相同'; return;
+  }
+  if (newPassword.length < 8) {
+    errEl.textContent = '新密码至少 8 个字符'; return;
+  }
+
+  try {
+    const r = await fetch('/keygen/api/change-password', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Authorization': 'Bearer ' + sessionToken},
+      body: JSON.stringify({old_password: oldPassword, new_password: newPassword})
+    });
+    const data = await r.json();
+    if (!r.ok) { errEl.textContent = data.message || '修改失败'; return; }
+
+    // 更新显示的 Key
+    currentKey = data.key;
+    document.getElementById('api-key-display').textContent = data.key;
+    document.getElementById('cc-snippet').textContent =
+      'export ANTHROPIC_BASE_URL=' + BASE + '/anthropic\nexport ANTHROPIC_API_KEY=' + data.key;
+    document.getElementById('oc-snippet').textContent =
+      'export OPENAI_BASE_URL=' + BASE + '/v1\nexport OPENAI_API_KEY=' + data.key;
+
+    // 清空密码输入框
+    document.getElementById('old-password').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('confirm-password').value = '';
+
+    okEl.textContent = '✓ 密码已修改，新 Key 已更新，请复制并更新您的配置';
+    okEl.classList.remove('hidden');
+  } catch(e) { errEl.textContent = '网络错误'; }
 }
 
 function logout() {
@@ -322,6 +495,11 @@ function logout() {
   document.getElementById('key-section').classList.add('hidden');
   document.getElementById('login-section').classList.remove('hidden');
   document.getElementById('password').value = '';
+  document.getElementById('old-password').value = '';
+  document.getElementById('new-password').value = '';
+  document.getElementById('confirm-password').value = '';
+  document.getElementById('change-error').textContent = '';
+  document.getElementById('change-success').classList.add('hidden');
 }
 </script>
 </body>

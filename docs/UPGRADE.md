@@ -366,20 +366,52 @@ sproxy admin corpus list
 
 ---
 
-### v2.15.0 — HMAC-SHA256 Keygen
+### v2.24.7 — Per-User API Key Derivation + 自助改密码
 
-**无数据库 Schema 变更**，但 API Key 生成算法改变，**已有 sk-pp- Key 将失效**，需通知用户重新获取。
+**无数据库 Schema 变更**，但 API Key 生成算法改变，**所有已有 sk-pp- Key 全部失效**，需通知用户重新获取。
 
-**新增必填配置字段**
+**算法变更**
+
+| 版本 | Key 派生公式 |
+|------|-------------|
+| v2.15.0 – v2.24.6 | `HMAC-SHA256(username, keygenSecret)` |
+| v2.24.7+ | `HMAC-SHA256(username, user.PasswordHash)` |
+
+**配置变更**
+
+`auth.keygen_secret` 字段已弃用，不再读取或验证。可从配置文件删除，也可保留（会被忽略）：
 
 ```yaml
 auth:
-  keygen_secret: "${KEYGEN_SECRET}"   # ≥32字符，必填（v2.15.0+）
+  # keygen_secret 已弃用（v2.24.7+），可删除或保留（不影响启动）
+  # keygen_secret: "${KEYGEN_SECRET}"
 ```
 
-> ⚠️ 升级前必须在配置文件中添加 `auth.keygen_secret`，否则配置验证失败，服务无法启动。
-
 **升级步骤**
+
+1. 替换二进制，重启服务（无需任何配置改动）
+2. **通知所有 Direct Proxy 用户**（sk-pp- Key 用户）重新获取 Key：
+   - 用户访问 `https://sproxy.company.com/keygen/`，登录后即可看到新 Key
+   - 或管理员生成：`sproxy admin keygen --user <username>`
+
+**新增功能**
+
+- 用户可通过 Keygen WebUI 自助修改密码，改密后立即获得新 Key，无需管理员介入
+- 管理员重置用户密码后，旧 Key 立即失效（KeyCache 主动清除）
+
+**回滚说明**
+
+降级到 v2.24.6 或 v2.15.0 时，需在 `sproxy.yaml` 中重新添加 `auth.keygen_secret`，否则旧版本配置验证失败。
+
+---
+
+### v2.15.0 — HMAC-SHA256 Keygen
+
+> ⚠️ 已被 v2.24.7 覆盖：从 v2.14.x 升级时，直接跳至 v2.24.7 升级步骤，无需分两步。
+
+**历史说明**：v2.15.0 引入 HMAC-SHA256 算法（替换旧指纹算法）并要求 `auth.keygen_secret` 必填。v2.24.7 进一步将派生密钥改为 per-user PasswordHash，`keygen_secret` 因此变为弃用字段。
+
+**升级步骤（仅当目标版本为 v2.15.0–v2.24.6 时参考）**
 
 1. 生成 keygen secret：
    ```bash
