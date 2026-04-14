@@ -356,6 +356,30 @@ func (r *UsageRepo) Query(filter UsageFilter) ([]UsageLog, error) {
 	return logs, nil
 }
 
+// CountLogs 统计满足 filter 条件的日志总数（不含 Limit/Offset）
+func (r *UsageRepo) CountLogs(filter UsageFilter) (int64, error) {
+	query := r.db.Model(&UsageLog{})
+
+	if filter.UserID != "" {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.From != nil {
+		query = query.Where("created_at >= ?", toUTC(*filter.From))
+	}
+	if filter.To != nil {
+		query = query.Where("created_at <= ?", toUTC(*filter.To))
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("count usage logs: %w", err)
+	}
+	return count, nil
+}
+
 // SumTokens 聚合指定用户在时间范围内的 token 总量
 func (r *UsageRepo) SumTokens(userID string, from, to time.Time) (inputSum, outputSum int64, err error) {
 	from, to = toUTC(from), toUTC(to)

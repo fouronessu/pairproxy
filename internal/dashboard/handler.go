@@ -130,6 +130,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/dashboard/active-users", h.requireSession(http.HandlerFunc(h.handleDashboardActiveUsers)))
 	mux.Handle("GET /api/dashboard/user-quota", h.requireSession(http.HandlerFunc(h.handleDashboardUserQuota)))
 	mux.Handle("GET /api/dashboard/user-history", h.requireSession(http.HandlerFunc(h.handleDashboardUserHistory)))
+	mux.Handle("GET /api/dashboard/user-logs", h.requireSession(http.HandlerFunc(h.handleDashboardUserLogs)))
 
 	// 需要 session + 可写节点（写操作）
 	mux.Handle("POST /dashboard/users", rw(http.HandlerFunc(h.handleCreateUser)))
