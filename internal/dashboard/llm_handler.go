@@ -120,19 +120,6 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.logger.Error("list llm bindings", zap.Error(err))
 		} else {
-			// 填充 TargetURL（gorm:"-" 字段，List() 不返回，从 allTargets 中反查）
-			targetIDToURL := make(map[string]string, len(allTargets))
-			for _, t := range allTargets {
-				targetIDToURL[t.ID] = t.URL
-			}
-			for i := range bindings {
-				if url, ok := targetIDToURL[bindings[i].TargetID]; ok {
-					bindings[i].TargetURL = url
-				} else {
-					// 兼容旧数据：target_id 可能存的是 URL（config-sourced）
-					bindings[i].TargetURL = bindings[i].TargetID
-				}
-			}
 			data.Bindings = bindings
 			for _, b := range bindings {
 				data.BoundCount[b.TargetID]++

@@ -118,7 +118,8 @@ type LLMBinding struct {
 	// UNIQUE(user_id, target_id) 和 UNIQUE(group_id, target_id) 由复合索引强制：
 	// 因 NULL 的 UNIQUE 特殊性（NULL != NULL），同时依赖应用层 Set() 的 delete-then-insert 保证
 	// TargetURL 仅用于展示（通过 JOIN 填充，不存储于此列）
-	TargetURL string `gorm:"-"`
+	// TargetURL 冗余存储：便于直接查看数据库及展示时减少 JOIN；由 Set() 负责写入。
+	TargetURL string `gorm:"not null;index"`
 	CreatedAt time.Time
 }
 
