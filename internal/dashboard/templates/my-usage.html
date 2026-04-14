@@ -5,9 +5,14 @@
 <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6">
   <div class="flex items-center gap-4">
     <label class="text-sm font-medium text-gray-700">选择用户：</label>
-    <select id="userSelect" class="flex-1 max-w-md border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-      <option value="">加载中...</option>
-    </select>
+    <div class="relative flex-1 max-w-md" id="userCombobox">
+      <input type="text" id="userSearchInput" autocomplete="off" placeholder="输入用户名搜索..."
+        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 pr-8">
+      <span id="userSearchClear" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer text-lg leading-none select-none">×</span>
+      <div id="userDropdown"
+        class="hidden absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+      </div>
+    </div>
     <span id="selectedUserInfo" class="text-xs text-gray-500"></span>
   </div>
 </div>
@@ -83,33 +88,120 @@
 <script>
 let usageChart;
 let currentUsername = ''; // 当前选中的用户名
+let allUsers = [];        // 全量用户列表缓存
 
 // 加载活跃用户列表（管理员）
 async function loadActiveUsers() {
+  const input = document.getElementById('userSearchInput');
+  input.placeholder = '加载中...';
+  input.disabled = true;
   try {
     const res = await fetch('/api/dashboard/active-users?days=30');
     if (!res.ok) {
       console.error('Failed to load active users:', res.status);
       return;
     }
-    const users = await res.json();
-
-    const select = document.getElementById('userSelect');
-    select.innerHTML = '<option value="">-- 选择用户 --</option>';
-    users.forEach(u => {
-      const opt = document.createElement('option');
-      opt.value = u.username;
-      opt.textContent = `${u.username}${u.group_name ? ' (' + u.group_name + ')' : ''}`;
-      select.appendChild(opt);
-    });
-
-    if (users.length === 0) {
-      select.innerHTML = '<option value="">暂无活跃用户</option>';
-    }
+    allUsers = await res.json();
   } catch (err) {
     console.error('Failed to load active users:', err);
+  } finally {
+    input.disabled = false;
+    input.placeholder = allUsers.length ? '输入用户名搜索...' : '暂无活跃用户';
   }
 }
+
+// 渲染下拉列表
+function renderDropdown(keyword) {
+  const dropdown = document.getElementById('userDropdown');
+  const kw = keyword.trim().toLowerCase();
+  const matched = kw
+    ? allUsers.filter(u => u.username.toLowerCase().includes(kw))
+    : allUsers;
+
+  if (matched.length === 0) {
+    dropdown.innerHTML = '<div class="px-3 py-2 text-sm text-gray-400">无匹配用户</div>';
+  } else {
+    dropdown.innerHTML = matched.map(u => {
+      const label = u.group_name ? `${u.username} <span class="text-gray-400 text-xs">(${u.group_name})</span>` : u.username;
+      const highlight = kw
+        ? u.username.replace(new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+            '<mark class="bg-indigo-100 text-indigo-700 rounded px-0.5">$1</mark>')
+        : u.username;
+      const labelFull = u.group_name
+        ? `${highlight} <span class="text-gray-400 text-xs">(${u.group_name})</span>`
+        : highlight;
+      return `<div class="px-3 py-2 text-sm cursor-pointer hover:bg-indigo-50 transition-colors"
+                   data-value="${u.username}" onmousedown="selectUser('${u.username}')">${labelFull}</div>`;
+    }).join('');
+  }
+  dropdown.classList.remove('hidden');
+}
+
+// 选中用户
+function selectUser(username) {
+  currentUsername = username;
+  document.getElementById('userSearchInput').value = username;
+  document.getElementById('userSearchClear').classList.remove('hidden');
+  document.getElementById('userDropdown').classList.add('hidden');
+  document.getElementById('selectedUserInfo').textContent = `正在查看: ${username}`;
+  loadQuotaStatus();
+  loadUsageHistory(parseInt(document.getElementById('historyDaysSelect').value));
+  loadRecentRequests();
+}
+
+// 清除选择
+function clearUser() {
+  currentUsername = '';
+  document.getElementById('userSearchInput').value = '';
+  document.getElementById('userSearchClear').classList.add('hidden');
+  document.getElementById('userDropdown').classList.add('hidden');
+  document.getElementById('selectedUserInfo').textContent = '';
+}
+
+// 输入框事件
+document.getElementById('userSearchInput').addEventListener('input', function() {
+  document.getElementById('userSearchClear').classList.toggle('hidden', !this.value);
+  if (currentUsername && this.value !== currentUsername) {
+    currentUsername = '';
+    document.getElementById('selectedUserInfo').textContent = '';
+  }
+  renderDropdown(this.value);
+});
+
+document.getElementById('userSearchInput').addEventListener('focus', function() {
+  renderDropdown(this.value);
+});
+
+document.getElementById('userSearchInput').addEventListener('blur', function() {
+  // 延迟关闭，给 mousedown 事件留时间触发
+  setTimeout(() => document.getElementById('userDropdown').classList.add('hidden'), 150);
+});
+
+document.getElementById('userSearchInput').addEventListener('keydown', function(e) {
+  const dropdown = document.getElementById('userDropdown');
+  const items = dropdown.querySelectorAll('[data-value]');
+  const active = dropdown.querySelector('.bg-indigo-100:not(mark)');
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const next = active ? active.nextElementSibling : items[0];
+    if (active) active.classList.remove('bg-indigo-100', 'text-indigo-700');
+    if (next) { next.classList.add('bg-indigo-100', 'text-indigo-700'); next.scrollIntoView({ block: 'nearest' }); }
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prev = active ? active.previousElementSibling : items[items.length - 1];
+    if (active) active.classList.remove('bg-indigo-100', 'text-indigo-700');
+    if (prev) { prev.classList.add('bg-indigo-100', 'text-indigo-700'); prev.scrollIntoView({ block: 'nearest' }); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const focused = dropdown.querySelector('.bg-indigo-100:not(mark)');
+    if (focused) selectUser(focused.dataset.value);
+  } else if (e.key === 'Escape') {
+    dropdown.classList.add('hidden');
+  }
+});
+
+document.getElementById('userSearchClear').addEventListener('click', clearUser);
 
 // 加载配额状态
 async function loadQuotaStatus() {
@@ -208,18 +300,6 @@ function updateUsageChart(data) {
 // 时间范围选择器
 document.getElementById('historyDaysSelect').addEventListener('change', (e) => {
   loadUsageHistory(parseInt(e.target.value));
-});
-
-// 用户选择器
-document.getElementById('userSelect').addEventListener('change', (e) => {
-  currentUsername = e.target.value;
-  if (currentUsername) {
-    document.getElementById('selectedUserInfo').textContent = `正在查看: ${currentUsername}`;
-    loadQuotaStatus();
-    loadUsageHistory(parseInt(document.getElementById('historyDaysSelect').value));
-  } else {
-    document.getElementById('selectedUserInfo').textContent = '';
-  }
 });
 
 // 页面加载时初始化（先加载用户列表，等待选择后再加载数据）
