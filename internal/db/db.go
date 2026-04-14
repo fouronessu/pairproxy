@@ -219,6 +219,14 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 	logger = logger.Named("migrate")
 	logger.Info("running database migrations")
 
+	// 数据迁移前置：llm_bindings.target_id 和 group_target_set_members.target_id
+	// 在旧版本中不存在（旧版使用 target_url 字段）。
+	// AutoMigrate 向已有行的表添加 NOT NULL 列时会直接报错，必须先以 nullable 形式预建列，
+	// AutoMigrate 发现列已存在时会跳过，不再尝试施加 NOT NULL 约束。
+	// 回填逻辑（migrateBindingTargetID / migrateGroupTargetSetMemberTargetID）在后面执行。
+	preMigrateNullableColumn(logger, db, "llm_bindings", "target_id")
+	preMigrateNullableColumn(logger, db, "group_target_set_members", "target_id")
+
 	// 数据清理：users.external_id 旧版为 string（空字符串默认），新版为 *string（NULL 默认）。
 	// AutoMigrate 将列改为 nullable 但不会把 "" 转成 NULL，导致
 	// (auth_provider, external_id) 复合唯一索引因重复的 ('local','') 创建失败。
@@ -296,8 +304,61 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 		logger.Warn("group_target_set_members target_id migration failed (non-fatal)", zap.Error(err))
 	}
 
+	// 回填完成后补 NOT NULL 约束（预建列时为 nullable，数据填充后恢复意图约束）
+	postMigrateSetNotNull(logger, db, "llm_bindings", "target_id")
+	postMigrateSetNotNull(logger, db, "group_target_set_members", "target_id")
+
 	logger.Info("database migrations completed")
 	return nil
+}
+
+// preMigrateNullableColumn 在 AutoMigrate 之前将指定列以 nullable TEXT 形式预加入表中。
+// 目的：防止 AutoMigrate 向已有行的表添加 NOT NULL 列时因现存 NULL 值报错。
+// AutoMigrate 发现列已存在时会跳过，不会再尝试施加 NOT NULL 约束。
+// 若表不存在（全新安装）则忽略错误，AutoMigrate 会完整建表。
+func preMigrateNullableColumn(logger *zap.Logger, db *gorm.DB, table, column string) {
+	var sql string
+	switch DriverName(db) {
+	case "postgres":
+		sql = fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s TEXT`, table, column)
+	default: // sqlite
+		sql = fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT`, table, column)
+	}
+	if err := db.Exec(sql).Error; err != nil {
+		// 表不存在或列已存在均属正常（全新安装 / 已迁移），记 debug 后继续
+		logger.Debug("preMigrateNullableColumn skipped (table absent or column exists)",
+			zap.String("table", table),
+			zap.String("column", column),
+			zap.Error(err),
+		)
+	} else {
+		logger.Info("pre-migrated nullable column",
+			zap.String("table", table),
+			zap.String("column", column),
+		)
+	}
+}
+
+// postMigrateSetNotNull 在数据回填完成后为指定列补设 NOT NULL 约束。
+// 仅在 PostgreSQL 下执行（SQLite 不支持 ALTER COLUMN SET NOT NULL）。
+// 若列仍有 NULL 值（孤儿行未删净），记 warn 后继续，不阻断启动。
+func postMigrateSetNotNull(logger *zap.Logger, db *gorm.DB, table, column string) {
+	if DriverName(db) != "postgres" {
+		return // SQLite 不支持此语法，且 SQLite FK 约束由 PRAGMA 层面保证
+	}
+	sql := fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s SET NOT NULL`, table, column)
+	if err := db.Exec(sql).Error; err != nil {
+		logger.Warn("postMigrateSetNotNull failed (column may still contain NULLs)",
+			zap.String("table", table),
+			zap.String("column", column),
+			zap.Error(err),
+		)
+	} else {
+		logger.Debug("NOT NULL constraint applied",
+			zap.String("table", table),
+			zap.String("column", column),
+		)
+	}
 }
 
 // migrateBindingTargetID 将 llm_bindings 表中的 target_url（旧列）迁移到 target_id（新列）。
