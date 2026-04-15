@@ -627,10 +627,10 @@ const keygenHTML = `<!DOCTYPE html>
       <!-- 说明 -->
       <div class="mt-3 text-xs text-gray-500 space-y-1.5">
         <p>· Key 由您的密码派生，修改密码后自动更新，旧 Key 立即失效。</p>
-        <p>· 使用 <strong>Claude Code</strong> 时，需将以下内容写入 <code class="bg-gray-100 px-1 rounded">settings.json</code>：</p>
+        <p>· 使用 <strong>Claude Code</strong> 时，需将以下内容写入 <code class="bg-gray-100 px-1 rounded">~/.claude/settings.json</code>：</p>
         <div class="ml-3 space-y-1">
-          <p class="text-gray-400">Windows：<code class="bg-gray-100 px-1 rounded text-gray-600">%APPDATA%\Claude\claude_desktop_config.json</code></p>
-          <p class="text-gray-400">Linux / macOS：<code class="bg-gray-100 px-1 rounded text-gray-600">~/.config/claude/claude_desktop_config.json</code></p>
+          <p class="text-gray-400">Windows：<code class="bg-gray-100 px-1 rounded text-gray-600">%USERPROFILE%\.claude\settings.json</code></p>
+          <p class="text-gray-400">Linux / macOS：<code class="bg-gray-100 px-1 rounded text-gray-600">~/.claude/settings.json</code></p>
         </div>
         <pre id="ccSettingsSnippet" class="mt-2 text-xs bg-gray-900 text-green-400 rounded-lg px-4 py-3 overflow-x-auto whitespace-pre"></pre>
       </div>
@@ -822,7 +822,7 @@ function updateKeyDisplay(key) {
   currentKey = key;
   document.getElementById('apiKeyDisplay').textContent = key;
   document.getElementById('ccSettingsSnippet').textContent =
-    '{\n  "apiKey": "' + key + '",\n  "baseUrl": "' + BASE + '/anthropic"\n}';
+    '{\n  "env": {\n    "ANTHROPIC_API_KEY": "' + key + '"\n  }\n}';
 }
 
 function logout() {

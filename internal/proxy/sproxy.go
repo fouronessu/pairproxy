@@ -1674,6 +1674,27 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// conversionNone 时仍需应用 model mapping（直传场景：客户端与 target 同协议）
+	if convDir == conversionNone && len(bodyBytes) > 0 && requestedModel != "" {
+		modelMapping := sp.modelMappingForURL(firstInfo.URL)
+		if len(modelMapping) > 0 {
+			mappedModel := mapModelName(requestedModel, modelMapping)
+			if mappedModel != requestedModel {
+				rewritten := rewriteModelInBody(bodyBytes, requestedModel, mappedModel)
+				if len(rewritten) > 0 {
+					bodyBytes = rewritten
+					r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+					r.ContentLength = int64(len(bodyBytes))
+					sp.logger.Debug("model name mapped (passthrough)",
+						zap.String("request_id", reqID),
+						zap.String("original_model", requestedModel),
+						zap.String("mapped_model", mappedModel),
+					)
+				}
+			}
+		}
+	}
+
 	// 补充 span attributes（target 确定后）
 	span.SetAttributes(
 		attribute.String("provider", targetProvider),
