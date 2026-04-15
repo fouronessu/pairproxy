@@ -614,28 +614,58 @@ const keygenHTML = `<!DOCTYPE html>
 
     <!-- API Key 卡片 -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <div class="flex items-start justify-between mb-4">
-        <div>
-          <h2 class="text-sm font-semibold text-gray-700">我的 API Key</h2>
-          <p class="text-xs text-gray-400 mt-0.5">Key 由密码派生，修改密码后自动更新</p>
-        </div>
-        <button onclick="copyKey()" id="copyBtn"
+      <div class="flex items-start justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-700">我的 API Key</h2>
+        <button id="copyBtn" onclick="copyKey()"
           class="text-xs text-indigo-600 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition-colors">
           复制
         </button>
       </div>
       <div id="apiKeyDisplay"
-        class="font-mono text-sm bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 break-all text-gray-700 select-all">
+        class="font-mono text-sm bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 break-all text-gray-700 cursor-text">
       </div>
-      <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- 说明 -->
+      <div class="mt-3 text-xs text-gray-500 space-y-1.5">
+        <p>· Key 由您的密码派生，修改密码后自动更新，旧 Key 立即失效。</p>
+        <p>· 使用 <strong>Claude Code</strong> 时，需将以下内容写入 <code class="bg-gray-100 px-1 rounded">settings.json</code>：</p>
+        <div class="ml-3 space-y-1">
+          <p class="text-gray-400">Windows：<code class="bg-gray-100 px-1 rounded text-gray-600">%APPDATA%\Claude\claude_desktop_config.json</code></p>
+          <p class="text-gray-400">Linux / macOS：<code class="bg-gray-100 px-1 rounded text-gray-600">~/.config/claude/claude_desktop_config.json</code></p>
+        </div>
+        <pre id="ccSettingsSnippet" class="mt-2 text-xs bg-gray-900 text-green-400 rounded-lg px-4 py-3 overflow-x-auto whitespace-pre"></pre>
+      </div>
+    </div>
+
+    <!-- 修改密码 -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+      <div class="mb-4">
+        <h2 class="text-sm font-semibold text-gray-700">修改密码</h2>
+        <p class="text-xs text-gray-400 mt-0.5">修改密码后，API Key 自动更新，旧 Key 立即失效</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <p class="text-xs text-gray-500 font-medium mb-1.5">Claude Code 配置</p>
-          <pre id="ccSnippet" class="text-xs bg-gray-900 text-green-400 rounded-lg px-4 py-3 overflow-x-auto"></pre>
+          <label class="block text-xs font-medium text-gray-700 mb-1">当前密码</label>
+          <input type="password" id="oldPassword" autocomplete="current-password"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <div>
-          <p class="text-xs text-gray-500 font-medium mb-1.5">OpenCode 配置</p>
-          <pre id="ocSnippet" class="text-xs bg-gray-900 text-green-400 rounded-lg px-4 py-3 overflow-x-auto"></pre>
+          <label class="block text-xs font-medium text-gray-700 mb-1">新密码</label>
+          <input type="password" id="newPassword" autocomplete="new-password"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">确认新密码</label>
+          <input type="password" id="confirmPassword" autocomplete="new-password"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+      </div>
+      <div class="mt-4 flex items-center gap-3 flex-wrap">
+        <button onclick="changePassword()"
+          class="text-sm bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors">
+          修改密码并更新 Key
+        </button>
+        <span id="changePwdError" class="hidden text-sm text-red-600"></span>
+        <span id="changePwdSuccess" class="hidden text-sm text-green-600"></span>
       </div>
     </div>
 
@@ -732,39 +762,6 @@ const keygenHTML = `<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- 修改密码 -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <div class="mb-4">
-        <h2 class="text-sm font-semibold text-gray-700">修改密码</h2>
-        <p class="text-xs text-gray-400 mt-0.5">修改密码后，API Key 自动更新，旧 Key 立即失效</p>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-gray-700 mb-1">当前密码</label>
-          <input type="password" id="oldPassword" autocomplete="current-password"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-700 mb-1">新密码</label>
-          <input type="password" id="newPassword" autocomplete="new-password"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-700 mb-1">确认新密码</label>
-          <input type="password" id="confirmPassword" autocomplete="new-password"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-        </div>
-      </div>
-      <div class="mt-4 flex items-center gap-3 flex-wrap">
-        <button onclick="changePassword()"
-          class="text-sm bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors">
-          修改密码并更新 Key
-        </button>
-        <span id="changePwdError" class="hidden text-sm text-red-600"></span>
-        <span id="changePwdSuccess" class="hidden text-sm text-green-600"></span>
-      </div>
-    </div>
-
   </main>
 </div>
 
@@ -815,15 +812,17 @@ function showDashboard(username, key) {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('dashScreen').classList.remove('hidden');
   document.getElementById('welcomeName').textContent = username;
-  document.getElementById('apiKeyDisplay').textContent = key;
-  document.getElementById('ccSnippet').textContent =
-    'export ANTHROPIC_BASE_URL=' + BASE + '/anthropic\nexport ANTHROPIC_API_KEY=' + key;
-  document.getElementById('ocSnippet').textContent =
-    'export OPENAI_BASE_URL=' + BASE + '/v1\nexport OPENAI_API_KEY=' + key;
-
+  updateKeyDisplay(key);
   loadQuota();
   loadHistory(parseInt(document.getElementById('historyDaysSelect').value));
   loadLogs(1);
+}
+
+function updateKeyDisplay(key) {
+  currentKey = key;
+  document.getElementById('apiKeyDisplay').textContent = key;
+  document.getElementById('ccSettingsSnippet').textContent =
+    '{\n  "apiKey": "' + key + '",\n  "baseUrl": "' + BASE + '/anthropic"\n}';
 }
 
 function logout() {
@@ -838,15 +837,36 @@ function logout() {
 // ── API Key 复制 ──────────────────────────────────────────────────────────────
 
 function copyKey() {
-  navigator.clipboard.writeText(currentKey).then(() => {
-    const btn = document.getElementById('copyBtn');
-    btn.textContent = '已复制 ✓';
-    btn.classList.add('bg-green-50', 'text-green-600', 'border-green-200');
-    setTimeout(() => {
-      btn.textContent = '复制';
-      btn.classList.remove('bg-green-50', 'text-green-600', 'border-green-200');
-    }, 2000);
-  });
+  const text = document.getElementById('apiKeyDisplay').textContent.trim();
+  if (!text) return;
+  const btn = document.getElementById('copyBtn');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => flashCopied(btn)).catch(() => fallbackCopy(text, btn));
+  } else {
+    fallbackCopy(text, btn);
+  }
+}
+
+function fallbackCopy(text, btn) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); flashCopied(btn); } catch(e) { btn.textContent = '复制失败'; }
+  document.body.removeChild(ta);
+}
+
+function flashCopied(btn) {
+  const orig = btn.textContent;
+  btn.textContent = '已复制 ✓';
+  btn.classList.add('bg-green-50', 'text-green-600', 'border-green-200');
+  setTimeout(() => {
+    btn.textContent = orig;
+    btn.classList.remove('bg-green-50', 'text-green-600', 'border-green-200');
+  }, 2000);
 }
 
 // ── 配额状态 ──────────────────────────────────────────────────────────────────
@@ -1053,13 +1073,7 @@ async function changePassword() {
       return;
     }
 
-    currentKey = data.key;
-    document.getElementById('apiKeyDisplay').textContent = data.key;
-    document.getElementById('ccSnippet').textContent =
-      'export ANTHROPIC_BASE_URL=' + BASE + '/anthropic\nexport ANTHROPIC_API_KEY=' + data.key;
-    document.getElementById('ocSnippet').textContent =
-      'export OPENAI_BASE_URL=' + BASE + '/v1\nexport OPENAI_API_KEY=' + data.key;
-
+    updateKeyDisplay(data.key);
     document.getElementById('oldPassword').value = '';
     document.getElementById('newPassword').value = '';
     document.getElementById('confirmPassword').value = '';
