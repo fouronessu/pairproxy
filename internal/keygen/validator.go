@@ -9,11 +9,12 @@ import (
 // UserEntry 是 ValidateAndGetUser 所需的最小用户信息，
 // 解耦了 keygen 包与 db 包的直接依赖。
 type UserEntry struct {
-	ID           string
-	Username     string
-	PasswordHash string  // bcrypt 哈希；LDAP 用户为空，无法持有 sk-pp- Key
-	IsActive     bool
-	GroupID      *string // 所属分组 ID（可为 nil）
+	ID               string
+	Username         string
+	PasswordHash     string  // bcrypt 哈希；LDAP 用户为空，无法持有 sk-pp- Key
+	IsActive         bool
+	GroupID          *string // 所属分组 ID（可为 nil）
+	LegacyKeyRevoked bool    // true = 用户已主动改密，不再接受旧版 keygenSecret 派生的 Key
 }
 
 // IsValidFormat 检查 Key 是否满足格式要求（前缀、总长度、字符集）。
@@ -103,7 +104,8 @@ func ValidateWithLegacySecret(key string, users []UserEntry, secret []byte) *Use
 	}
 	for i := range users {
 		u := &users[i]
-		if !u.IsActive {
+		if !u.IsActive || u.LegacyKeyRevoked {
+			// 用户已主动改密，旧版 keygenSecret Key 不再有效
 			continue
 		}
 		expectedKey, err := GenerateKey(u.Username, secret)

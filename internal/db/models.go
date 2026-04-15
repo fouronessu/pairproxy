@@ -28,8 +28,9 @@ type User struct {
 	IsActive     bool       `gorm:"default:true"`
 	AuthProvider string  `gorm:"default:'local';uniqueIndex:idx_user_authprovider_username;uniqueIndex:idx_user_authprovider_externalid"` // "local" | "ldap"；与 Username 和 ExternalID 各自组合唯一
 	ExternalID   *string `gorm:"index;uniqueIndex:idx_user_authprovider_externalid"`            // 外部系统唯一 ID（LDAP: uid）；与 AuthProvider 组合唯一；NULL 表示无外部 ID（本地用户）
-	CreatedAt    time.Time
-	LastLoginAt  *time.Time
+	LegacyKeyRevoked bool      `gorm:"default:false"` // true = 用户已主动改密，旧版 keygenSecret 派生的 Key 不再有效
+	CreatedAt        time.Time
+	LastLoginAt      *time.Time
 }
 
 // RefreshToken 刷新令牌（用于撤销）
