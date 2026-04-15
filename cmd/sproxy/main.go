@@ -967,7 +967,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		legacyKeygenSecret = []byte(cfg.Auth.KeygenSecret)
 	}
 	dbUserLister := proxy.NewDBUserLister(userRepo)
-	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache, legacyKeygenSecret)
+	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache, legacyKeygenSecret, quotaChecker)
 	openAIDirectHandler := directHandler.HandlerOpenAI()
 	anthropicDirectHandler := directHandler.HandlerAnthropic()
 
