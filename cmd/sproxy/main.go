@@ -960,8 +960,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// 构建用户查询适配器和直连处理器（在此预构建 handler）
+	// legacySecret：旧版系统用 keygen_secret 原始值派生 Key，新版改为 per-user PasswordHash。
+	// 若配置中仍有 keygen_secret（>= 32 字节），将其作为兜底校验密钥，保证旧 Key 继续有效。
+	var legacyKeygenSecret []byte
+	if len(cfg.Auth.KeygenSecret) >= 32 {
+		legacyKeygenSecret = []byte(cfg.Auth.KeygenSecret)
+	}
 	dbUserLister := proxy.NewDBUserLister(userRepo)
-	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache)
+	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache, legacyKeygenSecret)
 	openAIDirectHandler := directHandler.HandlerOpenAI()
 	anthropicDirectHandler := directHandler.HandlerAnthropic()
 

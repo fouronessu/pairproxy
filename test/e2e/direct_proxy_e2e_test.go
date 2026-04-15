@@ -89,7 +89,7 @@ func setupDirectProxyTest(t *testing.T) (spURL string, aliceKey string, cleanup 
 	apiKeyCache, cacheErr := keygen.NewKeyCache(100, 0) // TTL=0 永不过期
 	require.NoError(t, cacheErr)
 	dbLister := proxy.NewDBUserLister(userRepo)
-	directH := proxy.NewDirectProxyHandler(logger, sp, dbLister, apiKeyCache)
+	directH := proxy.NewDirectProxyHandler(logger, sp, dbLister, apiKeyCache, nil)
 
 	// 6. 构建测试 HTTP 服务
 	mux := http.NewServeMux()
@@ -247,7 +247,7 @@ func TestDirectProxy_AnthropicPathRewrite(t *testing.T) {
 	defer func() { cancel(); writer.Wait() }()
 
 	cache, _ := keygen.NewKeyCache(10, 0)
-	dh := proxy.NewDirectProxyHandler(logger, sp, proxy.NewDBUserLister(userRepo), cache)
+	dh := proxy.NewDirectProxyHandler(logger, sp, proxy.NewDBUserLister(userRepo), cache, nil)
 	mux := http.NewServeMux()
 	mux.Handle("/anthropic/", dh.HandlerAnthropic())
 	server := httptest.NewServer(mux)

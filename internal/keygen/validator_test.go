@@ -253,3 +253,65 @@ func TestValidateAndGetUser_PerUserKey_DifferentPasswords(t *testing.T) {
 	require.NotNil(t, u)
 	assert.Equal(t, "bob", u.Username)
 }
+
+// ---- ValidateWithLegacySecret ----
+
+const legacySecret = "legacy-keygen-secret-must-be-at-least-32-bytes!!"
+
+// TestValidateWithLegacySecret_Match 验证：旧版共享 secret 派生的 Key 可以通过兜底校验。
+func TestValidateWithLegacySecret_Match(t *testing.T) {
+	key, err := keygen.GenerateKey("alice", []byte(legacySecret))
+	require.NoError(t, err)
+
+	users := []keygen.UserEntry{
+		{ID: "u1", Username: "alice", PasswordHash: testPasswordHash, IsActive: true},
+	}
+
+	// per-user 校验：key 是旧 secret 派生的，PasswordHash 不同，应不匹配
+	u, valErr := keygen.ValidateAndGetUser(key, users)
+	require.NoError(t, valErr)
+	assert.Nil(t, u, "per-user 校验不应匹配旧版 key")
+
+	// legacy 兜底：匹配
+	matched := keygen.ValidateWithLegacySecret(key, users, []byte(legacySecret))
+	require.NotNil(t, matched)
+	assert.Equal(t, "alice", matched.Username)
+}
+
+// TestValidateWithLegacySecret_WrongSecret 验证：不同的 secret 不匹配。
+func TestValidateWithLegacySecret_WrongSecret(t *testing.T) {
+	key, err := keygen.GenerateKey("alice", []byte(legacySecret))
+	require.NoError(t, err)
+
+	users := []keygen.UserEntry{
+		{ID: "u1", Username: "alice", PasswordHash: testPasswordHash, IsActive: true},
+	}
+
+	wrongSecret := "wrong-secret-but-still-at-least-32-bytes-long!!!"
+	matched := keygen.ValidateWithLegacySecret(key, users, []byte(wrongSecret))
+	assert.Nil(t, matched)
+}
+
+// TestValidateWithLegacySecret_ShortSecret 验证：secret < 32 字节时直接返回 nil。
+func TestValidateWithLegacySecret_ShortSecret(t *testing.T) {
+	key, err := keygen.GenerateKey("alice", []byte(legacySecret))
+	require.NoError(t, err)
+
+	users := []keygen.UserEntry{
+		{ID: "u1", Username: "alice", IsActive: true},
+	}
+	matched := keygen.ValidateWithLegacySecret(key, users, []byte("short"))
+	assert.Nil(t, matched)
+}
+
+// TestValidateWithLegacySecret_InactiveUser 验证：非活跃用户被跳过。
+func TestValidateWithLegacySecret_InactiveUser(t *testing.T) {
+	key, err := keygen.GenerateKey("alice", []byte(legacySecret))
+	require.NoError(t, err)
+
+	users := []keygen.UserEntry{
+		{ID: "u1", Username: "alice", IsActive: false},
+	}
+	matched := keygen.ValidateWithLegacySecret(key, users, []byte(legacySecret))
+	assert.Nil(t, matched)
+}

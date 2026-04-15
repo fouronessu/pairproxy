@@ -78,7 +78,7 @@ func ValidateAndGetUser(key string, users []UserEntry) (*UserEntry, error) {
 		}
 
 		if key == expectedKey {
-			zap.L().Debug("api key validated (hmac)",
+			zap.L().Debug("api key validated (hmac per-user)",
 				zap.String("username", u.Username),
 			)
 			return u, nil
@@ -87,4 +87,35 @@ func ValidateAndGetUser(key string, users []UserEntry) (*UserEntry, error) {
 
 	// 无匹配用户，静默返回（不记录日志，防止信息泄露）
 	return nil, nil
+}
+
+// ValidateWithLegacySecret 使用旧版共享 keygenSecret 做向后兼容校验。
+//
+// 旧版算法：HMAC-SHA256(key=keygenSecret原始字节, msg=username)。
+// 升级到 per-user-password 方案后，若用户尚未重新获取新 Key，
+// 其旧 Key 可通过此函数继续通过校验。
+// 调用方应在 ValidateAndGetUser 返回 nil 后作为兜底尝试。
+//
+// secret 长度 < 32 时直接返回 nil（不满足 GenerateKey 要求）。
+func ValidateWithLegacySecret(key string, users []UserEntry, secret []byte) *UserEntry {
+	if len(secret) < 32 || !IsValidFormat(key) {
+		return nil
+	}
+	for i := range users {
+		u := &users[i]
+		if !u.IsActive {
+			continue
+		}
+		expectedKey, err := GenerateKey(u.Username, secret)
+		if err != nil {
+			continue
+		}
+		if key == expectedKey {
+			zap.L().Debug("api key validated (hmac legacy secret)",
+				zap.String("username", u.Username),
+			)
+			return u
+		}
+	}
+	return nil
 }

@@ -31,12 +31,14 @@ type ActiveUserLister interface {
 //
 // 中间件链：cache.Get → (hit) IsUserActive 二次校验 → (miss) ListActive + ValidateAndGetUser → cache.Set → 注入 claims → next
 // 缓存命中后仍调用 IsUserActive 校验，确保用户被禁用后立即拒绝，不等 TTL 自然过期。
-// API Key 由用户自己的 PasswordHash 派生（HMAC-SHA256），与共享密钥无关。
+// API Key 由用户自己的 PasswordHash 派生（HMAC-SHA256）；legacySecret 非 nil 时还会用旧版
+// 共享密钥做兜底校验，保证从旧版迁移时已分发的 Key 仍可使用。
 func NewKeyAuthMiddleware(
 	logger *zap.Logger,
 	users ActiveUserLister,
 	cache *keygen.KeyCache,
 	next http.Handler,
+	legacySecret []byte,
 ) http.Handler {
 	log := logger.Named("key_auth")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +125,16 @@ func NewKeyAuthMiddleware(
 				writeJSONError(w, http.StatusUnauthorized, "key_collision",
 					"api key matches multiple users; contact administrator")
 				return
+			}
+			// 新版 Key 未命中时，用旧版共享 keygenSecret 兜底（向后兼容旧版迁移场景）
+			if matched == nil && len(legacySecret) >= 32 {
+				matched = keygen.ValidateWithLegacySecret(token, activeUsers, legacySecret)
+				if matched != nil {
+					log.Info("direct auth: key validated via legacy secret (consider regenerating key)",
+						zap.String("request_id", reqID),
+						zap.String("username", matched.Username),
+					)
+				}
 			}
 			if matched == nil {
 				log.Warn("direct auth: no matching user",

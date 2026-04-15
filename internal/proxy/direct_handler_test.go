@@ -43,7 +43,7 @@ func TestDirectHandler_AnthropicPathRewrite(t *testing.T) {
 		{ID: "u1", Username: "alice", PasswordHash: testPasswordHash, IsActive: true},
 	}}
 
-	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache)
+	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache, nil)
 	handler := dh.HandlerAnthropic()
 
 	req := httptest.NewRequest("POST", "/anthropic/v1/messages", strings.NewReader(`{}`))
@@ -68,7 +68,7 @@ func TestDirectHandler_OpenAIPathUnchanged(t *testing.T) {
 		{ID: "u1", Username: "alice", PasswordHash: testPasswordHash, IsActive: true},
 	}}
 
-	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache)
+	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache, nil)
 	handler := dh.HandlerOpenAI()
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
@@ -85,7 +85,7 @@ func TestDirectHandler_HandlerBuiltOnce(t *testing.T) {
 	users := &fakeUserLookup{}
 	cache, err := keygen.NewKeyCache(10, time.Minute)
 	require.NoError(t, err)
-	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache)
+	dh := proxy.NewDirectProxyHandler(zap.NewNop(), mock, users, cache, nil)
 
 	// HandlerOpenAI/HandlerAnthropic 返回指针类型，可通过 assert.Same 验证同一实例
 	h1 := dh.HandlerOpenAI()
