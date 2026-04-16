@@ -729,14 +729,40 @@ keygen verification failed  {"error": "invalid key format"}
 
 **v2.15.0 升级后**，早期版本生成的 sk-pp- Key 将失效（算法从指纹嵌入改为 HMAC-SHA256）。
 
+**v2.24.7 升级后**，Key 派生算法改为基于用户 PasswordHash，所有现有 Key 失效，用户需重新获取。
+
 用户需重新获取 Key：
 ```bash
 # 管理员为用户生成新 Key
 sproxy admin keygen --user alice
 
-# 或用户通过 Dashboard 自助获取
-# 访问 /dashboard/my-usage → API Key 管理
+# 或用户通过 Keygen WebUI 自助获取
+# 访问 https://sproxy.company.com/keygen/
 ```
+
+### 12.3 改密后旧 Key 仍可访问（v2.24.8 前）
+
+**症状**：用户修改密码后，持有旧 Key 的客户端仍然可以正常请求。
+
+**原因**：v2.24.8 以前，`ValidateWithLegacySecret` 兜底路径不检查密码是否已更改。
+
+**v2.24.8+ 行为**：调用 `UpdatePassword` 时自动设置 `legacy_key_revoked=true`，该用户的 legacy Key 即时失效。用户需通过 Keygen WebUI 重新获取基于新密码哈希派生的 Key。
+
+### 12.4 配额限制对直连路径不生效（v2.24.8 前）
+
+**症状**：为用户设置了 daily/monthly token 上限或 RPM 限制，但 sk-pp- 直连请求不受影响，日志中无配额拦截记录。
+
+**原因**：v2.24.8 以前，`DirectProxyHandler` 的中间件链未包含 `QuotaMiddleware`。
+
+**v2.24.8+ 行为**：配额中间件已挂载至直连路径，行为与 JWT 路径一致。升级后配额立即生效，请提前告知用户。
+
+### 12.5 Model Mapping 在直连模式下不生效（v2.24.8 前）
+
+**症状**：配置了 `model_mapping`（如 `{"*":"MiniMax-2.5"}`），但通过直连 sk-pp- 发送的请求仍使用原始模型名，上游返回"模型不存在"。
+
+**原因**：v2.24.8 以前，model rewrite 仅在协议转换（Anthropic ↔ OpenAI）时执行，同协议透传路径未做重写。
+
+**v2.24.8+ 行为**：透传路径（`conversionNone`）现在也会查找并应用 `model_mapping`，发往上游前完成模型名替换。
 
 ---
 

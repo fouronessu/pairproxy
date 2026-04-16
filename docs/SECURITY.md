@@ -18,7 +18,9 @@ PairProxy sits between internal developer tooling (Claude Code) and commercial L
 | Unauthenticated cluster API | Worker injection, usage data manipulation |
 | Config misconfiguration at startup | Silent security degradation |
 | Resource exhaustion (quota bypass) | Runaway API spend |
-| keygen_secret leakage | All Direct Proxy API Keys forgeable |
+| keygen_secret leakage | ~~All Direct Proxy API Keys forgeable~~ — 已弃用（v2.24.7+），Key 改为按用户 PasswordHash 派生 |
+| User password hash leakage | Direct Proxy API Key for that user forgeable (bcrypt hash is non-reversible to plaintext) |
+| Legacy key not invalidated after password change | v2.24.8 前：改密后旧 legacy Key 仍可用；v2.24.8+ 自动吊销 |
 | Classifier data exfiltration | User message content leaked to external service |
 | Corpus data at rest | Training data exposed via filesystem access |
 
@@ -84,7 +86,7 @@ API Key = HMAC-SHA256(username, user.PasswordHash) → Base62 编码（48 字符
 
 - **确定性生成**：相同用户名 + 相同 PasswordHash → 相同 API Key，服务器无需存储 Key
 - **互不影响**：每个用户拥有独立的派生密钥，一个用户改密码不影响其他用户的 Key
-- **改密即轮换**：用户修改密码后，旧 Key 自动失效，新 Key 即时可用
+- **改密即轮换**：用户修改密码后，`legacy_key_revoked` 标记自动设置，旧 legacy Key 即时失效，新 Key 即时可用（v2.24.8+）
 - **256 位安全强度**：HMAC-SHA256 输出截断后取 Base62 编码（48 字符）
 - **LDAP 用户限制**：LDAP 账号无本地 PasswordHash，无法持有 sk-pp- Key
 

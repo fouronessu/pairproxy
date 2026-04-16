@@ -1,5 +1,89 @@
 # PairProxy Changelog
 
+## [v2.24.8] - 2026-04-16
+
+### 🐛 Bug Fixes
+
+#### Direct Proxy 配额中间件未挂载（v2.24.8）
+
+**问题**：通过 `sk-pp-` API Key 直连的请求绕过了 `QuotaMiddleware`，用户配置的 daily/monthly token 上限和 RPM 限制均不生效。
+
+**根因**：`DirectProxyHandler.buildChain()` 构建中间件链时未包含 `QuotaMiddleware`，而普通 JWT 路径通过 `sp.Handler()` 中已有该中间件。
+
+**修复**：
+- `internal/proxy/direct_handler.go` — `NewDirectProxyHandler` 新增 `quotaChecker *quota.Checker` 参数；`buildChain` 在 KeyAuth 和 core handler 之间插入 `quota.NewMiddleware`
+- `cmd/sproxy/main.go` — 传入运行时的 `quotaChecker` 实例
+
+#### 改密后旧 API Key 仍有效（v2.24.8）
+
+**问题**：用户通过 Keygen WebUI 修改密码后，由旧版共享 `keygenSecret` 派生的旧 Key 仍然可以访问接口（安全漏洞）。
+
+**根因**：`ValidateWithLegacySecret` 作为兜底校验路径，即使用户已修改密码，旧的 legacy Key 依然通过 HMAC 校验。
+
+**修复**：
+- `internal/db/models.go` — `User` 新增 `LegacyKeyRevoked bool` 字段（`gorm:"default:false"`）
+- `internal/db/user_repo.go` — `UpdatePassword` 原子写入 `legacy_key_revoked=true`（使用 `Updates(map[string]any{...})`，防止 GORM 跳过 false 零值）
+- `internal/keygen/validator.go` — `ValidateWithLegacySecret` 跳过 `LegacyKeyRevoked=true` 的用户
+- `internal/proxy/db_adapter.go` — `ListActive()` 传递该字段
+
+#### `RecoveryMiddleware` 吞掉 `http.ErrAbortHandler`（v2.24.8）
+
+**问题**：客户端主动断连时，Go 运行时抛出 `http.ErrAbortHandler` panic，但 `RecoveryMiddleware` 的 `recover()` 捕获后当作普通错误处理，返回 500 并写日志，而非静默忽略。
+
+**修复**：`internal/proxy/middleware.go` — recover 后检测到 `rec == http.ErrAbortHandler` 时立即 re-panic，让 Go net/http 层按预期处理断连。
+
+#### Model Mapping 在透传模式下不生效（v2.24.8）
+
+**问题**：配置 `model_mapping`（如 `{"*": "MiniMax-2.5"}`）后，同协议透传（passthrough，无需协议转换）的请求不做模型重写，导致上游报"模型不存在"。
+
+**根因**：`mapModelName()` 仅在协议转换（`conversionAtoO` / `conversionOtoA`）分支内调用，`conversionNone` 路径没有 model rewrite 逻辑。
+
+**修复**：`internal/proxy/sproxy.go` — 在 `conversionNone` 分支末尾增加显式 model 重写块（读取 `modelMappingForURL`，调用 `mapModelName` + `rewriteModelInBody`）。
+
+#### Keygen WebUI 配置说明错误（v2.24.8）
+
+- 修正 `settings.json` 路径描述：Windows 用 `%USERPROFILE%\.claude\settings.json`，Linux/macOS 用 `~/.claude/settings.json`
+- 删除 `ANTHROPIC_BASE_URL` 配置项（用户不需要暴露服务地址）
+- 修正 Claude Code 配置片段格式为 `{"env":{"ANTHROPIC_API_KEY":"<key>"}}`
+
+### ✨ New Features
+
+#### Dashboard 用户管理页分页、过滤与排序（v2.24.8）
+
+**后端**（`internal/dashboard/handler.go`）：
+
+- `handleUserStats` 支持 `page`、`page_size`、`username`（子串过滤）、`group_id`、`sort_by`、`sort_order` 参数
+- 返回结构变更：`{total, page, page_size, total_pages, users}`（分页响应体）
+- 提取 `getFullUserStats(forceRefresh bool)` 缓存辅助函数；过滤/排序/分页在全量缓存上按请求参数实时计算
+- 修复缓存污染 Bug：`filtered` 始终通过 `make([]userStatsResponse, 0, len(all))` 构建新切片，避免 `sort.SliceStable` 修改缓存原始切片
+
+**前端**（`internal/dashboard/templates/users.html`）：
+
+- 完全 JS 驱动的表格渲染，含 XSS 安全的 `esc()` 辅助函数
+- 用户名搜索框（350ms 防抖）+ 用户组下拉过滤
+- 每页显示条数选择器（20 / 50 / 100 / 200）
+- 分页控件：首页/上页/下页/尾页 + 带省略号的页码按钮
+- 列标题点击排序（再次点击切换正反序）
+- 列表项操作（启用/禁用/删除）内联表单保留
+
+### 🔧 改动详情
+
+| 模块 | 变更 |
+|------|------|
+| `internal/proxy/direct_handler.go` | 新增 `quotaChecker *quota.Checker` 参数；`buildChain` 插入 `quota.NewMiddleware` |
+| `cmd/sproxy/main.go` | 传入 `quotaChecker` 到 `NewDirectProxyHandler` |
+| `internal/proxy/middleware.go` | `RecoveryMiddleware` re-panic `http.ErrAbortHandler` |
+| `internal/proxy/sproxy.go` | `conversionNone` 分支增加 model mapping 重写逻辑 |
+| `internal/db/models.go` | `User` 新增 `LegacyKeyRevoked bool` |
+| `internal/db/user_repo.go` | `UpdatePassword` 原子写入 `legacy_key_revoked=true` |
+| `internal/keygen/validator.go` | `ValidateWithLegacySecret` 跳过 `LegacyKeyRevoked=true` 用户 |
+| `internal/proxy/db_adapter.go` | `ListActive()` 传递 `LegacyKeyRevoked` 字段 |
+| `internal/api/keygen_handler.go` | 修正 settings.json 路径说明；删除 ANTHROPIC_BASE_URL；修正配置片段格式 |
+| `internal/dashboard/handler.go` | 分页 API；`getFullUserStats` 缓存辅助；缓存污染 Bug 修复 |
+| `internal/dashboard/templates/users.html` | 全 JS 渲染；过滤/排序/分页控件 |
+
+---
+
 ## [v2.24.7] - 2026-04-14
 
 ### ✨ New Features

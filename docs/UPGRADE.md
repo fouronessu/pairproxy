@@ -1,6 +1,6 @@
 # PairProxy 升级指南
 
-> 当前版本：**v2.24.5** | 更新日期：2026-04-11
+> 当前版本：**v2.24.8** | 更新日期：2026-04-16
 
 本文档描述各版本间的升级步骤、数据库 Schema 变更、回滚方法及不兼容变更。
 
@@ -51,6 +51,54 @@
 ---
 
 ## 版本变更记录
+
+### v2.24.8 — 配额直连修复 + 旧 Key 吊销 + Model Mapping 透传 + 用户管理分页
+
+**数据库 Schema 变更**
+
+| 表 | 变更 |
+|----|------|
+| `users` | 新增 `legacy_key_revoked` 列（`BOOLEAN NOT NULL DEFAULT false`） |
+
+`db.AutoMigrate` 在启动时自动添加此列，无需手动操作。
+
+**升级影响评估**
+
+| 影响项 | 说明 |
+|--------|------|
+| sk-pp- Key 可用性 | 无影响。仅当用户主动修改密码后，旧 legacy key 才被标记为无效 |
+| 配额生效 | **行为变更**：原先直连路径不检查配额，升级后将严格按配置限制。如有超额用户，升级后请求会被拒绝 |
+| Model Mapping | 透传模式现在也会应用 model_mapping，若配置了映射规则，实际发送的模型名称将被替换 |
+| Dashboard API | 响应格式变更（见下表），若有外部脚本调用 `/dashboard/api/user-stats`，需适配新格式 |
+
+**Dashboard API 响应格式变更**
+
+```diff
+- [{"id":"...","username":"alice",...}, ...]
++ {
++   "total": 42,
++   "page": 1,
++   "page_size": 20,
++   "total_pages": 3,
++   "users": [{"id":"...","username":"alice",...}, ...]
++ }
+```
+
+**升级步骤**
+
+1. 备份数据库（推荐）
+2. 替换二进制，重启服务（AutoMigrate 自动添加 `legacy_key_revoked` 列）
+3. 验证：`curl http://localhost:9000/health` 返回 `{"status":"ok",...}`
+4. 如已配置配额限制，告知用户从即日起配额开始生效
+
+**回滚说明**
+
+降级到 v2.24.7 时：
+- `legacy_key_revoked` 列保留在数据库中，旧版本会忽略该列
+- 配额不再对直连路径生效
+- Model mapping 在透传模式下不再应用
+
+---
 
 ### v2.24.4 — SQLite 时区 Bug 修复 + reportgen 错误日志 + 测试覆盖率提升
 
