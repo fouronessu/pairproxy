@@ -208,6 +208,9 @@
                     data-name="{{.Name}}"
                     data-weight="{{.Weight}}"
                     data-health-check-path="{{.HealthCheckPath}}"
+                    data-model-mapping="{{.ModelMapping}}"
+                    data-supported-models="{{.SupportedModels}}"
+                    data-auto-model="{{.AutoModel}}"
                     class="text-gray-600 hover:text-gray-800 text-xs">查看详情</button>
             {{end}}
           </td>
@@ -289,7 +292,7 @@
 
 <!-- 查看详情模态框 -->
 <div id="viewTargetModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-  <div class="bg-white rounded-lg shadow-xl p-6 max-w-lg w-full mx-4">
+  <div class="bg-white rounded-lg shadow-xl p-6 max-w-xl w-full mx-4">
     <h3 class="text-lg font-semibold text-gray-800 mb-4">目标详情（配置文件来源）</h3>
     <div class="space-y-2 text-sm">
       <div><span class="font-medium text-gray-700">URL:</span> <span id="view_url" class="font-mono text-gray-600"></span></div>
@@ -297,6 +300,15 @@
       <div><span class="font-medium text-gray-700">名称:</span> <span id="view_name" class="text-gray-600"></span></div>
       <div><span class="font-medium text-gray-700">权重:</span> <span id="view_weight" class="text-gray-600"></span></div>
       <div><span class="font-medium text-gray-700">健康检查路径:</span> <span id="view_health_check_path" class="text-gray-600"></span></div>
+      <div>
+        <span class="font-medium text-gray-700">模型映射:</span>
+        <span id="view_model_mapping" class="font-mono text-gray-600 break-all"></span>
+      </div>
+      <div>
+        <span class="font-medium text-gray-700">支持的模型:</span>
+        <span id="view_supported_models" class="font-mono text-gray-600 break-all"></span>
+      </div>
+      <div><span class="font-medium text-gray-700">Auto 模型:</span> <span id="view_auto_model" class="font-mono text-gray-600"></span></div>
       <p class="text-xs text-gray-500 mt-3">配置文件来源的目标不可通过 WebUI 编辑，请修改 sproxy.yaml 配置文件。</p>
     </div>
     <div class="flex justify-end pt-4">
@@ -906,6 +918,9 @@ function viewTargetDetails(btn) {
   document.getElementById('view_name').textContent = d.name || '（无）';
   document.getElementById('view_weight').textContent = d.weight || 1;
   document.getElementById('view_health_check_path').textContent = d.healthCheckPath || '（无）';
+  document.getElementById('view_model_mapping').textContent = d.modelMapping || '{}';
+  document.getElementById('view_supported_models').textContent = d.supportedModels || '[]';
+  document.getElementById('view_auto_model').textContent = d.autoModel || '（无）';
   document.getElementById('viewTargetModal').classList.remove('hidden');
 }
 

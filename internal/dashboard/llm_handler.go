@@ -54,6 +54,9 @@ type llmTargetWithMeta struct {
 	Weight          int
 	HealthCheckPath string
 	APIKeyID        string
+	ModelMapping    string // ModelMappingJSON 原始值
+	SupportedModels string // SupportedModelsJSON 原始值
+	AutoModel       string
 	Source          string // "config" | "database"
 	IsEditable      bool
 	Healthy         bool
@@ -117,6 +120,9 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 					Weight:          t.Weight,
 					HealthCheckPath: t.HealthCheckPath,
 					APIKeyID:        apiKeyID,
+					ModelMapping:    t.ModelMappingJSON,
+					SupportedModels: t.SupportedModelsJSON,
+					AutoModel:       t.AutoModel,
 					Source:          t.Source,
 					IsEditable:      t.IsEditable,
 					Healthy:         health.Healthy,
