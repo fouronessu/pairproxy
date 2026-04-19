@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	neturl "net/url"
+	"sort"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -151,6 +152,9 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 				data.Users = append(data.Users, u)
 			}
 		}
+		sort.Slice(data.Users, func(i, j int) bool {
+			return data.Users[i].Username < data.Users[j].Username
+		})
 	}
 	if h.groupRepo != nil {
 		allGroups, _ := h.groupRepo.List()
