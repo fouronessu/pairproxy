@@ -562,6 +562,10 @@ func (sp *SProxy) SyncLLMTargets() {
 		return
 	}
 
+	// 记录同步开始时间，用于 MarkSyncedBefore：仅将 updated_at <= syncTime 的 target
+	// 标记为已同步，避免同步期间发生的新写操作被误标记为已同步。
+	syncTime := time.Now()
+
 	loadedTargets, err := sp.LoadAllTargets()
 	if err != nil {
 		sp.logger.Error("SyncLLMTargets: failed to load targets from db", zap.Error(err))
@@ -678,6 +682,12 @@ func (sp *SProxy) SyncLLMTargets() {
 		if t.AutoModel != "" {
 			countWithAutoModel++
 		}
+	}
+
+	// 将 updated_at <= syncTime 的 target 标记为已同步
+	syncRepo := db.NewLLMTargetRepo(sp.db, sp.logger)
+	if err := syncRepo.MarkSyncedBefore(syncTime); err != nil {
+		sp.logger.Warn("SyncLLMTargets: failed to mark targets synced", zap.Error(err))
 	}
 
 	sp.logger.Info("SyncLLMTargets: balancer and health checker updated",

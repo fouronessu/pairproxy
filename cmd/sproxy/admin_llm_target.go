@@ -164,6 +164,7 @@ var llmTargetAddCmd = &cobra.Command{
 		if err := repo.Create(target); err != nil {
 			return fmt.Errorf("create target: %w", err)
 		}
+		_ = repo.MarkUnsynced(target.ID)
 
 		// 记录审计日志
 		auditDetails := fmt.Sprintf("provider=%s name=%s", addProvider, addName)
@@ -361,6 +362,7 @@ var llmTargetUpdateCmd = &cobra.Command{
 		if err := repo.Update(target); err != nil {
 			return fmt.Errorf("update target: %w", err)
 		}
+		_ = repo.MarkUnsynced(target.ID)
 
 		// 记录审计日志
 		changesSummary := ""
@@ -496,6 +498,7 @@ var llmTargetEnableCmd = &cobra.Command{
 				zap.Error(err))
 			return fmt.Errorf("enable target: %w", err)
 		}
+		_ = repo.MarkUnsynced(target.ID)
 
 		// 记录审计日志
 		auditCLI(gormDB, logger, "llm_target.enable", targetURL, fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
@@ -561,6 +564,7 @@ var llmTargetDisableCmd = &cobra.Command{
 				zap.Error(err))
 			return fmt.Errorf("disable target: %w", err)
 		}
+		_ = repo.MarkUnsynced(target.ID)
 
 		// 记录审计日志
 		auditCLI(gormDB, logger, "llm_target.disable", targetURL, fmt.Sprintf("id=%s name=%s", target.ID, target.Name))

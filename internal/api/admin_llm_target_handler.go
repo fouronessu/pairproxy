@@ -187,6 +187,9 @@ func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *htt
 	}
 	_ = h.auditRepo.Create("admin", "llm_target.create", req.URL, auditDetails)
 
+	// 标记为未同步（新 target 尚未被运行时加载）
+	_ = h.llmTargetRepo.MarkUnsynced(target.ID)
+
 	// 同步 balancer/HC（使新 target 立即参与健康检查）
 	if h.syncFn != nil {
 		h.syncFn()
@@ -359,6 +362,9 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 	}
 	_ = h.auditRepo.Create("admin", "llm_target.update", target.URL, changesSummary)
 
+	// 标记为未同步
+	_ = h.llmTargetRepo.MarkUnsynced(target.ID)
+
 	// 同步 balancer/HC（使变更立即生效）
 	if h.syncFn != nil {
 		h.syncFn()
@@ -468,6 +474,9 @@ func (h *AdminLLMTargetHandler) handleEnableTarget(w http.ResponseWriter, r *htt
 	_ = h.auditRepo.Create("admin", "llm_target.enable", target.URL,
 		fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
 
+	// 标记为未同步
+	_ = h.llmTargetRepo.MarkUnsynced(target.ID)
+
 	// 同步 balancer/HC（将启用的 target 加回轮询）
 	if h.syncFn != nil {
 		h.syncFn()
@@ -527,6 +536,9 @@ func (h *AdminLLMTargetHandler) handleDisableTarget(w http.ResponseWriter, r *ht
 	// 记录审计日志
 	_ = h.auditRepo.Create("admin", "llm_target.disable", target.URL,
 		fmt.Sprintf("id=%s name=%s", target.ID, target.Name))
+
+	// 标记为未同步
+	_ = h.llmTargetRepo.MarkUnsynced(target.ID)
 
 	// 同步 balancer/HC（将禁用的 target 从轮询中移除）
 	if h.syncFn != nil {

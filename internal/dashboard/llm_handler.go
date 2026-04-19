@@ -59,6 +59,7 @@ type llmTargetWithMeta struct {
 	AutoModel       string
 	Source          string // "config" | "database"
 	IsEditable      bool
+	IsSynced        bool
 	Healthy         bool
 	Draining        bool
 }
@@ -125,6 +126,7 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 					AutoModel:       t.AutoModel,
 					Source:          t.Source,
 					IsEditable:      t.IsEditable,
+					IsSynced:        t.IsSynced,
 					Healthy:         health.Healthy,
 					Draining:        health.Draining,
 				})
@@ -507,6 +509,9 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// 标记为未同步
+	_ = h.llmTargetRepo.MarkUnsynced(target.ID)
+
 	// 同步 balancer/HC（使新 target 立即参与健康检查）
 	if h.llmSyncFn != nil {
 		h.llmSyncFn()
@@ -619,6 +624,9 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
+
+	// 标记为未同步
+	_ = h.llmTargetRepo.MarkUnsynced(existing.ID)
 
 	// 同步 balancer/HC（使变更立即生效）
 	if h.llmSyncFn != nil {

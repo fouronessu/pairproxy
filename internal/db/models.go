@@ -140,6 +140,7 @@ type LLMTarget struct {
 	Source          string     `gorm:"default:'database'"`   // "config" | "database"
 	IsEditable      bool       `gorm:"default:true"`         // false for config-sourced
 	IsActive        bool       `gorm:"default:true"`
+	IsSynced        bool       `gorm:"default:true"`         // false 表示已修改但尚未被 SyncLLMTargets 加载到内存
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
