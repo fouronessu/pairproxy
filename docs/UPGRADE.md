@@ -1,6 +1,6 @@
 # PairProxy 升级指南
 
-> 当前版本：**v3.0.0** | 更新日期：2026-04-19
+> 当前版本：**v3.0.1** | 更新日期：2026-04-20
 
 本文档描述各版本间的升级步骤、数据库 Schema 变更、回滚方法及不兼容变更。
 
@@ -51,6 +51,41 @@
 ---
 
 ## 版本变更记录
+
+### v3.0.1 — API Key 存储格式修复 + 健康检查假阳性修复 + LLM 目标同步状态
+
+**数据库 Schema 变更**
+
+- `api_keys` 表新增 `key_scheme` 列（`TEXT DEFAULT 'obfuscated'`）：标识 API Key 的存储格式，`"aes"` 表示 AES-256-GCM 加密，`"obfuscated"` 表示 config-sync 混淆存储。
+- `llm_targets` 表新增 `is_synced` 列（`BOOLEAN DEFAULT true`）：标识目标是否已加载到内存。
+
+GORM AutoMigrate 会在启动时自动添加这两列，无需手动执行 SQL。
+
+**不兼容变更**
+
+无。
+
+**升级后注意事项（api_keys.key_scheme）**
+
+`v3.0.1` 之前通过 Admin API 或 `sproxy admin apikey add` 创建的 API Key，升级后 `key_scheme` 列值为空（`NULL`/`""`），系统会自动走兼容路径（先试 AES，失败回退混淆）。
+
+如需消除兼容路径的日志（极少数情况），可手动标记：
+
+```sql
+-- 将 Admin API 创建的 key 标记为 aes（Auto- 前缀是 config-sync 自动生成的）
+UPDATE api_keys SET key_scheme = 'aes' WHERE name NOT LIKE 'Auto-%';
+```
+
+**升级步骤**
+
+```bash
+# 1. 备份数据库
+cp pairproxy.db pairproxy.db.bak
+# 2. 替换二进制，重启即可（AutoMigrate 自动加列）
+systemctl restart sproxy
+```
+
+---
 
 ### v3.0.0 — AtoO 路径修复 + CLI 管理增强 + Dashboard 修复
 
