@@ -214,18 +214,19 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 
 // handleLLMCreateBinding POST /dashboard/llm/bindings
 func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request) {
+	const bindTab = "/dashboard/llm?tab=bindings"
 	if h.llmBindingRepo == nil {
-		http.Redirect(w, r, "/dashboard/llm?error=LLM+binding+not+configured", http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error=LLM+binding+not+configured", http.StatusSeeOther)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/dashboard/llm?error=invalid+form", http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error=invalid+form", http.StatusSeeOther)
 		return
 	}
 	targetRaw := r.FormValue("target_url") // 表单字段名保持不变；值现在是 UUID（旧版可能是 URL）
 	bindType := r.FormValue("bind_type")
 	if targetRaw == "" {
-		http.Redirect(w, r, "/dashboard/llm?error=target_url+required", http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error=target_url+required", http.StatusSeeOther)
 		return
 	}
 
@@ -240,7 +241,7 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 			if err == nil && len(matches) == 1 {
 				targetID = matches[0].ID
 			} else if err == nil && len(matches) > 1 {
-				http.Redirect(w, r, "/dashboard/llm?error=target_url_ambiguous", http.StatusSeeOther)
+				http.Redirect(w, r, bindTab+"&error=target_url_ambiguous", http.StatusSeeOther)
 				return
 			}
 			// err != nil 或 0 matches：targetID = targetRaw（config-sourced 兜底）
@@ -252,14 +253,14 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 	case "group":
 		gid := r.FormValue("group_id")
 		if gid == "" {
-			http.Redirect(w, r, "/dashboard/llm?error=group_id+required", http.StatusSeeOther)
+			http.Redirect(w, r, bindTab+"&error=group_id+required", http.StatusSeeOther)
 			return
 		}
 		groupID = &gid
 	default:
 		uid := r.FormValue("user_id")
 		if uid == "" {
-			http.Redirect(w, r, "/dashboard/llm?error=user_id+required", http.StatusSeeOther)
+			http.Redirect(w, r, bindTab+"&error=user_id+required", http.StatusSeeOther)
 			return
 		}
 		userID = &uid
@@ -267,7 +268,7 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 
 	if err := h.llmBindingRepo.Set(targetID, userID, groupID); err != nil {
 		h.logger.Error("create llm binding", zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("llm binding created via dashboard",
@@ -276,27 +277,28 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 		zap.Any("user_id", userID),
 		zap.Any("group_id", groupID),
 	)
-	http.Redirect(w, r, "/dashboard/llm?flash=绑定已创建", http.StatusSeeOther)
+	http.Redirect(w, r, bindTab+"&flash=绑定已创建", http.StatusSeeOther)
 }
 
 // handleLLMDeleteBinding POST /dashboard/llm/bindings/{id}/delete
 func (h *Handler) handleLLMDeleteBinding(w http.ResponseWriter, r *http.Request) {
+	const bindTab = "/dashboard/llm?tab=bindings"
 	if h.llmBindingRepo == nil {
-		http.Redirect(w, r, "/dashboard/llm?error=LLM+binding+not+configured", http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error=LLM+binding+not+configured", http.StatusSeeOther)
 		return
 	}
 	id := r.PathValue("id")
 	if id == "" {
-		http.Redirect(w, r, "/dashboard/llm?error=id+required", http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error=id+required", http.StatusSeeOther)
 		return
 	}
 	if err := h.llmBindingRepo.Delete(id); err != nil {
 		h.logger.Error("delete llm binding", zap.String("id", id), zap.Error(err))
-		http.Redirect(w, r, "/dashboard/llm?error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, bindTab+"&error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("llm binding deleted via dashboard", zap.String("id", id))
-	http.Redirect(w, r, "/dashboard/llm?flash=绑定已删除", http.StatusSeeOther)
+	http.Redirect(w, r, bindTab+"&flash=绑定已删除", http.StatusSeeOther)
 }
 
 // handleLLMDistribute POST /dashboard/llm/distribute
