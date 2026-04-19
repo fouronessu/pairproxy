@@ -765,7 +765,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 		logger, jwtMgr, llmTargetRepo, auditRepo,
 		cfg.Admin.PasswordHash, adminTokenTTL,
 	)
-	llmTargetHandler.SetSyncFn(sp.SyncLLMTargets)
+	// peer 模式下各节点由轮询统一感知变更，不在本节点立即 sync（避免各节点生效时间不一致）
+	if !isPeerMode {
+		llmTargetHandler.SetSyncFn(sp.SyncLLMTargets)
+	}
 	llmTargetHandler.RegisterRoutes(mux, adminHandler.RequireAdmin, adminHandler.RequireWritableNode)
 	logger.Info("LLM target API registered at /api/admin/llm/targets")
 
@@ -964,7 +967,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 		)
 		dashHandler.SetLLMDeps(llmBindingRepo, sp.LLMTargetStatuses)
 		dashHandler.SetLLMTargetRepo(llmTargetRepo)
-		dashHandler.SetLLMSyncFn(sp.SyncLLMTargets)
+		// peer 模式下各节点由轮询统一感知变更，不在本节点立即 sync（避免各节点生效时间不一致）
+		if !isPeerMode {
+			dashHandler.SetLLMSyncFn(sp.SyncLLMTargets)
+		}
 		dashHandler.SetAPIKeyRepo(apiKeyRepo)
 		dashHandler.SetTokenRepo(tokenRepo)
 		dashHandler.SetDrainFunctions(sp.Drain, sp.Undrain, sp.GetDrainStatus)
