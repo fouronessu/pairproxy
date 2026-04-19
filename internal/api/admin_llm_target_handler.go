@@ -246,12 +246,6 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// 检查是否可编辑
-	if !target.IsEditable {
-		http.Error(w, "Cannot update config-sourced target", http.StatusForbidden)
-		return
-	}
-
 	var req struct {
 		Provider        *string           `json:"provider"`
 		APIKeyID        *string           `json:"api_key_id"`
@@ -400,12 +394,6 @@ func (h *AdminLLMTargetHandler) handleDeleteTarget(w http.ResponseWriter, r *htt
 		}
 		h.logger.Error("failed to get llm target", zap.String("id", id), zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// 检查是否可编辑
-	if !target.IsEditable {
-		http.Error(w, "Cannot delete config-sourced target", http.StatusForbidden)
 		return
 	}
 

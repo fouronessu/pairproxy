@@ -1562,8 +1562,8 @@ func TestLLMBindingRepo_Set_GroupID(t *testing.T) {
 // LLMTargetRepo.Delete — 不可编辑 target 路径
 // ============================================================================
 
-// TestLLMTargetRepo_Delete_NotEditable_Cov 验证删除不可编辑（config-sourced）target 时返回错误。
-// 覆盖 llmtarget_repo.go:126-128 分支。
+// TestLLMTargetRepo_Delete_NotEditable_Cov 验证删除 config-sourced target 时 repo 层不做限制（可以成功删除）。
+// IsEditable 限制仅在 WebUI 层（dashboard handler）执行，CLI 可强制删除。
 func TestLLMTargetRepo_Delete_NotEditable_Cov(t *testing.T) {
 	gormDB := openTestDB(t)
 	logger := zaptest.NewLogger(t)
@@ -1581,9 +1581,9 @@ func TestLLMTargetRepo_Delete_NotEditable_Cov(t *testing.T) {
 	// 手动修复 IsEditable=false（GORM boolean gotcha）
 	require.NoError(t, gormDB.Model(&LLMTarget{}).Where("id = ?", target.ID).Updates(map[string]interface{}{"is_editable": false}).Error)
 
+	// Repo 层不拦截，CLI 可以删除 config-sourced target
 	err := repo.Delete(target.ID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not editable")
+	assert.NoError(t, err)
 }
 
 // ============================================================================

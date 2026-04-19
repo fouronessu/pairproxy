@@ -278,11 +278,10 @@ func TestLLMTargetRepo_Update_NotEditable(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, target.IsEditable, "target should be non-editable")
 
-	// Try to update
-	target.Name = "Should Fail"
+	// Repo层不做 IsEditable 限制（WebUI 层负责拦截）；CLI 可以强制修改 config-sourced target。
+	target.Name = "Updated via CLI"
 	err = repo.Update(target)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not editable")
+	assert.NoError(t, err)
 }
 
 func TestLLMTargetRepo_Delete(t *testing.T) {
@@ -334,10 +333,9 @@ func TestLLMTargetRepo_Delete_NotEditable(t *testing.T) {
 	err = gormDB.Model(target).Update("is_editable", false).Error
 	require.NoError(t, err)
 
-	// Try to delete
+	// Repo层不做 IsEditable 限制（WebUI 层负责拦截）；CLI 可以强制删除 config-sourced target。
 	err = repo.Delete(target.ID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not editable")
+	assert.NoError(t, err)
 }
 
 func TestLLMTargetRepo_Upsert_Insert(t *testing.T) {

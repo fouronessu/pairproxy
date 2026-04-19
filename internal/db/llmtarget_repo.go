@@ -178,13 +178,9 @@ func (r *LLMTargetRepo) Seed(target *LLMTarget) error {
 	return r.Upsert(target)
 }
 
-// Update 更新 LLM target（仅可编辑的）
+// Update 更新 LLM target。
+// IsEditable 仅用于 WebUI 层拦截，repo 层不做限制，允许 CLI 等管理工具强制修改。
 func (r *LLMTargetRepo) Update(target *LLMTarget) error {
-	// 检查是否可编辑
-	if !target.IsEditable {
-		return fmt.Errorf("target is not editable (config-sourced)")
-	}
-
 	if err := r.db.Save(target).Error; err != nil {
 		r.logger.Error("failed to update llm target",
 			zap.String("id", target.ID),
@@ -200,16 +196,12 @@ func (r *LLMTargetRepo) Update(target *LLMTarget) error {
 	return nil
 }
 
-// Delete 删除 LLM target（仅可编辑的）
+// Delete 删除 LLM target。
+// IsEditable 仅用于 WebUI 层拦截，repo 层不做限制，允许 CLI 等管理工具强制删除。
 func (r *LLMTargetRepo) Delete(id string) error {
-	// 先查询检查是否可编辑
 	target, err := r.GetByID(id)
 	if err != nil {
 		return err
-	}
-
-	if !target.IsEditable {
-		return fmt.Errorf("target is not editable (config-sourced)")
 	}
 
 	if err := r.db.Delete(&LLMTarget{}, "id = ?", id).Error; err != nil {
