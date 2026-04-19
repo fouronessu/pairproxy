@@ -35,6 +35,7 @@ type SProxyFullConfig struct {
 	Pricing   PricingConfig   `yaml:"pricing"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
 	Corpus         CorpusConfig         `yaml:"corpus"`
+	Track          TrackConfig          `yaml:"track"`
 	SemanticRouter SemanticRouterConfig `yaml:"semantic_router"`
 	Log            LogConfig            `yaml:"log"`
 }
@@ -49,6 +50,14 @@ type CorpusConfig struct {
 	FlushInterval   time.Duration `yaml:"flush_interval"`    // 强制 flush 间隔，默认 5s
 	MinOutputTokens int           `yaml:"min_output_tokens"` // 最小输出 token 数过滤，默认 50
 	ExcludeGroups   []string      `yaml:"exclude_groups"`    // 排除的分组列表
+}
+
+// TrackConfig 用户对话跟踪配置
+type TrackConfig struct {
+	// Dir 跟踪数据根目录。
+	// 默认值：SQLite 模式下为 <database.path 所在目录>/track，peer/postgres 模式下为 ./track。
+	// peer 模式建议显式配置绝对路径，避免依赖进程工作目录。
+	Dir string `yaml:"dir"`
 }
 
 // SemanticRouterConfig 语义路由模块配置

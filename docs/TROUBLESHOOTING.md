@@ -614,12 +614,14 @@ sproxy 进程无法写入 `track/` 目录时会静默跳过（不影响主流程
 journalctl -u sproxy | grep -i "track\|conversation"
 ```
 
-若出现权限错误，修复目录权限：
+若出现权限错误，修复目录权限（路径以 `track_dir=` 日志字段为准）：
 
 ```bash
-chown -R sproxy:sproxy <db_dir>/track/
-chmod -R 755 <db_dir>/track/
+chown -R sproxy:sproxy <track_dir>/
+chmod -R 755 <track_dir>/
 ```
+
+> **Peer/PostgreSQL 模式**：若报 `mkdir track: read-only file system`，参见 [11.7 节](#117-peerpostgresql-模式启动时报-mkdir-track-read-only-file-system)。
 
 **可能原因 3**: 用户名大小写不匹配。
 
@@ -692,6 +694,32 @@ done
 
 ```bash
 ./sproxy --version   # 确认版本
+```
+
+---
+
+### 11.7 Peer/PostgreSQL 模式启动时报 `mkdir track: read-only file system`
+
+**根因**：peer 模式下 `database.path` 为空，`track.dir` 默认退化为 `"./track"`（相对于进程 CWD）。若 CWD 所在文件系统只读（容器常见场景），`os.MkdirAll` 尝试创建 `track/users` 时报此错误。tracker 初始化失败后对话跟踪功能被禁用，但服务正常启动。
+
+**解决方法**：在 `sproxy.yaml` 中显式配置有写权限的绝对路径：
+
+```yaml
+track:
+  dir: "/data/pairproxy/track"
+```
+
+然后确保目录存在且 sproxy 进程有写权限：
+
+```bash
+mkdir -p /data/pairproxy/track
+chown -R sproxy:sproxy /data/pairproxy/track
+```
+
+重启 sproxy 后日志应出现：
+
+```
+conversation tracker initialized  track_dir=/data/pairproxy/track
 ```
 
 ---

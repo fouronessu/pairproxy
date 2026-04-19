@@ -654,7 +654,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// 用户对话内容跟踪：基于文件系统标记文件，通过 sproxy admin track 命令管理
 	{
-		trackDir := filepath.Join(filepath.Dir(cfg.Database.Path), "track")
+		trackDir := cfg.Track.Dir
 		if t, tErr := track.New(trackDir); tErr != nil {
 			logger.Warn("failed to init conversation tracker, tracking disabled",
 				zap.String("track_dir", trackDir),
