@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	htmpl "html/template"
 	"net/http"
 	neturl "net/url"
 	"sort"
@@ -20,7 +21,7 @@ type llmPageData struct {
 	Targets        []proxy.LLMTargetStatus
 	AllTargets     []llmTargetWithMeta // 合并后的目标列表（含 Source/IsEditable）
 	Bindings       []db.LLMBinding
-	BindingsJSON   string            // pre-serialized JSON for client-side pagination
+	BindingsJSON   htmpl.JS          // pre-serialized JSON for client-side pagination (safe, no HTML escaping)
 	BoundCount     map[string]int    // target URL → 绑定数量
 	UserIDToName   map[string]string // user ID → username（用于绑定列表显示）
 	GroupIDToName  map[string]string // group ID → group name
@@ -198,7 +199,7 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		if bs, err := json.Marshal(entries); err == nil {
-			data.BindingsJSON = string(bs)
+			data.BindingsJSON = htmpl.JS(bs)
 		} else {
 			data.BindingsJSON = "[]"
 		}
