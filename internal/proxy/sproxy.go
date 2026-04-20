@@ -418,8 +418,11 @@ func (sp *SProxy) loadAllTargets(repo *db.LLMTargetRepo) ([]config.LLMTarget, er
 		apiKey, keyErr := sp.resolveAPIKey(dt.APIKeyID)
 		apiKeyError := false
 		if keyErr != nil {
-			sp.logger.Warn("failed to resolve api key for target, target will be kept in balancer but marked unhealthy",
-				zap.String("url", dt.URL),
+			// ERROR 级别：API Key 解析失败是配置错误，不会自动恢复，必须人工介入。
+			// 包含 target_id 以便管理员直接用 UUID 定位 target。
+			sp.logger.Error("api key resolution failed for llm target; target will remain in balancer but forced unhealthy until fixed",
+				zap.String("target_id", dt.ID),
+				zap.String("target_url", dt.URL),
 				zap.String("api_key_id", ptrToString(dt.APIKeyID)),
 				zap.Error(keyErr))
 			apiKeyError = true
@@ -521,6 +524,7 @@ func (sp *SProxy) resolveAPIKey(apiKeyID *string) (string, error) {
 			if plain, err := sp.keyDecryptFn(apiKey.EncryptedValue); err == nil {
 				return plain, nil
 			}
+			// AES 解密失败（正常：该 key 可能是 obfuscated 格式），静默回退
 		}
 		return obfuscateKey(apiKey.EncryptedValue), nil
 	}
@@ -625,6 +629,10 @@ func (sp *SProxy) SyncLLMTargets() {
 			// 即使该 target 之前是健康的，也必须重置，因为缺少凭证无法正常转发。
 			healthy = false
 			draining = false
+			sp.logger.Warn("SyncLLMTargets: forcing target unhealthy due to API key error",
+				zap.String("target_id", targetID),
+				zap.String("target_url", t.URL),
+			)
 		} else if h, exists := existingHealth[targetID]; exists {
 			// 存量 target：保留当前健康/排水状态
 			healthy = h
