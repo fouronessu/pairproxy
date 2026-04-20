@@ -483,6 +483,7 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/users?error=创建失败，用户名可能已存在", http.StatusFound)
 		return
 	}
+	h.invalidateUserStatsCache()
 	h.logger.Info("dashboard: user created", zap.String("username", username))
 	if detailBytes, jerr := json.Marshal(map[string]interface{}{"group_id": groupID, "is_active": true}); jerr == nil {
 		if aerr := h.auditRepo.Create("admin", "user.create", username, string(detailBytes)); aerr != nil {
@@ -503,6 +504,7 @@ func (h *Handler) handleToggleActive(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/users?error=操作失败", http.StatusFound)
 		return
 	}
+	h.invalidateUserStatsCache()
 	if detailBytes, jerr := json.Marshal(map[string]bool{"active": active}); jerr == nil {
 		if aerr := h.auditRepo.Create("admin", "user.set_active", id, string(detailBytes)); aerr != nil {
 			h.logger.Warn("audit write failed", zap.Error(aerr))
@@ -557,6 +559,7 @@ func (h *Handler) handleSetUserGroup(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard/users?error=更新分组失败", http.StatusFound)
 		return
 	}
+	h.invalidateUserStatsCache()
 	h.logger.Info("dashboard: user group updated", zap.String("user_id", id), zap.Any("group_id", groupID))
 	if detailBytes, jerr := json.Marshal(map[string]interface{}{"group_id": groupID}); jerr == nil {
 		if aerr := h.auditRepo.Create("admin", "user.set_group", id, string(detailBytes)); aerr != nil {
@@ -928,6 +931,14 @@ type userStatsPageResponse struct {
 }
 
 const userStatsCacheTTL = 5 * time.Minute
+
+// invalidateUserStatsCache 清除用户统计缓存，使下次请求强制重新查询 DB。
+func (h *Handler) invalidateUserStatsCache() {
+	h.userStatsCacheMu.Lock()
+	defer h.userStatsCacheMu.Unlock()
+	h.userStatsCacheVal = nil
+	h.userStatsCacheExp = time.Time{}
+}
 
 // getFullUserStats 从缓存或 DB 获取全量用户统计列表。
 // forceRefresh=true 时穿透缓存重新查询。
