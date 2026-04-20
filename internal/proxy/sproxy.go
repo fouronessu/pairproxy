@@ -1052,18 +1052,28 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 		}
 
 		// 有绑定 → 必须使用该 target，不允许 fall through
-		if !triedSet[boundID] {
+		//
+		// RetryTransport 的 tried 列表使用 URL 格式；boundID 可能是 UUID 或 URL（取决于绑定创建方式）。
+		// 因此同时检查 triedSet[boundID]（UUID 绑定）和目标的 Addr（URL 绑定）。
+		alreadyTried := triedSet[boundID]
+		if !alreadyTried {
 			healthy := true
 			if sp.llmBalancer != nil {
 				healthy = false
 				for _, t := range sp.llmBalancer.Targets() {
-					if t.ID == boundID {
+					// 同时匹配 ID（UUID）和 Addr（URL），兼容 YAML 导入或旧版创建的 URL 格式绑定
+					if t.ID == boundID || t.Addr == boundID {
+						if triedSet[t.Addr] {
+							// RetryTransport 使用 URL 加入 tried，此 target 已被重试过
+							alreadyTried = true
+							break
+						}
 						healthy = t.Healthy
 						break
 					}
 				}
 			}
-			if healthy {
+			if !alreadyTried && healthy {
 				info := sp.llmTargetInfoForID(boundID)
 				sp.logger.Debug("using bound LLM target",
 					zap.String("user_id", userID),
@@ -1076,10 +1086,17 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 		}
 
 		// 绑定 target 不健康或已试过 → 报错，不 fall through
-		sp.logger.Warn("assigned LLM target is unhealthy or already tried, request rejected",
-			zap.String("bound_id", boundID),
-			zap.String("user_id", userID),
-		)
+		if alreadyTried {
+			sp.logger.Warn("assigned LLM target already tried, request rejected",
+				zap.String("bound_id", boundID),
+				zap.String("user_id", userID),
+			)
+		} else {
+			sp.logger.Warn("assigned LLM target is unhealthy, request rejected",
+				zap.String("bound_id", boundID),
+				zap.String("user_id", userID),
+			)
+		}
 		return nil, ErrBoundTargetUnavailable
 	}
 
