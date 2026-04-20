@@ -1036,9 +1036,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 			proxyHandler.ServeHTTP(w, r)
 			return
 		}
-		// 直连模式：sk-pp- API Key（OpenAI 格式）
 		authVal := r.Header.Get("Authorization")
+		// 直连模式：sk-pp- API Key（OpenAI 格式 Bearer 头）
 		if strings.HasPrefix(authVal, "Bearer sk-pp-") {
+			openAIDirectHandler.ServeHTTP(w, r)
+			return
+		}
+		// 直连模式：sk-pp- API Key（Anthropic 格式 x-api-key 头）
+		// KeyAuthMiddleware 的 extractDirectAPIKey 支持 x-api-key，此处路由同步处理。
+		if apiKeyHdr := r.Header.Get("x-api-key"); strings.HasPrefix(apiKeyHdr, "sk-pp-") {
 			openAIDirectHandler.ServeHTTP(w, r)
 			return
 		}
@@ -1052,7 +1058,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error":   "missing_auth",
-			"message": "X-PairProxy-Auth (cproxy) or Authorization: Bearer sk-pp-... (direct) required",
+			"message": "provide X-PairProxy-Auth (cproxy), Authorization: Bearer sk-pp-... or x-api-key: sk-pp-... (direct)",
 		})
 		logger.Warn("v1 route: no valid auth header",
 			zap.String("path", r.URL.Path),
