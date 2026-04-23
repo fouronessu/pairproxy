@@ -173,7 +173,7 @@ func (c *ModelRouterClient) Route(
 // extractSessionID 从请求体或请求头中提取会话 ID。
 // 按以下优先级：
 //  1. 请求体 JSON 字段 "session_id"
-//  2. 请求头 "X-Session-Id"（Claude Code 标准头）
+//  2. 请求头 "X-Claude-Code-Session-Id"（Claude Code 标准头）
 //  3. 自动生成 "auto-session-{uuid}"
 func extractSessionID(r *http.Request, bodyBytes []byte) string {
 	// 1. 请求体中的 session_id
@@ -187,7 +187,7 @@ func extractSessionID(r *http.Request, bodyBytes []byte) string {
 	}
 
 	// 2. 请求头 X-Session-Id
-	if sid := r.Header.Get("X-Session-Id"); sid != "" {
+	if sid := r.Header.Get("X-Claude-Code-Session-Id"); sid != "" {
 		return sid
 	}
 
