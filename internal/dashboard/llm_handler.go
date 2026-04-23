@@ -133,20 +133,17 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 构建已绑定的 user/group ID 集合（用于过滤添加绑定下拉框）
+	// 构建已绑定的 user ID 集合（用于过滤用户下拉框，用户绑定是 1:1 的）
+	// 分组绑定是 1:N 的，所以不过滤分组
 	boundUserIDs := make(map[string]bool)
-	boundGroupIDs := make(map[string]bool)
 	for _, b := range data.Bindings {
 		if b.UserID != nil {
 			boundUserIDs[*b.UserID] = true
 		}
-		if b.GroupID != nil {
-			boundGroupIDs[*b.GroupID] = true
-		}
 	}
 
 	// 获取用户和分组列表，并构建 ID→名称映射（用于绑定列表显示）
-	// Users/Groups 仅保留未绑定的，用于"添加绑定"下拉框
+	// Users 仅保留未绑定的（1:1），Groups 全部展示（1:N，可多次绑定）
 	data.UserIDToName = make(map[string]string)
 	data.GroupIDToName = make(map[string]string)
 	if h.userRepo != nil {
@@ -165,9 +162,7 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		allGroups, _ := h.groupRepo.List()
 		for _, g := range allGroups {
 			data.GroupIDToName[g.ID] = g.Name
-			if !boundGroupIDs[g.ID] {
-				data.Groups = append(data.Groups, g)
-			}
+			data.Groups = append(data.Groups, g)
 		}
 	}
 
@@ -267,9 +262,15 @@ func (h *Handler) handleLLMCreateBinding(w http.ResponseWriter, r *http.Request)
 		userID = &uid
 	}
 
-	if err := h.llmBindingRepo.Set(targetID, userID, groupID); err != nil {
-		h.logger.Error("create llm binding", zap.Error(err))
-		http.Redirect(w, r, bindTab+"&error="+neturl.QueryEscape(err.Error()), http.StatusSeeOther)
+	var bindErr error
+	if userID != nil {
+		bindErr = h.llmBindingRepo.Set(targetID, userID, nil)
+	} else {
+		bindErr = h.llmBindingRepo.AddGroupBinding(targetID, *groupID)
+	}
+	if bindErr != nil {
+		h.logger.Error("create llm binding", zap.Error(bindErr))
+		http.Redirect(w, r, bindTab+"&error="+neturl.QueryEscape(bindErr.Error()), http.StatusSeeOther)
 		return
 	}
 	h.logger.Info("llm binding created via dashboard",
