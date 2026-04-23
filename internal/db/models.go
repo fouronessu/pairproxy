@@ -115,13 +115,14 @@ type AuditLog struct {
 // 优先级：用户级绑定 > 分组级绑定 > 负载均衡。
 type LLMBinding struct {
 	ID       string  `gorm:"primarykey"`
-	TargetID string  `gorm:"not null;index"`          // LLM target UUID（与 llm_targets.id 匹配）
-	UserID   *string `gorm:"index:idx_llmb_user;uniqueIndex:idx_llmb_user_target"`   // 用户级绑定（优先）；同一 user 只能绑定一个 target
-	GroupID  *string `gorm:"index:idx_llmb_group;uniqueIndex:idx_llmb_group_target"` // 分组级绑定（兜底）；同一 group 只能绑定一个 target
-	// UNIQUE(user_id, target_id) 和 UNIQUE(group_id, target_id) 由复合索引强制：
-	// 因 NULL 的 UNIQUE 特殊性（NULL != NULL），同时依赖应用层 Set() 的 delete-then-insert 保证
-	// TargetURL 仅用于展示（通过 JOIN 填充，不存储于此列）
-	// TargetURL 冗余存储：便于直接查看数据库及展示时减少 JOIN；由 Set() 负责写入。
+	// TargetID: 普通索引 + 参与分组复合唯一索引 idx_llmb_group_target(group_id, target_id)
+	TargetID string  `gorm:"not null;index;uniqueIndex:idx_llmb_group_target"`
+	// UserID: UNIQUE(user_id) 强制用户级 1:1 绑定；NULL 表示分组级绑定
+	UserID   *string `gorm:"index:idx_llmb_user;uniqueIndex:idx_llmb_user_target"`
+	// GroupID: UNIQUE(group_id, target_id) 防止同一分组重复绑定同一 target；NULL 表示用户级绑定
+	// 分组支持 1:N（同一分组可绑定多个 target，但 provider 必须一致）
+	GroupID  *string `gorm:"index:idx_llmb_group;uniqueIndex:idx_llmb_group_target"`
+	// TargetURL 冗余存储：便于直接查看数据库及展示时减少 JOIN；由 Set()/AddGroupBinding() 负责写入。
 	TargetURL string `gorm:"not null;index"`
 	CreatedAt time.Time
 }
@@ -173,57 +174,3 @@ type SemanticRoute struct {
 }
 
 func (SemanticRoute) TableName() string { return "semantic_routes" }
-
-// GroupTargetSet Group 与 Target Set 的绑定关系
-// 支持两类群组：
-//   1. 普通组: group_id 指向具体的 groups.id；名称在该组内唯一
-//   2. 默认组: group_id = NULL 且 is_default = 1；多个默认组支持不同名称
-type GroupTargetSet struct {
-	ID          string    `gorm:"primarykey"`
-	GroupID     *string   `gorm:"index;uniqueIndex:idx_gts_group_name"` // NULL = 默认组；与 Name 组合唯一
-	Name        string    `gorm:"uniqueIndex:idx_gts_group_name;not null"` // 显示名称；与 GroupID 组合唯一
-	Strategy    string    `gorm:"default:'weighted_random'"` // "weighted_random" | "round_robin" | "priority"
-	RetryPolicy string    `gorm:"default:'try_next'"`      // "try_next" | "fail_fast"
-	IsDefault   bool      `gorm:"default:false;index"`     // 是否默认组
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-// GroupTargetSetMember Target Set 的成员（多对多关系）
-type GroupTargetSetMember struct {
-	ID            string    `gorm:"primarykey"`
-	TargetSetID   string    `gorm:"not null;uniqueIndex:idx_gtm_set_target"`
-	TargetID      string    `gorm:"not null;uniqueIndex:idx_gtm_set_target"`
-	TargetURL     string    `gorm:"-"`              // 仅用于展示（通过 JOIN 填充，不存储）
-	Weight        int       `gorm:"default:1"`
-	Priority      int       `gorm:"default:0"`
-	IsActive      bool      `gorm:"default:true"`
-	HealthStatus  string    `gorm:"default:'unknown'"` // "healthy" | "degraded" | "unhealthy" | "unknown"
-	LastHealthCheck *time.Time
-	ConsecutiveFailures int `gorm:"default:0"`
-	CreatedAt     time.Time
-
-	// 唯一约束：同一 target_set 内 target 唯一
-	// UNIQUE(target_set_id, target_id) 由 GORM 的 uniqueIndex 处理
-}
-
-// TargetAlert Target 告警事件（持久化存储）
-type TargetAlert struct {
-	ID              string    `gorm:"primarykey"`
-	TargetURL       string    `gorm:"not null;index"`
-	AlertType       string    `gorm:"not null"`           // "error" | "degraded" | "recovered"
-	Severity        string    `gorm:"not null"`           // "warning" | "error" | "critical"
-	StatusCode      *int
-	ErrorMessage    string
-	AffectedGroups  string    // JSON 数组
-	AlertKey        string    `gorm:"index"`              // 用于去重
-	OccurrenceCount int       `gorm:"default:1"`          // 聚合计数
-	LastOccurrence  *time.Time
-	ResolvedAt      *time.Time `gorm:"index"`
-	CreatedAt       time.Time `gorm:"index"`
-}
-
-// TableName 方法
-func (GroupTargetSet) TableName() string { return "group_target_sets" }
-func (GroupTargetSetMember) TableName() string { return "group_target_set_members" }
-func (TargetAlert) TableName() string { return "target_alerts" }

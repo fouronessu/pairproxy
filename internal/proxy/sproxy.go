@@ -107,6 +107,12 @@ type SProxy struct {
 	cfg           *config.SProxyFullConfig     // 可选，用于同步配置文件中的 LLM targets
 	db            *gorm.DB                     // 可选，用于同步配置文件中的 LLM targets
 	keyDecryptFn  func(string) (string, error) // 可选，当配置了 key_encryption_key 时用于解密 AES key
+
+	// 分组多绑定智能路由（v3.1.0+）
+	// groupMultiBindingFinder: 查询分组的全部 target ID 列表（来自 DB）
+	// modelRouterClient: 调用 MaaS Router API 选取最优模型
+	groupMultiBindingFinder func(groupID string) ([]string, error)
+	modelRouterClient       *ModelRouterClient
 }
 
 // NewSProxy 创建 SProxy。
@@ -199,6 +205,19 @@ func (sp *SProxy) SetLLMHealthChecker(bal *lb.WeightedRandomBalancer, hc *lb.Hea
 // 未设置 bindingResolver 时（如单元测试），回退到负载均衡自动选取。
 func (sp *SProxy) SetBindingResolver(fn func(userID, groupID string) (string, bool)) {
 	sp.bindingResolver = fn
+}
+
+// SetGroupMultiBindingFinder 设置分组多绑定查找器（v3.1.0+）。
+// fn 返回指定分组的全部 LLM target ID 列表；配合 SetModelRouterClient 使用。
+// 仅当分组有 ≥2 个绑定时，才触发 Model Router 智能选取流程。
+func (sp *SProxy) SetGroupMultiBindingFinder(fn func(groupID string) ([]string, error)) {
+	sp.groupMultiBindingFinder = fn
+}
+
+// SetModelRouterClient 设置 MaaS Model Router 客户端（v3.1.0+）。
+// 仅当分组有多绑定时（≥2 个 target）才被调用，选取最优模型对应的 target。
+func (sp *SProxy) SetModelRouterClient(c *ModelRouterClient) {
+	sp.modelRouterClient = c
 }
 
 // SetMaxRetries 设置 RetryTransport 的最大重试次数（默认 2）。
@@ -1052,15 +1071,26 @@ func (sp *SProxy) HealthHandler() http.HandlerFunc {
 //  1. 用户/分组绑定（bindingResolver）→ 若绑定 target 健康且未尝试过
 //  2. 加权随机负载均衡（llmBalancer）→ 过滤已尝试 + 不健康 + provider 不匹配
 //  3. 回退简单轮询（无均衡器时）
-func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tried []string, candidateFilter []string) (*lb.LLMTargetInfo, error) {
+// pickLLMTarget 选取本次请求的 LLM target。
+//
+// boundOverride: 若非空，跳过 bindingResolver，直接将此 targetID 视为绑定结果（用于分组多绑定 Router 预选）。
+func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tried []string, candidateFilter []string, boundOverride string) (*lb.LLMTargetInfo, error) {
 	triedSet := make(map[string]bool, len(tried))
 	for _, u := range tried {
 		triedSet[u] = true
 	}
 
 	// 1. 用户/分组绑定优先（当 bindingResolver 已设置时必须有绑定，否则拒绝）
-	if sp.bindingResolver != nil {
-		boundID, found := sp.bindingResolver(userID, groupID)
+	if sp.bindingResolver != nil || boundOverride != "" {
+		var boundID string
+		var found bool
+		if boundOverride != "" {
+			// Model Router 预选结果，直接使用
+			boundID = boundOverride
+			found = true
+		} else {
+			boundID, found = sp.bindingResolver(userID, groupID)
+		}
 		if !found {
 			// 无绑定 → 直接拒绝，不 fall through 到负载均衡
 			sp.logger.Warn("request rejected: no LLM binding configured for user/group",
@@ -1297,6 +1327,23 @@ func (sp *SProxy) llmTargetInfoForURL(targetURL string) *lb.LLMTargetInfo {
 	return &lb.LLMTargetInfo{URL: targetURL}
 }
 
+// llmBalancerTargetsAsLBTargets 将 llmBalancer 的 Target 列表转换为 model_router_client
+// 所需的内部 lbTarget 切片（避免 model_router_client.go 直接导入 lb 包）。
+func (sp *SProxy) llmBalancerTargetsAsLBTargets() []lbTarget {
+	if sp.llmBalancer == nil {
+		return nil
+	}
+	all := sp.llmBalancer.Targets()
+	result := make([]lbTarget, 0, len(all))
+	for _, t := range all {
+		result = append(result, lbTarget{
+			id:              t.ID,
+			supportedModels: t.SupportedModels,
+		})
+	}
+	return result
+}
+
 // providerForID 根据 UUID 查找对应 target 的 Provider。
 func (sp *SProxy) providerForID(targetID string) string {
 	for _, t := range sp.targets {
@@ -1381,7 +1428,7 @@ func (sp *SProxy) buildRetryTransport(userID, groupID, effectivePath, requestedM
 			// "/v1/messages" (Anthropic targets); for all other cases it equals r.URL.Path
 			// (same as what RetryTransport would pass). RetryTransport's `path` arg is the
 			// original request path before Director rewrite — we don't want that here.
-			return sp.pickLLMTarget(effectivePath, userID, groupID, requestedModel, tried, nil)
+			return sp.pickLLMTarget(effectivePath, userID, groupID, requestedModel, tried, nil, "")
 		},
 		OnSuccess: func(targetURL string) {
 			if sp.llmHC != nil {
@@ -1561,7 +1608,44 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, requestedModel, nil, semanticCandidates)
+	// 分组多绑定智能路由（v3.1.0+）：
+	// 若分组绑定了 ≥2 个 LLM target 且用户无个人绑定，调用 Model Router 预选 target。
+	// 失败时 passthrough（routerBoundOverride=""），pickLLMTarget 回退到 bindingResolver 的首条分组绑定。
+	var routerBoundOverride string
+	if sp.groupMultiBindingFinder != nil && sp.modelRouterClient != nil &&
+		sp.bindingResolver != nil && claims.GroupID != "" {
+
+		// 检查用户是否有个人绑定（有则跳过 Router，直接用个人绑定）
+		_, userHasBinding := sp.bindingResolver(claims.UserID, "")
+		if !userHasBinding {
+			groupTargetIDs, gErr := sp.groupMultiBindingFinder(claims.GroupID)
+			if gErr == nil && len(groupTargetIDs) >= 2 {
+				// 展开候选模型列表
+				balTargets := sp.llmBalancerTargetsAsLBTargets()
+				candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
+				sessionID := extractSessionID(r, bodyBytes)
+				selectedModel, rErr := sp.modelRouterClient.Route(
+					r.Context(), reqID, claims.UserID, sessionID, bodyBytes, requestedModel, candidateModels,
+				)
+				if rErr != nil {
+					sp.logger.Warn("model_router: routing failed, falling back to first group binding",
+						zap.String("request_id", reqID),
+						zap.String("group_id", claims.GroupID),
+						zap.Error(rErr),
+					)
+				} else if selectedModel != "" {
+					routerBoundOverride = resolveModelToTarget(selectedModel, balTargets, groupTargetIDs)
+					sp.logger.Info("model_router: pre-selected target",
+						zap.String("request_id", reqID),
+						zap.String("selected_model", selectedModel),
+						zap.String("target_id", routerBoundOverride),
+					)
+				}
+			}
+		}
+	}
+
+	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, requestedModel, nil, semanticCandidates, routerBoundOverride)
 	if pickErr != nil {
 		switch {
 		case errors.Is(pickErr, ErrNoLLMBinding):
@@ -1649,7 +1733,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		effectivePath = "/v1/messages"
 		// Re-pick using effectivePath so preferredProvidersByPath["/v1/messages"] matches
 		// Anthropic targets correctly (spec §"Target Routing Fix for OtoA").
-		if repicked, pickErr := sp.pickLLMTarget(effectivePath, claims.UserID, claims.GroupID, requestedModel, nil, nil); pickErr == nil {
+		if repicked, pickErr := sp.pickLLMTarget(effectivePath, claims.UserID, claims.GroupID, requestedModel, nil, nil, ""); pickErr == nil {
 			firstInfo = repicked
 			targetProvider = sp.providerForURL(firstInfo.URL)
 			// Update targetURL so the Director closure (captured at line ~1164) uses the right host.

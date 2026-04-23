@@ -1437,21 +1437,25 @@ func TestLLMTargetRepo_Delete_GetByIDFails(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestLLMBindingRepo_Set_GroupDeleteError 验证 Set(groupID) 在 DB 关闭时返回错误（覆盖 group delete 路径）。
+// TestLLMBindingRepo_Set_GroupDeleteError 验证 AddGroupBinding 在 DB 关闭时返回错误。
 func TestLLMBindingRepo_Set_GroupDeleteError(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	gormDB := openTestDB(t)
 	repo := NewLLMBindingRepo(gormDB, logger)
+	targetRepo := NewLLMTargetRepo(gormDB, logger)
+
+	tgt := &LLMTarget{ID: "grp-err-tgt", URL: "https://orig.com", Provider: "anthropic"}
+	require.NoError(t, targetRepo.Create(tgt))
 
 	groupID := "set-grp-err"
-	require.NoError(t, repo.Set("https://orig.com", nil, &groupID))
+	require.NoError(t, repo.AddGroupBinding(tgt.ID, groupID))
 
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
-	// DB 关闭，Set group 会失败（在 delete old binding 时）
-	err = repo.Set("https://new.com", nil, &groupID)
+	// DB 关闭，AddGroupBinding 会失败（查询时 DB 不可用）
+	err = repo.AddGroupBinding(tgt.ID, groupID)
 	assert.Error(t, err)
 }
 
@@ -1530,32 +1534,37 @@ func TestLLMBindingRepo_FindForUser_GroupError(t *testing.T) {
 // 额外覆盖分支：LLMBindingRepo.Set — groupID 路径
 // ============================================================================
 
-// TestLLMBindingRepo_Set_GroupID 验证 Set 使用 groupID（非 userID）时正确执行删旧建新。
-// 覆盖 llm_binding_repo.go:41 的 `group_id = ?` delete 分支。
+// TestLLMBindingRepo_Set_GroupID 验证 AddGroupBinding 为分组追加多绑定（1:N 语义）。
+// Set() 对 groupID 路径已返回错误；分组绑定必须通过 AddGroupBinding。
 func TestLLMBindingRepo_Set_GroupID(t *testing.T) {
 	gormDB := openTestDB(t)
 	logger := zaptest.NewLogger(t)
 	repo := NewLLMBindingRepo(gormDB, logger)
+	targetRepo := NewLLMTargetRepo(gormDB, logger)
 
 	gid := uuid.NewString()
 
+	tgt1 := &LLMTarget{ID: "grp-tgt-1", URL: "http://target-group.local", Provider: "anthropic"}
+	tgt2 := &LLMTarget{ID: "grp-tgt-2", URL: "http://target-group2.local", Provider: "anthropic"}
+	require.NoError(t, targetRepo.Create(tgt1))
+	require.NoError(t, targetRepo.Create(tgt2))
+
 	// 第一次绑定（groupID 路径）
-	err := repo.Set("http://target-group.local", nil, &gid)
+	err := repo.AddGroupBinding(tgt1.ID, gid)
 	require.NoError(t, err)
 
-	url, found, err := repo.FindForUser("", gid)
+	ids, err := repo.FindAllForGroup(gid)
 	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, "http://target-group.local", url)
+	assert.Equal(t, 1, len(ids))
+	assert.Equal(t, tgt1.ID, ids[0])
 
-	// 第二次绑定：覆盖旧的分组绑定（触发 delete old group binding 分支）
-	err = repo.Set("http://target-group2.local", nil, &gid)
+	// 第二次绑定：追加（1:N，不替换）
+	err = repo.AddGroupBinding(tgt2.ID, gid)
 	require.NoError(t, err)
 
-	url2, found2, err := repo.FindForUser("", gid)
+	ids, err = repo.FindAllForGroup(gid)
 	require.NoError(t, err)
-	assert.True(t, found2)
-	assert.Equal(t, "http://target-group2.local", url2)
+	assert.Equal(t, 2, len(ids))
 }
 
 // ============================================================================

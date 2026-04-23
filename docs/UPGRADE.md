@@ -1,6 +1,6 @@
 # PairProxy 升级指南
 
-> 当前版本：**v3.0.2** | 更新日期：2026-04-20
+> 当前版本：**v3.1.0** | 更新日期：2026-04-23
 
 本文档描述各版本间的升级步骤、数据库 Schema 变更、回滚方法及不兼容变更。
 
@@ -51,6 +51,55 @@
 ---
 
 ## 版本变更记录
+
+### v3.1.0 — 分组多绑定（1:N）+ MaaS Model Router 智能路由
+
+**数据库 Schema 变更**
+
+`llm_bindings` 表的分组唯一索引升级：
+
+| 变更 | 说明 |
+|------|------|
+| `idx_llmb_group_target`: `UNIQUE(group_id)` → `UNIQUE(group_id, target_id)` | 允许同一分组绑定多个 LLM target（1:N）；防止同一 (group, target) 重复绑定 |
+
+启动时 `db.AutoMigrate` **自动完成**：先删除旧单列索引，再建复合索引，**无需手动操作**。
+
+**新增功能**
+
+| 功能 | 说明 |
+|------|------|
+| 分组多绑定（1:N） | 通过 Admin API `POST /api/admin/llm/bindings`（传 `group_id`）为分组追加多个同 provider 的 LLM target |
+| provider 一致性约束 | 分组内所有绑定 target 必须是同一 provider；跨 provider 添加返回 400 `binding_error` |
+| Model Router 智能选取 | 当分组有 ≥2 个绑定且用户无个人绑定时，调用外部 MaaS Router API 自动选取最优模型对应的 target |
+| session_id 提取 | body `session_id` → `X-Session-Id` 头 → 自动生成 `auto-session-{uuid}` |
+| Failover 保护 | Router 调用失败（超时/错误）时自动 fallback 到分组第一条绑定，不影响正常请求 |
+
+**不兼容变更**
+
+- `LLMBindingRepo.Set()` 现在**拒绝**分组绑定（`userID=nil`），分组绑定必须改用 `AddGroupBinding()`。对通过 Admin API 或 CLI 操作的用户**无感**（API 层已自动路由）；仅影响直接调用 `Set()` 的内部代码（已全部更新）。
+
+**新增配置**（可选，默认不启用）
+
+```yaml
+model_router:
+  enabled: false
+  url: "https://api.your-router.com/v1/models/router"
+  timeout: 3s        # 路由器调用超时，超时后 fallback 到首条分组绑定
+```
+
+**升级步骤**
+
+```bash
+# Schema 变更由 AutoMigrate 自动处理，直接替换二进制重启即可
+systemctl restart sproxy
+
+# 验证
+curl http://localhost:9000/health
+```
+
+若要启用 Model Router，在 `sproxy.yaml` 中添加 `model_router` 块后重启。
+
+---
 
 ### v3.0.2 — LLM 目标稳定性 + 直连认证错误格式修复
 

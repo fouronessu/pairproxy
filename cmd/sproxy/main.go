@@ -625,6 +625,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 		return targetURL, found
 	})
+	// 分组多绑定查找器：用于分组 1:N 智能路由（v3.1.0+）
+	sp.SetGroupMultiBindingFinder(func(groupID string) ([]string, error) {
+		return llmBindingRepo.FindAllForGroup(groupID)
+	})
+	// MaaS Model Router 客户端（可选；仅当 model_router.enabled=true 时启用）
+	if cfg.ModelRouter.Enabled && cfg.ModelRouter.URL != "" {
+		sp.SetModelRouterClient(proxy.NewModelRouterClient(cfg.ModelRouter, logger))
+		logger.Info("model router client configured",
+			zap.String("url", cfg.ModelRouter.URL),
+		)
+	}
 	adminHandler.SetLLMBindingRepo(llmBindingRepo)
 	adminHandler.SetLLMHealthFn(sp.LLMTargetStatuses)
 	adminHandler.SetTokenRepo(tokenRepo)
@@ -840,61 +851,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	userHandler.RegisterRoutes(mux)
 	logger.Info("user self-service API registered at /api/user/")
 
-	// Group-Target Set 管理 REST API
-	groupTargetSetRepo := db.NewGroupTargetSetRepo(database, logger)
-	targetAlertRepo := db.NewTargetAlertRepo(database, logger)
-
-	adminTargetSetHandler := api.NewAdminTargetSetHandler(groupTargetSetRepo, logger)
-	adminAlertHandler := api.NewAdminAlertHandler(targetAlertRepo, logger)
-
-	// 初始化 TargetAlertManager
-	alertConfig := alert.TargetAlertConfig{
-		Enabled: true,
-		Triggers: map[string]alert.TriggerConfig{
-			"http_error": {
-				Type:           "http_error",
-				StatusCodes:    []int{429, 500, 502, 503, 504},
-				Severity:       "error",
-				MinOccurrences: 3,
-				Window:         5 * time.Minute,
-			},
-		},
-		Recovery: alert.RecoveryConfig{
-			ConsecutiveSuccesses: 2,
-			Window:               5 * time.Minute,
-		},
-		Dashboard: alert.DashboardConfig{
-			MaxActiveAlerts: 100,
-			Retention:       7 * 24 * time.Hour,
-			AutoRefresh:     true,
-		},
-	}
-	alertManager := alert.NewTargetAlertManager(targetAlertRepo, alertConfig, logger)
-	alertManager.Start(context.Background())
-
-	// 初始化 TargetHealthMonitor
-	healthCheckConfig := alert.HealthCheckConfig{
-		Interval:         30 * time.Second,
-		Timeout:          5 * time.Second,
-		FailureThreshold: 3,
-		SuccessThreshold: 2,
-		Path:             "/health",
-	}
-	healthMonitor := alert.NewTargetHealthMonitor(groupTargetSetRepo, alertManager, healthCheckConfig, logger, alert.WithLLMTargetRepo(llmTargetRepo))
-	healthMonitor.Start(context.Background())
-
-	// 创建 SSE Alert Handler
-	sseAlertHandler := api.NewSSEAlertHandler(alertManager, logger)
-
-	// 注册 Group-Target Set 和 Alert 管理端点
-	mux.Handle("GET /api/admin/targetsets", adminHandler.RequireAdmin(http.HandlerFunc(adminTargetSetHandler.ListTargetSets)))
-	mux.Handle("POST /api/admin/targetsets", adminHandler.RequireAdmin(http.HandlerFunc(adminTargetSetHandler.CreateTargetSet)))
-	mux.Handle("GET /api/admin/alerts/active", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ListActiveAlerts)))
-	mux.Handle("GET /api/admin/alerts/history", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ListAlertHistory)))
-	mux.Handle("POST /api/admin/alerts/resolve", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.ResolveAlert)))
-	mux.Handle("GET /api/admin/alerts/stats", adminHandler.RequireAdmin(http.HandlerFunc(adminAlertHandler.GetAlertStats)))
-	mux.Handle("GET /api/admin/alerts/stream", adminHandler.RequireAdmin(http.HandlerFunc(sseAlertHandler.StreamAlerts)))
-	logger.Info("Group-Target Set and Alert management API registered at /api/admin/")
 
 	// 集群内部 API（仅 primary）
 	if peerRegistry != nil {
@@ -1255,7 +1211,7 @@ var adminConfigFlag string
 
 func init() {
 	adminCmd.PersistentFlags().StringVar(&adminConfigFlag, "config", "", "path to sproxy.yaml (default: sproxy.yaml)")
-	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd, adminTrackCmd, adminImportCmd, adminRouteCmd, adminCorpusCmd, GetTargetSetCmd(), GetAlertCmd())
+	adminCmd.AddCommand(adminUserCmd, adminGroupCmd, adminStatsCmd, adminTokenCmd, adminBackupCmd, adminRestoreCmd, adminLogsCmd, adminExportCmd, adminApikeyCmd, adminLLMCmd, adminQuotaCmd, adminAuditCmd, adminDrainCmd, adminTrackCmd, adminImportCmd, adminRouteCmd, adminCorpusCmd)
 }
 
 // closeGormDB 优雅关闭 GORM 数据库连接，释放文件锁和文件描述符。

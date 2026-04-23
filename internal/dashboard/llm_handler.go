@@ -29,11 +29,7 @@ type llmPageData struct {
 	Groups         []db.Group
 	APIKeys        []db.APIKey
 	DrainStatus    proxy.DrainStatus // 排水状态
-	// v2.20 新增：Target Set 支持
-	ActiveTab      string                 // targets | targetsets | bindings
-	TargetSets     []targetSetWithMembers
-	SelectedSetID  string
-	GroupsForBind  []db.Group // 未绑定的分组（用于创建目标集时选择）
+	ActiveTab      string // targets | bindings
 }
 
 // bindingEntry is the JSON shape embedded in the page for client-side filtering.
@@ -64,31 +60,20 @@ type llmTargetWithMeta struct {
 	Draining        bool
 }
 
-// targetSetWithMembers 目标集及其成员信息
-type targetSetWithMembers struct {
-	db.GroupTargetSet
-	Members        []db.GroupTargetSetMember
-	BoundGroupName string
-	MemberCount    int
-}
-
 // handleLLMPage GET /dashboard/llm
 func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 	flash := r.URL.Query().Get("flash")
 	errMsg := r.URL.Query().Get("error")
 	activeTab := r.URL.Query().Get("tab")
-	selectedSetID := r.URL.Query().Get("selected")
-
 	// 默认 Tab 为 targets
 	if activeTab == "" {
 		activeTab = "targets"
 	}
 
 	data := llmPageData{
-		baseData:     baseData{Flash: flash, Error: errMsg, IsWorkerNode: h.isWorkerNode},
-		ActiveTab:    activeTab,
-		SelectedSetID: selectedSetID,
-		BoundCount:   make(map[string]int),
+		baseData:   baseData{Flash: flash, Error: errMsg, IsWorkerNode: h.isWorkerNode},
+		ActiveTab:  activeTab,
+		BoundCount: make(map[string]int),
 	}
 
 	// 获取健康状态（来自 proxy）
@@ -226,38 +211,6 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 	// 获取排水状态
 	if h.drainStatusFn != nil {
 		data.DrainStatus = h.drainStatusFn()
-	}
-
-	// v2.20：加载目标集（如果启用）
-	if h.groupTargetSetRepo != nil {
-		allSets, err := h.groupTargetSetRepo.ListAll()
-		if err != nil {
-			h.logger.Error("list target sets", zap.Error(err))
-		} else {
-			for _, set := range allSets {
-				members, err := h.groupTargetSetRepo.ListMembers(set.ID)
-				if err != nil {
-					h.logger.Error("list target set members", zap.String("setID", set.ID), zap.Error(err))
-					members = []db.GroupTargetSetMember{}
-				}
-				boundGroupName := ""
-				if set.GroupID != nil {
-					boundGroupName = data.GroupIDToName[*set.GroupID]
-				}
-				data.TargetSets = append(data.TargetSets, targetSetWithMembers{
-					GroupTargetSet: set,
-					Members:        members,
-					BoundGroupName: boundGroupName,
-					MemberCount:    len(members),
-				})
-			}
-		}
-
-		// 为 GroupsForBind 使用未绑定的分组
-		if h.groupRepo != nil {
-			allGroups, _ := h.groupRepo.List()
-			data.GroupsForBind = allGroups
-		}
 	}
 
 	h.renderPage(w, "llm.html", data)

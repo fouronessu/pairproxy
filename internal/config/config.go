@@ -37,6 +37,7 @@ type SProxyFullConfig struct {
 	Corpus         CorpusConfig         `yaml:"corpus"`
 	Track          TrackConfig          `yaml:"track"`
 	SemanticRouter SemanticRouterConfig `yaml:"semantic_router"`
+	ModelRouter    ModelRouterConfig    `yaml:"model_router"`
 	Log            LogConfig            `yaml:"log"`
 }
 
@@ -58,6 +59,14 @@ type TrackConfig struct {
 	// 默认值：SQLite 模式下为 <database.path 所在目录>/track，peer/postgres 模式下为 ./track。
 	// peer 模式建议显式配置绝对路径，避免依赖进程工作目录。
 	Dir string `yaml:"dir"`
+}
+
+// ModelRouterConfig 分组多绑定场景下的 MaaS 模型路由器配置（v3.1.0+）。
+// 仅当分组绑定了 2 个或以上 LLM target 时生效；用户级绑定始终直接使用绑定目标。
+type ModelRouterConfig struct {
+	Enabled bool          `yaml:"enabled"` // 默认 false
+	URL     string        `yaml:"url"`     // 路由器端点，如 "https://api.router.com/v1/models/router"
+	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认 3s
 }
 
 // SemanticRouterConfig 语义路由模块配置
