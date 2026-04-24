@@ -280,13 +280,6 @@ func applySProxyDefaults(cfg *SProxyFullConfig) {
 	if cfg.Corpus.MinOutputTokens == 0 {
 		cfg.Corpus.MinOutputTokens = 50
 	}
-	// SemanticRouter 语义路由默认值
-	if cfg.SemanticRouter.ClassifierTimeout == 0 {
-		cfg.SemanticRouter.ClassifierTimeout = 3 * time.Second
-	}
-	if cfg.SemanticRouter.ClassifierModel == "" {
-		cfg.SemanticRouter.ClassifierModel = "claude-haiku-3-5"
-	}
 	// 设置默认 LLM target 权重
 	for i := range cfg.LLM.Targets {
 		if cfg.LLM.Targets[i].Weight == 0 {

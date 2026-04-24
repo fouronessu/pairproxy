@@ -149,7 +149,6 @@ func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
 	// API Key 管理（F-5）
 	mux.Handle("GET /api/admin/api-keys", h.RequireAdmin(http.HandlerFunc(h.handleListAPIKeys)))
 	mux.Handle("POST /api/admin/api-keys", h.RequireAdmin(w(http.HandlerFunc(h.handleCreateAPIKey))))
-	mux.Handle("POST /api/admin/api-keys/{id}/assign", h.RequireAdmin(w(http.HandlerFunc(h.handleAssignAPIKey))))
 	mux.Handle("DELETE /api/admin/api-keys/{id}", h.RequireAdmin(w(http.HandlerFunc(h.handleRevokeAPIKey))))
 
 	// 用户用量查询（需求 B）
@@ -992,56 +991,6 @@ func (h *AdminHandler) handleCreateAPIKey(w http.ResponseWriter, r *http.Request
 		}
 	}
 	writeJSON(w, http.StatusCreated, apiKeyToResponse(*key))
-}
-
-type assignAPIKeyRequest struct {
-	UserID  *string `json:"user_id"`  // 分配给用户（优先）
-	GroupID *string `json:"group_id"` // 分配给分组（兜底）
-}
-
-// POST /api/admin/api-keys/{id}/assign
-func (h *AdminHandler) handleAssignAPIKey(w http.ResponseWriter, r *http.Request) {
-	if h.apiKeyRepo == nil {
-		writeJSONError(w, http.StatusNotImplemented, "not_implemented", "api key management not configured")
-		return
-	}
-	id := r.PathValue("id")
-	var req assignAPIKeyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
-		return
-	}
-	if req.UserID == nil && req.GroupID == nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid_request", "user_id or group_id required")
-		return
-	}
-	if err := h.apiKeyRepo.Assign(id, req.UserID, req.GroupID); err != nil {
-		h.logger.Error("assign api key failed", zap.String("key_id", id), zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to assign api key")
-		return
-	}
-	h.logger.Info("admin assigned api key",
-		zap.String("key_id", id),
-		zap.Any("user_id", req.UserID),
-		zap.Any("group_id", req.GroupID),
-	)
-	// 审计日志
-	if detailBytes, jerr := json.Marshal(map[string]interface{}{
-		"key_id":   id,
-		"user_id":  req.UserID,
-		"group_id": req.GroupID,
-	}); jerr == nil {
-		target := ""
-		if req.UserID != nil {
-			target = *req.UserID
-		} else if req.GroupID != nil {
-			target = *req.GroupID
-		}
-		if aerr := h.auditRepo.Create("admin", "apikey.assign", target, string(detailBytes)); aerr != nil {
-			h.logger.Warn("audit write failed", zap.Error(aerr))
-		}
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // DELETE /api/admin/api-keys/{id}

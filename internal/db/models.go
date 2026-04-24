@@ -92,15 +92,6 @@ type APIKey struct {
 	CreatedAt      time.Time
 }
 
-// APIKeyAssignment API Key 分配记录（用户级优先于分组级）
-type APIKeyAssignment struct {
-	ID       string  `gorm:"primarykey"`
-	APIKeyID string  `gorm:"not null;index:idx_aka_composite"`
-	UserID   *string `gorm:"index:idx_aka_composite"` // 用户级（优先）；与 APIKeyID 组合唯一
-	GroupID  *string `gorm:"index:idx_aka_composite"` // 分组级（兜底）；与 APIKeyID 组合唯一
-	// 约束: (api_key_id, user_id) 和 (api_key_id, group_id) 分别应该唯一
-	// 由于 NULL 在 UNIQUE 中特殊处理，使用应用层检查 + database 约束组合方案
-}
 type AuditLog struct {
 	ID        uint      `gorm:"primarykey;autoIncrement"`
 	Operator  string    `gorm:"not null;index"` // 操作者（固定为 "admin"）
@@ -154,23 +145,7 @@ func (RefreshToken) TableName() string    { return "refresh_tokens" }
 func (UsageLog) TableName() string        { return "usage_logs" }
 func (Peer) TableName() string            { return "peers" }
 func (AuditLog) TableName() string        { return "audit_logs" }
-func (APIKey) TableName() string          { return "api_keys" }
-func (APIKeyAssignment) TableName() string { return "api_key_assignments" }
-func (LLMBinding) TableName() string      { return "llm_bindings" }
+func (APIKey) TableName() string     { return "api_keys" }
+func (LLMBinding) TableName() string { return "llm_bindings" }
 func (LLMTarget) TableName() string       { return "llm_targets" }
 
-// SemanticRoute 语义路由规则（自然语言 description → target URL 集合）
-// DB 记录优先于同名 YAML 规则。
-type SemanticRoute struct {
-	ID             string    `gorm:"primarykey"`
-	Name           string    `gorm:"uniqueIndex;not null"` // 规则唯一名称
-	Description    string    `gorm:"not null"`             // 送给分类器 LLM 的自然语言描述
-	TargetURLsJSON string    `gorm:"column:target_urls;not null;default:'[]'"` // JSON array of target URLs
-	Priority       int       `gorm:"default:0"`            // 数值越大越优先
-	IsActive       bool      `gorm:"default:true"`
-	Source         string    `gorm:"default:'database'"` // "config" | "database"
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-}
-
-func (SemanticRoute) TableName() string { return "semantic_routes" }

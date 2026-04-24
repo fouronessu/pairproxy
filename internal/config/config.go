@@ -36,7 +36,6 @@ type SProxyFullConfig struct {
 	Telemetry TelemetryConfig `yaml:"telemetry"`
 	Corpus         CorpusConfig         `yaml:"corpus"`
 	Track          TrackConfig          `yaml:"track"`
-	SemanticRouter SemanticRouterConfig `yaml:"semantic_router"`
 	ModelRouter    ModelRouterConfig    `yaml:"model_router"`
 	Log            LogConfig            `yaml:"log"`
 }
@@ -67,22 +66,6 @@ type ModelRouterConfig struct {
 	Enabled bool          `yaml:"enabled"` // 默认 false
 	URL     string        `yaml:"url"`     // 路由器端点，如 "https://api.router.com/v1/models/router"
 	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认 3s
-}
-
-// SemanticRouterConfig 语义路由模块配置
-type SemanticRouterConfig struct {
-	Enabled           bool                  `yaml:"enabled"`            // 默认 false
-	ClassifierTimeout time.Duration         `yaml:"classifier_timeout"` // 分类器超时，默认 3s
-	ClassifierModel   string                `yaml:"classifier_model"`   // 分类器模型名，默认 "claude-haiku-3-5"
-	Routes            []SemanticRouteConfig `yaml:"routes"`             // YAML 默认规则（DB 规则优先）
-}
-
-// SemanticRouteConfig 单条语义路由规则（来自 YAML）
-type SemanticRouteConfig struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	TargetURLs  []string `yaml:"target_urls"`
-	Priority    int      `yaml:"priority"`
 }
 
 // PricingConfig 模型定价配置（用于估算费用）

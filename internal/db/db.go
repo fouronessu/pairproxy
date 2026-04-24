@@ -256,11 +256,9 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 		&UsageLog{},
 		&Peer{},
 		&AuditLog{},         // P2-3: 管理操作审计日志
-		&APIKey{},           // F-5: 多 API Key 管理
-		&APIKeyAssignment{}, // F-5: API Key 分配
-		&LLMBinding{},       // LLM 绑定管理
+		&APIKey{},       // F-5: 多 API Key 管理
+		&LLMBinding{},   // LLM 绑定管理
 		&LLMTarget{},        // LLM 目标动态管理
-		&SemanticRoute{},    // 语义路由规则
 	}
 
 	for _, model := range models {

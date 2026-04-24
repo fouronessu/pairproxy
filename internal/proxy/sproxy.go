@@ -33,7 +33,6 @@ import (
 	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/l17728/pairproxy/internal/metrics"
 	"github.com/l17728/pairproxy/internal/quota"
-	"github.com/l17728/pairproxy/internal/router"
 	"github.com/l17728/pairproxy/internal/tap"
 	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
@@ -83,8 +82,6 @@ type SProxy struct {
 	startTime      time.Time                                       // 进程启动时间（供 /health 返回 uptime）
 	activeRequests atomic.Int64                                    // 当前正在处理的代理请求数
 	sqlDB          *sql.DB                                         // 可选，用于 /health 检查 DB 可达性
-	apiKeyResolver func(userID, groupID string) (apiKey string, found bool) // 可选，动态 API Key 解析
-
 	// 排水模式控制
 	draining     atomic.Bool // 排水模式标志
 	drainReason  string      // 排水原因（用于日志和状态查询）
@@ -101,7 +98,6 @@ type SProxy struct {
 	notifier       *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
 	convTracker    atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
 	corpusWriter   atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
-	semanticRouter *router.SemanticRouter        // 可选，非 nil 时对无绑定请求做语义路由
 
 	// 配置和数据库（用于 config target sync）
 	cfg           *config.SProxyFullConfig     // 可选，用于同步配置文件中的 LLM targets
@@ -179,13 +175,6 @@ func (sp *SProxy) SetDB(gormDB interface{ DB() (*sql.DB, error) }) {
 	}
 }
 
-// SetAPIKeyResolver 设置动态 API Key 解析器（可选）。
-// fn 根据 userID 和 groupID 返回解密后的 API Key；found=false 时回退到配置文件中的静态 Key。
-// groupID 直接来自 JWT claims，无需再查询 UserRepo。
-func (sp *SProxy) SetAPIKeyResolver(fn func(userID, groupID string) (string, bool)) {
-	sp.apiKeyResolver = fn
-}
-
 // SetKeyDecryptFn 设置 AES 密钥解密函数（BUG-4 修复）。
 // 当配置了 admin.key_encryption_key 时，resolveAPIKey 优先使用此函数解密 AES 密文；
 // 未设置时退回到 obfuscateKey（兼容 config-sync 路径）。
@@ -240,12 +229,6 @@ func (sp *SProxy) SetTransport(t http.RoundTripper) {
 // 非 nil 时，每个请求的转发内容（请求体、响应体、SSE chunks）均会写入该 logger。
 func (sp *SProxy) SetDebugLogger(l *zap.Logger) {
 	sp.debugLogger.Store(l)
-}
-
-// SetSemanticRouter 设置语义路由器（可选）。
-// 非 nil 时，对无显式 LLM 绑定的请求（LB 路径）进行语义分类，缩窄候选 target 池。
-func (sp *SProxy) SetSemanticRouter(r *router.SemanticRouter) {
-	sp.semanticRouter = r
 }
 
 // SyncAndSetDebugLogger 先 Sync 旧 logger（flush 缓冲区），再原子切换为新 logger。
@@ -1074,7 +1057,7 @@ func (sp *SProxy) HealthHandler() http.HandlerFunc {
 // pickLLMTarget 选取本次请求的 LLM target。
 //
 // boundOverride: 若非空，跳过 bindingResolver，直接将此 targetID 视为绑定结果（用于分组多绑定 Router 预选）。
-func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tried []string, candidateFilter []string, boundOverride string) (*lb.LLMTargetInfo, error) {
+func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tried []string, boundOverride string) (*lb.LLMTargetInfo, error) {
 	triedSet := make(map[string]bool, len(tried))
 	for _, u := range tried {
 		triedSet[u] = true
@@ -1166,20 +1149,9 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 		return nil, ErrBoundTargetUnavailable
 	}
 
-	// 构建语义候选集（过滤 candidateFilter）
-	filterSet := make(map[string]bool, len(candidateFilter))
-	for _, u := range candidateFilter {
-		filterSet[u] = true
-	}
-	if len(filterSet) > 0 {
-		sp.logger.Debug("pickLLMTarget: semantic candidateFilter active",
-			zap.Int("filter_size", len(filterSet)),
-		)
-	}
-
-	// 2. 加权随机均衡（支持 tried 过滤 + provider 过滤 + candidateFilter）
+	// 2. 加权随机均衡（支持 tried 过滤 + provider 过滤）
 	if sp.llmBalancer != nil {
-		return sp.weightedPickExcluding(path, requestedModel, triedSet, filterSet)
+		return sp.weightedPickExcluding(path, requestedModel, triedSet)
 	}
 
 	// 3. 回退：简单轮询（未配置均衡器时）
@@ -1187,7 +1159,6 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 	if len(candidates) == 0 {
 		candidates = sp.targets
 	}
-	// 过滤已尝试目标 + candidateFilter（若非空则只保留在 filter 内的）
 	var available []LLMTarget
 	for _, t := range candidates {
 		tid := t.ID
@@ -1195,9 +1166,6 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 			tid = t.URL
 		}
 		if triedSet[tid] {
-			continue
-		}
-		if len(filterSet) > 0 && !filterSet[tid] {
 			continue
 		}
 		available = append(available, t)
@@ -1216,19 +1184,15 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 
 // weightedPickExcluding 从 llmBalancer 中选取健康 target，排除 tried，并应用 provider 过滤、语义候选集过滤和模型过滤。
 // 执行顺序：provider 过滤 → 模型过滤（fail-open）→ 加权随机
-func (sp *SProxy) weightedPickExcluding(path, requestedModel string, tried map[string]bool, candidateFilter map[string]bool) (*lb.LLMTargetInfo, error) {
+func (sp *SProxy) weightedPickExcluding(path, requestedModel string, tried map[string]bool) (*lb.LLMTargetInfo, error) {
 	all := sp.llmBalancer.Targets()
 	preferred := preferredProvidersByPath(path)
 
-	// 步骤 1: provider + tried + candidateFilter 过滤（基础过滤）
+	// 步骤 1: provider + tried 过滤（基础过滤）
 	filter := func(targets []lb.Target, providerFilter map[string]bool) []lb.Target {
 		var out []lb.Target
 		for _, t := range targets {
 			if !t.Healthy || tried[t.ID] {
-				continue
-			}
-			// 语义路由候选集过滤（非空时只保留在 candidateFilter 内的 target）
-			if len(candidateFilter) > 0 && !candidateFilter[t.ID] {
 				continue
 			}
 			if providerFilter != nil {
@@ -1434,7 +1398,7 @@ func (sp *SProxy) buildRetryTransport(userID, groupID, effectivePath, requestedM
 			// "/v1/messages" (Anthropic targets); for all other cases it equals r.URL.Path
 			// (same as what RetryTransport would pass). RetryTransport's `path` arg is the
 			// original request path before Director rewrite — we don't want that here.
-			return sp.pickLLMTarget(effectivePath, userID, groupID, requestedModel, tried, nil, "")
+			return sp.pickLLMTarget(effectivePath, userID, groupID, requestedModel, tried, "")
 		},
 		OnSuccess: func(targetURL string) {
 			if sp.llmHC != nil {
@@ -1578,29 +1542,6 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	// 语义路由：仅对无绑定用户（bindingResolver==nil）的 LB 路径生效
-	var semanticCandidates []string
-	if sp.semanticRouter != nil && sp.bindingResolver == nil && len(bodyBytes) > 0 {
-		if msgs := extractMessagesFromBody(bodyBytes); len(msgs) > 0 {
-			semanticCandidates = sp.semanticRouter.Route(r.Context(), msgs)
-			if len(semanticCandidates) > 0 {
-				sp.logger.Info("semantic router: candidate pool narrowed",
-					zap.String("request_id", reqID),
-					zap.Int("candidates", len(semanticCandidates)),
-				)
-			}
-		} else {
-			sp.logger.Debug("semantic router: skipped, no messages extracted from body",
-				zap.String("request_id", reqID),
-			)
-		}
-	} else if sp.semanticRouter != nil && sp.bindingResolver != nil {
-		sp.logger.Debug("semantic router: skipped, binding resolver active",
-			zap.String("request_id", reqID),
-			zap.String("user_id", claims.UserID),
-		)
-	}
-
 	// 提取客户端请求的模型名（用于模型感知路由 F2 + auto 模式 F3）
 	// 注意：此提取在 pickLLMTarget 之前完成，以便路由层按模型过滤
 	requestedModel := extractModel(r)
@@ -1682,7 +1623,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, requestedModel, nil, semanticCandidates, routerBoundOverride)
+	firstInfo, pickErr := sp.pickLLMTarget(r.URL.Path, claims.UserID, claims.GroupID, requestedModel, nil, routerBoundOverride)
 	if pickErr != nil {
 		switch {
 		case errors.Is(pickErr, ErrNoLLMBinding):
@@ -1770,7 +1711,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		effectivePath = "/v1/messages"
 		// Re-pick using effectivePath so preferredProvidersByPath["/v1/messages"] matches
 		// Anthropic targets correctly (spec §"Target Routing Fix for OtoA").
-		if repicked, pickErr := sp.pickLLMTarget(effectivePath, claims.UserID, claims.GroupID, requestedModel, nil, nil, ""); pickErr == nil {
+		if repicked, pickErr := sp.pickLLMTarget(effectivePath, claims.UserID, claims.GroupID, requestedModel, nil, ""); pickErr == nil {
 			firstInfo = repicked
 			targetProvider = sp.providerForURL(firstInfo.URL)
 			// Update targetURL so the Director closure (captured at line ~1164) uses the right host.
@@ -2081,14 +2022,6 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// 清理直连模式的 Anthropic 认证头（防止泄露给上游）
 			req.Header.Del("x-api-key")
 			apiKey := firstInfo.APIKey
-			if sp.apiKeyResolver != nil {
-				if k, ok := sp.apiKeyResolver(claims.UserID, claims.GroupID); ok {
-					apiKey = k
-					sp.logger.Debug("using dynamic api key for user",
-						zap.String("user_id", claims.UserID),
-					)
-				}
-			}
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 			req.Header.Del("X-Forwarded-For")
 
@@ -2350,17 +2283,6 @@ func extractModelFromBody(body []byte) string {
 		return req.Model
 	}
 	return ""
-}
-
-// extractMessagesFromBody 从请求 body 中提取 messages 字段，用于语义路由分类。
-func extractMessagesFromBody(body []byte) []corpus.Message {
-	var req struct {
-		Messages []corpus.Message `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &req); err == nil {
-		return req.Messages
-	}
-	return nil
 }
 
 // ServeDirect 处理直连模式（API Key 认证）的代理请求。
