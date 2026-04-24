@@ -29,7 +29,7 @@ func TestExtractSessionID_FromBody(t *testing.T) {
 
 func TestExtractSessionID_FromHeader(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
-	req.Header.Set("X-Session-Id", "header-session-xyz")
+	req.Header.Set("X-Claude-Code-Session-Id", "header-session-xyz")
 	sid := extractSessionID(req, nil)
 	assert.Equal(t, "header-session-xyz", sid)
 }
@@ -106,6 +106,52 @@ func TestExpandCandidateModels_EmptySupportedModels_Skipped(t *testing.T) {
 	models := expandCandidateModels(targets, []string{"t1", "t2"})
 	// t1 has no supported models, it's skipped (can't contribute to candidate list)
 	assert.Equal(t, []string{"gpt-4o"}, models)
+}
+
+// ---------------------------------------------------------------------------
+// groupProviderFromTargets 测试
+// ---------------------------------------------------------------------------
+
+func TestGroupProviderFromTargets_ReturnsFirstMatchingProvider(t *testing.T) {
+	targets := []lbTarget{
+		{id: "t1", supportedModels: []string{"DeepSeek-V3"}, provider: "openai"},
+		{id: "t2", supportedModels: []string{"gpt-4o"}, provider: "openai"},
+		{id: "t3", supportedModels: []string{"claude-3-5-sonnet"}, provider: "anthropic"},
+	}
+	got := groupProviderFromTargets(targets, []string{"t1", "t2"})
+	assert.Equal(t, "openai", got)
+}
+
+func TestGroupProviderFromTargets_OnlySearchesRequestedIDs(t *testing.T) {
+	targets := []lbTarget{
+		{id: "t1", provider: "anthropic"},
+		{id: "t2", provider: "openai"},
+	}
+	// t1 不在 groupTargetIDs 中，应跳过
+	got := groupProviderFromTargets(targets, []string{"t2"})
+	assert.Equal(t, "openai", got)
+}
+
+func TestGroupProviderFromTargets_EmptyProvider_Skipped(t *testing.T) {
+	targets := []lbTarget{
+		{id: "t1", provider: ""},
+		{id: "t2", provider: "openai"},
+	}
+	got := groupProviderFromTargets(targets, []string{"t1", "t2"})
+	assert.Equal(t, "openai", got, "should skip empty provider and return first non-empty")
+}
+
+func TestGroupProviderFromTargets_NoMatch_ReturnsEmpty(t *testing.T) {
+	targets := []lbTarget{
+		{id: "t1", provider: "openai"},
+	}
+	got := groupProviderFromTargets(targets, []string{"t99"}) // t99 不存在
+	assert.Equal(t, "", got)
+}
+
+func TestGroupProviderFromTargets_EmptyInputs(t *testing.T) {
+	assert.Equal(t, "", groupProviderFromTargets(nil, nil))
+	assert.Equal(t, "", groupProviderFromTargets([]lbTarget{}, []string{}))
 }
 
 // ---------------------------------------------------------------------------

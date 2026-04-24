@@ -229,6 +229,23 @@ func expandCandidateModels(balancerTargets []lbTarget, targetIDs []string) []str
 type lbTarget struct {
 	id              string
 	supportedModels []string
+	provider        string // "anthropic" | "openai" | "ollama"；空字符串表示未知
+}
+
+// groupProviderFromTargets 从 balancerTargets 中找到 groupTargetIDs 对应的 provider。
+// 同组多绑定 target 的 provider 必须一致（设计约束），取第一个非空值即可。
+// 若所有目标均无 provider 信息，返回空字符串（调用方按 conversionNone 处理）。
+func groupProviderFromTargets(balancerTargets []lbTarget, groupTargetIDs []string) string {
+	idSet := make(map[string]bool, len(groupTargetIDs))
+	for _, id := range groupTargetIDs {
+		idSet[id] = true
+	}
+	for _, t := range balancerTargets {
+		if idSet[t.id] && t.provider != "" {
+			return t.provider
+		}
+	}
+	return ""
 }
 
 // resolveModelToTarget 根据 Router 返回的模型名，在 targetIDs 对应的 balancer targets 中

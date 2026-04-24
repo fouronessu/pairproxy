@@ -1333,12 +1333,18 @@ func (sp *SProxy) llmBalancerTargetsAsLBTargets() []lbTarget {
 	if sp.llmBalancer == nil {
 		return nil
 	}
+	// 先建 id→provider 索引，整体 O(n) 而非 O(n²)
+	providerByID := make(map[string]string, len(sp.targets))
+	for _, t := range sp.targets {
+		providerByID[t.ID] = t.Provider
+	}
 	all := sp.llmBalancer.Targets()
 	result := make([]lbTarget, 0, len(all))
 	for _, t := range all {
 		result = append(result, lbTarget{
 			id:              t.ID,
 			supportedModels: t.SupportedModels,
+			provider:        providerByID[t.ID],
 		})
 	}
 	return result
@@ -1612,6 +1618,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 若分组绑定了 ≥2 个 LLM target 且用户无个人绑定，调用 Model Router 预选 target。
 	// 失败时 passthrough（routerBoundOverride=""），pickLLMTarget 回退到 bindingResolver 的首条分组绑定。
 	var routerBoundOverride string
+	// preConvertedBody：AtoO 预转换结果缓存。
+	// 当组 provider 为 openai/ollama 且请求为 Anthropic 格式时，在调用 model_router 前提前完成
+	// 一次 Anthropic→OpenAI 转换，Router 收到合法的 OpenAI 格式 body；
+	// 转换结果在 line ~1770 直接复用（仅补 model mapping），避免对同一 body 重复全量转换。
+	var preConvertedBody []byte
 	if sp.groupMultiBindingFinder != nil && sp.modelRouterClient != nil &&
 		sp.bindingResolver != nil && claims.GroupID != "" {
 
@@ -1624,8 +1635,34 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				balTargets := sp.llmBalancerTargetsAsLBTargets()
 				candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
 				sessionID := extractSessionID(r, bodyBytes)
+
+				// 若组 provider 要求 AtoO，提前转换一次并缓存结果（转换后的 body 同时用于 Router 和转发）。
+				// nil modelMapping：model name 在选定 target 后再通过 applyModelToOpenAIBody 更新，代价极小。
+				routerBody := bodyBytes
+				if groupProvider := groupProviderFromTargets(balTargets, groupTargetIDs); groupProvider != "" {
+					if detectConversionDirection(r.URL.Path, groupProvider) == conversionAtoO {
+						if converted, _, convErr := convertAnthropicToOpenAIRequest(bodyBytes, sp.logger, reqID, nil); convErr == nil {
+							preConvertedBody = converted
+							routerBody = converted
+						}
+					}
+				}
+
+				// debug 日志：记录发往 model_router 的请求体，便于排查路由决策问题。
+				// 仅在配置了 log.debug_file 时写入，不影响正常日志链路。
+				if dl != nil {
+					dl.Debug("→ model_router request",
+						zap.String("request_id", reqID),
+						zap.String("group_id", claims.GroupID),
+						zap.String("session_id", sessionID),
+						zap.String("model", requestedModel),
+						zap.Strings("candidates", candidateModels),
+						zap.ByteString("body", routerBody), // 不截断，完整记录便于排查消息转换正确性
+					)
+				}
+
 				selectedModel, rErr := sp.modelRouterClient.Route(
-					r.Context(), reqID, claims.UserID, sessionID, bodyBytes, requestedModel, candidateModels,
+					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels,
 				)
 				if rErr != nil {
 					sp.logger.Warn("model_router: routing failed, falling back to first group binding",
@@ -1767,7 +1804,21 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		// 转换请求 body
 		if len(bodyBytes) > 0 {
 			modelMapping := sp.modelMappingForURL(firstInfo.URL)
-			converted, newPath, convErr := convertAnthropicToOpenAIRequest(bodyBytes, sp.logger, reqID, modelMapping)
+
+			var (
+				converted []byte
+				newPath   string
+				convErr   error
+			)
+			if preConvertedBody != nil {
+				// model_router 路径：直接复用预转换结果，仅补 model mapping（轻量字段更新）
+				converted = applyModelToOpenAIBody(preConvertedBody, requestedModel, modelMapping)
+				newPath = "/chat/completions"
+			} else {
+				// 常规路径：完整转换（含 model mapping）
+				converted, newPath, convErr = convertAnthropicToOpenAIRequest(bodyBytes, sp.logger, reqID, modelMapping)
+			}
+
 			if convErr == nil {
 				bodyBytes = converted
 				convertedPath = newPath
