@@ -234,7 +234,7 @@ func TestModelRouterClient_Route_Success(t *testing.T) {
 	})
 
 	body := []byte(`{"model":"claude-3-5-sonnet-20241022","messages":[{"role":"user","content":"hello"}]}`)
-	selected, err := client.Route(context.Background(), "req-123", "alice", "sess-001", body, "claude-3-5-sonnet-20241022", []string{"DeepSeek-V3", "gpt-4o"})
+	selected, err := client.Route(context.Background(), "req-123", "alice", "sess-001", body, "claude-3-5-sonnet-20241022", []string{"DeepSeek-V3", "gpt-4o"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "DeepSeek-V3", selected, "should select rank=1 model")
 }
@@ -243,7 +243,7 @@ func TestModelRouterClient_Route_ServerError(t *testing.T) {
 	_, client := newTestRouterServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	_, err := client.Route(context.Background(), "req-x", "user", "sess", nil, "", nil)
+	_, err := client.Route(context.Background(), "req-x", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "non-200")
 }
@@ -255,7 +255,7 @@ func TestModelRouterClient_Route_EmptyRankings(t *testing.T) {
 			"model_rankings": []interface{}{},
 		})
 	})
-	_, err := client.Route(context.Background(), "req-y", "user", "sess", nil, "", nil)
+	_, err := client.Route(context.Background(), "req-y", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty model_rankings")
 }
@@ -265,7 +265,7 @@ func TestModelRouterClient_Route_InvalidJSON(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`not json`)) //nolint:errcheck
 	})
-	_, err := client.Route(context.Background(), "req-z", "user", "sess", nil, "", nil)
+	_, err := client.Route(context.Background(), "req-z", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 }
 
@@ -284,14 +284,14 @@ func TestModelRouterClient_Route_Timeout(t *testing.T) {
 		Timeout: 50 * time.Millisecond,
 	}, logger)
 
-	_, err := client.Route(context.Background(), "req-t", "user", "sess", nil, "", nil)
+	_, err := client.Route(context.Background(), "req-t", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err, "should time out")
 }
 
 func TestModelRouterClient_Route_NoURL(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	client := NewModelRouterClient(config.ModelRouterConfig{URL: ""}, logger)
-	_, err := client.Route(context.Background(), "", "", "", nil, "", nil)
+	_, err := client.Route(context.Background(), "", "", "", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
 }
@@ -308,7 +308,7 @@ func TestModelRouterClient_Route_PreservesOriginalModel(t *testing.T) {
 	_ = srv
 
 	body := []byte(`{"model":"claude-3-5-sonnet-20241022","messages":[]}`)
-	client.Route(context.Background(), "r1", "u1", "s1", body, "claude-3-5-sonnet-20241022", nil) //nolint:errcheck
+	client.Route(context.Background(), "r1", "u1", "s1", body, "claude-3-5-sonnet-20241022", nil, nil) //nolint:errcheck
 
 	// Model should NOT be changed to "auto" — original model preserved
 	assert.Equal(t, "claude-3-5-sonnet-20241022", capturedBody["model"],

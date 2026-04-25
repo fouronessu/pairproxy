@@ -69,6 +69,7 @@ type modelRank struct {
 //   - bodyBytes: 原始请求 JSON（OpenAI/Anthropic 格式）
 //   - requestedModel: 客户端请求的模型名（保留，不改为 "auto"）
 //   - candidateModels: 所有候选模型名（来自绑定 targets 的 supported_models）
+//   - dl: 可选的 debug 文件 logger；非 nil 时将完整 HTTP 请求（方法、URL、headers、body）写入 debug 文件
 //
 // 失败时返回 ("", err)；调用方应 passthrough（保留原始模型）。
 func (c *ModelRouterClient) Route(
@@ -79,6 +80,7 @@ func (c *ModelRouterClient) Route(
 	bodyBytes []byte,
 	requestedModel string,
 	candidateModels []string,
+	dl *zap.Logger,
 ) (selectedModel string, err error) {
 	if c.url == "" {
 		return "", fmt.Errorf("model router URL not configured")
@@ -122,13 +124,18 @@ func (c *ModelRouterClient) Route(
 	httpReq.Header.Set("X-Domain-Id", username)
 	httpReq.Header.Set("X-User-Alias", username)
 
-	c.logger.Debug("model_router: calling router API",
-		zap.String("req_id", reqID),
-		zap.String("username", username),
-		zap.String("session_id", sessionID),
-		zap.String("model", requestedModel),
-		zap.Strings("candidates", candidateModels),
-	)
+	if dl != nil {
+		dl.Debug("→ model_router HTTP request",
+			zap.String("req_id", reqID),
+			zap.String("method", httpReq.Method),
+			zap.String("url", httpReq.URL.String()),
+			zap.String("header_content_type", httpReq.Header.Get("Content-Type")),
+			zap.String("header_x_span_id", httpReq.Header.Get("X-Span-Id")),
+			zap.String("header_x_domain_id", httpReq.Header.Get("X-Domain-Id")),
+			zap.String("header_x_user_alias", httpReq.Header.Get("X-User-Alias")),
+			zap.ByteString("body", reqBody),
+		)
+	}
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {

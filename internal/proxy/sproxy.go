@@ -1589,21 +1589,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// debug 日志：记录发往 model_router 的请求体，便于排查路由决策问题。
-				// 仅在配置了 log.debug_file 时写入，不影响正常日志链路。
-				if dl != nil {
-					dl.Debug("→ model_router request",
-						zap.String("request_id", reqID),
-						zap.String("group_id", claims.GroupID),
-						zap.String("session_id", sessionID),
-						zap.String("model", requestedModel),
-						zap.Strings("candidates", candidateModels),
-						zap.ByteString("body", routerBody), // 不截断，完整记录便于排查消息转换正确性
-					)
-				}
-
 				selectedModel, rErr := sp.modelRouterClient.Route(
-					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels,
+					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, dl,
 				)
 				if rErr != nil {
 					sp.logger.Warn("model_router: routing failed, falling back to first group binding",
