@@ -3421,7 +3421,7 @@ func openAdminTrackDir() (*track.Tracker, *zap.Logger, error) {
 	if err != nil {
 		return nil, logger, fmt.Errorf("load config from %q: %w", cfgPath, err)
 	}
-	trackDir := filepath.Join(filepath.Dir(cfg.Database.Path), "track")
+	trackDir := cfg.Track.Dir
 	t, err := track.New(trackDir)
 	if err != nil {
 		return nil, logger, fmt.Errorf("open track dir %q: %w", trackDir, err)

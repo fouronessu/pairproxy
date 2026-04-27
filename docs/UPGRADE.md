@@ -810,12 +810,12 @@ cluster:
 **新增文件系统目录**（启动时自动创建，无需手动操作）
 
 ```
-<db_dir>/track/
+<track.dir>/
 ├── users/          # 追踪状态标记文件
 └── conversations/  # 按用户分目录存储的 JSON 对话记录
 ```
 
-目录位置：数据库文件（`database.path`）同级目录下的 `track/` 子目录。例如数据库在 `./pairproxy.db`，则追踪目录为 `./track/`。
+目录位置由配置项 `track.dir` 决定，默认为 `./track`（相对于 sproxy 进程工作目录），与数据库路径无关。Peer 模式下建议显式配置为共享存储的绝对路径。
 
 **新增 CLI 命令**（无需配置文件变更）
 
