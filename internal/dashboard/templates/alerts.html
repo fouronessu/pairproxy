@@ -39,7 +39,7 @@
       </div>
       <!-- 状态指示 -->
       <span id="liveIndicator" class="flex items-center gap-1.5 text-xs text-gray-500">
-        <span class="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>实时
+        <span class="inline-block w-2 h-2 rounded-full bg-blue-400"></span>每15秒刷新
       </span>
       <!-- 手动刷新 -->
       <button onclick="fetchEvents(true)" id="refreshBtn"
@@ -245,8 +245,10 @@
         updateStatus();
       })
       .catch(function() {
-        document.getElementById('liveIndicator').innerHTML =
-          '<span class="inline-block w-2 h-2 rounded-full bg-red-400"></span>连接失败';
+        var indicator = document.getElementById('liveIndicator');
+        if (indicator) {
+          indicator.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-400"></span>加载失败';
+        }
       });
   };
 
@@ -464,70 +466,10 @@
     refreshTimer = setInterval(function() { fetchEvents(false); }, 15000);
   }
 
-  function connectSSE() {
-    try {
-      var eventSource = new EventSource('/api/admin/alerts/stream');
-
-      eventSource.addEventListener('connected', function(e) {
-        console.log('Connected to alert stream');
-        var liveIndicator = document.getElementById('liveIndicator');
-        if (liveIndicator) {
-          liveIndicator.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>实时';
-        }
-      });
-
-      eventSource.addEventListener('alert_update', function(e) {
-        try {
-          var event = JSON.parse(e.data);
-          console.log('Received alert update:', event);
-
-          if (event.alert) {
-            var newEvent = {
-              time: event.timestamp || new Date().toISOString(),
-              level: event.alert.severity === 'critical' ? 'error' : 'warn',
-              logger: 'TargetAlert',
-              message: event.alert.error_message || 'Target alert: ' + event.alert.alert_type,
-              fields: {
-                target: event.alert.target_url,
-                type: event.alert.alert_type,
-                status_code: event.alert.status_code
-              }
-            };
-            allEvents.unshift(newEvent);
-            if (allEvents.length > 300) allEvents = allEvents.slice(0, 300);
-            lastEventTime = newEvent.time;
-            renderTable();
-            updateStatus();
-          }
-        } catch(err) {
-          console.error('Error processing alert update:', err);
-        }
-      });
-
-      eventSource.addEventListener('error', function(e) {
-        console.error('SSE connection error:', e);
-        var liveIndicator = document.getElementById('liveIndicator');
-        if (liveIndicator) {
-          liveIndicator.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-400"></span>连接失败';
-        }
-        eventSource.close();
-        setTimeout(connectSSE, 5000);
-      });
-
-      window.addEventListener('beforeunload', function() {
-        eventSource.close();
-      });
-    } catch(err) {
-      console.error('Failed to connect to SSE:', err);
-      startAutoRefresh();
-    }
-  }
-
   /* ── 初始化（仅对实时 Tab） ── */
   var eventsBody = document.getElementById('eventsBody');
   if (eventsBody) {
     fetchEvents(true);
-    connectSSE();
     startAutoRefresh();
   }
 })();
