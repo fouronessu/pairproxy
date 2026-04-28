@@ -1896,7 +1896,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			bodyBytes,
 			targetProvider,
 		)
-		sp.logger.Debug("conversation tracking active",
+		sp.logger.Info("conversation tracking active",
 			zap.String("request_id", reqID),
 			zap.String("username", claims.Username),
 		)
@@ -2224,6 +2224,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ServeHTTP(tw, r)
+
+	// 对话跟踪：流式响应完成后兜底 Flush（幂等，已由 FeedChunk 触发者不重复写入）。
+	// 防止上游流未发出 message_stop / [DONE] 时记录丢失。
+	if captureSession != nil {
+		captureSession.Flush()
+	}
 
 	// 请求完成后立即失效该用户的配额缓存。
 	// 此时用量记录已写入 UsageWriter channel（异步，5s 内刷入 DB）。
