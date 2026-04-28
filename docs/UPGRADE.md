@@ -1,6 +1,6 @@
 # PairProxy 升级指南
 
-> 当前版本：**v3.1.0** | 更新日期：2026-04-23
+> 当前版本：**v3.1.1** | 更新日期：2026-04-28
 
 本文档描述各版本间的升级步骤、数据库 Schema 变更、回滚方法及不兼容变更。
 
@@ -51,6 +51,44 @@
 ---
 
 ## 版本变更记录
+
+### v3.1.1 — Track / Peer 模式 / Model Router 问题修复
+
+**数据库 Schema 变更**
+
+无。直接替换二进制重启即可。
+
+**问题修复**
+
+| # | 修复内容 |
+|---|---------|
+| 1 | **track.dir 独立配置**：`track.dir` 不再与 `database.path` 绑定，可单独配置指向 NFS 等共享存储；peer 模式下所有节点共享同一 track 目录时均可正常写入 |
+| 2 | **peer 模式 source_node 始终为 "local"**：`usage_logs.source_node` 在 peer 模式下因代码路径错误始终写入 `"local"`，已修复为正确记录各节点地址 |
+| 3 | **alerts 页面 SSE 报错**：`/api/admin/alerts/stream` 因 EventSource 无法携带认证头持续报 `missing authentication header`；已改为 15 秒轮询，报错消除 |
+| 4 | **model_router AtoO 路径预转换**：model_router 路由时未对 Anthropic 格式请求预先转换为 OpenAI 格式，导致路由器收到错误格式的 body；已在路由前完成转换 |
+| 5 | **track 流式兜底 Flush**：流式响应若未发出 `message_stop` / `[DONE]` 终止信号，对话记录会丢失；已在 `proxy.ServeHTTP` 完成后补加幂等 `Flush()` |
+| 6 | **track 目录权限**：`sproxy admin track enable` 以 root 身份创建的对话目录（mode 0755）导致 service 用户（如 `pairproxy`）无法写入文件；已改为 0o777，CLI 与 service 用户不同时无需手动 chown |
+| 7 | **track 写入错误可见性**：对话文件写入失败之前静默丢弃；现改为打印 `[track]` 前缀错误日志，成功写入也打印路径，便于排查 |
+| 8 | **track 活跃日志级别**：`conversation tracking active` 从 DEBUG 提升为 INFO，无需开启 debug 日志即可确认 track 是否正确触发 |
+
+**升级注意（track 目录权限）**
+
+若已通过旧版 `track enable` 创建了目录，需手动修复权限：
+
+```bash
+chmod -R a+w <track.dir>/conversations/
+```
+
+新版本执行 `track enable` 时会自动使用正确权限，无需额外操作。
+
+**升级步骤**
+
+```bash
+# 无 Schema 变更，直接替换二进制重启
+systemctl restart sproxy
+```
+
+---
 
 ### v3.1.0 — 分组多绑定（1:N）+ MaaS Model Router 智能路由
 

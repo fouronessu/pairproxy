@@ -355,6 +355,7 @@ This outputs all commands with syntax, flags, examples, and natural language tri
 
 ## Version-Specific Features
 
+- **v3.1.1**: Track/Peer/Model Router fixes (track.dir decoupled from database.path; peer mode source_node fix; alerts SSE removed → polling; model_router AtoO pre-conversion; track flush safety net; track dir 0o777 for cross-user writes; track error logging)
 - **v3.1.0**: Group Multi-Binding 1:N + Model Router (group binds multiple same-provider targets; `model_router` config calls MaaS Router API to pick best model per request; user-level bindings unchanged 1:1)
 - **v3.0.2**: LLM target stability + direct-connect auth error format fixes
 - **v3.0.1**: API Key storage format fix + health check false-positive fix + LLM target sync status
