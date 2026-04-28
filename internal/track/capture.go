@@ -132,7 +132,7 @@ func (cs *CaptureSession) doFlush() {
 	path := filepath.Join(cs.dir, filename)
 
 	// 确保目录存在（用户目录可能在 Enable 之后还未 Flush 过）
-	if err := os.MkdirAll(cs.dir, 0o755); err != nil {
+	if err := os.MkdirAll(cs.dir, 0o777); err != nil {
 		log.Printf("[track] failed to create conversation dir %q: %v", cs.dir, err)
 		return
 	}
