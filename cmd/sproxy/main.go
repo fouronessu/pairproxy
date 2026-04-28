@@ -344,7 +344,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if clusterMgr != nil {
 		sp, err = proxy.NewSProxyWithCluster(logger, jwtMgr, writer, llmTargets, clusterMgr, sourceNode)
 	} else {
-		sp, err = proxy.NewSProxy(logger, jwtMgr, writer, llmTargets)
+		// peer 模式下 clusterMgr 为 nil，但 sourceNode 仍需正确传入，
+		// 否则 usage_logs.source_node 始终为 "local"，无法区分各节点来源。
+		sp, err = proxy.NewSProxyWithCluster(logger, jwtMgr, writer, llmTargets, nil, sourceNode)
 	}
 	if err != nil {
 		return fmt.Errorf("create sproxy: %w", err)
