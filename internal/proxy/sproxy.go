@@ -1982,13 +1982,14 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			req.URL.Host = targetURL.Host
 			req.Host = targetURL.Host
 
-			// 协议转换：修改请求路径
-			// convertedPath 是不含版本前缀的路径后缀（如 /chat/completions）。
-			// 若 target URL 带有自定义 base path（如 /v2、/openai/v1），则拼接在前面；
-			// 若无 base path（标准 OpenAI 端点），则补全为 /v1/chat/completions。
+			// 请求路径重写：处理两种场景
+			// 1. 协议转换（AtoO/OtoA）：convertedPath 是不含版本前缀的路径后缀（如 /chat/completions）。
+			//    若 target 有 base path，拼接在前；否则补全 /v1 前缀。
+			// 2. 透传（conversionNone）：client 路径含 /v1 前缀（如 /v1/chat/completions）。
+			//    若 target 有 base path，需将 /v1 替换为 basePath，否则原样透传。
+			originalPath := req.URL.Path
+			basePath := strings.TrimRight(targetURL.Path, "/")
 			if convDir != conversionNone && convertedPath != "" {
-				originalPath := req.URL.Path
-				basePath := strings.TrimRight(targetURL.Path, "/")
 				if basePath == "" {
 					req.URL.Path = "/v1" + convertedPath
 				} else {
@@ -1997,7 +1998,24 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				sp.logger.Debug("request path converted for protocol conversion",
 					zap.String("request_id", reqID),
 					zap.String("original_path", originalPath),
-					zap.String("converted_path", convertedPath),
+					zap.String("new_path", req.URL.Path),
+					zap.String("target", firstInfo.URL),
+				)
+			} else if convDir == conversionNone && basePath != "" {
+				// 透传但 target 有自定义 base path：剥离客户端路径的 /v1 前缀，替换为 basePath。
+				// 例：client=/v1/chat/completions, basePath=/api/paas/v4
+				//   → /api/paas/v4/chat/completions
+				suffix := strings.TrimPrefix(req.URL.Path, "/v1")
+				if suffix == req.URL.Path {
+					// 路径不以 /v1 开头（罕见），直接拼接
+					req.URL.Path = basePath + req.URL.Path
+				} else {
+					req.URL.Path = basePath + suffix
+				}
+				sp.logger.Debug("request path rewritten for custom base path (passthrough)",
+					zap.String("request_id", reqID),
+					zap.String("original_path", originalPath),
+					zap.String("new_path", req.URL.Path),
 					zap.String("target", firstInfo.URL),
 				)
 			}
