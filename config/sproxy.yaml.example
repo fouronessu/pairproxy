@@ -402,4 +402,10 @@ log:
 # model_router:
 #   enabled: false
 #   url: "https://api.your-router.com/v1/models/router"
-#   timeout: 3s
+#   timeout: 3s           # 调用 Router HTTP API 的超时，默认 3s
+#   session_history_n: 5  # 每个 session 保留的最近模型历史条数，默认 5；达到上限后直接复用最近模型
+#   redis:
+#     addr: "localhost:6379"   # 为空时禁用缓存，每次请求均调用 Router API
+#     password: ""             # 支持 ${ENV_VAR}
+#     db: 0
+#     ttl: 24h                 # session 历史 key 的有效期，默认 24h

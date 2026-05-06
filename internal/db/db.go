@@ -259,6 +259,7 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 		&APIKey{},       // F-5: 多 API Key 管理
 		&LLMBinding{},   // LLM 绑定管理
 		&LLMTarget{},        // LLM 目标动态管理
+		&ModelInfo{},        // 模型信息表（model_router 路由决策用）
 	}
 
 	for _, model := range models {

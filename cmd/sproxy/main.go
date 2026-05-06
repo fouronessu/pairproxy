@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
@@ -613,11 +614,48 @@ func runStart(cmd *cobra.Command, args []string) error {
 	sp.SetGroupMultiBindingFinder(func(groupID string) ([]string, error) {
 		return llmBindingRepo.FindAllForGroup(groupID)
 	})
-	// MaaS Model Router 客户端（可选；仅当 model_router.enabled=true 时启用）
+	// MaaS Model Router 选择器（可选；仅当 model_router.enabled=true 时启用）
 	if cfg.ModelRouter.Enabled && cfg.ModelRouter.URL != "" {
-		sp.SetModelRouterClient(proxy.NewModelRouterClient(cfg.ModelRouter, logger))
-		logger.Info("model router client configured",
+		routerClient := proxy.NewModelRouterClient(cfg.ModelRouter, logger)
+		modelInfoRepo := db.NewModelInfoRepo(database)
+
+		// 将 db.ModelInfoRepo 适配为 proxy.ModelSelectorQuerier（main 层桥接，避免 proxy→db 循环依赖）
+		querier := proxy.ModelSelectorQuerierFunc(
+			func() ([]string, error) {
+				infos, err := modelInfoRepo.ListMultimodal()
+				if err != nil {
+					return nil, err
+				}
+				names := make([]string, 0, len(infos))
+				for _, info := range infos {
+					names = append(names, info.ModelName)
+				}
+				return names, nil
+			},
+			modelInfoRepo.GetScaleByName,
+		)
+
+		// Redis 客户端（addr 为空时禁用缓存）
+		var rdb *redis.Client
+		if cfg.ModelRouter.Redis.Addr != "" {
+			rdb = redis.NewClient(&redis.Options{
+				Addr:     cfg.ModelRouter.Redis.Addr,
+				Password: cfg.ModelRouter.Redis.Password,
+				DB:       cfg.ModelRouter.Redis.DB,
+			})
+			logger.Info("model router Redis cache enabled",
+				zap.String("addr", cfg.ModelRouter.Redis.Addr),
+				zap.Duration("ttl", cfg.ModelRouter.Redis.TTL),
+			)
+		} else {
+			logger.Info("model router Redis not configured, cache disabled")
+		}
+
+		selector := proxy.NewModelRouterSelector(routerClient, rdb, querier, cfg.ModelRouter, logger)
+		sp.SetModelRouterSelector(selector)
+		logger.Info("model router selector configured",
 			zap.String("url", cfg.ModelRouter.URL),
+			zap.Int("session_history_n", cfg.ModelRouter.SessionHistoryN),
 		)
 	}
 	adminHandler.SetLLMBindingRepo(llmBindingRepo)

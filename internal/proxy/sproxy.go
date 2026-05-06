@@ -106,9 +106,9 @@ type SProxy struct {
 
 	// 分组多绑定智能路由（v3.1.0+）
 	// groupMultiBindingFinder: 查询分组的全部 target ID 列表（来自 DB）
-	// modelRouterClient: 调用 MaaS Router API 选取最优模型
+	// modelRouterSelector: 带缓存和多模态感知的模型路由选择器
 	groupMultiBindingFinder func(groupID string) ([]string, error)
-	modelRouterClient       *ModelRouterClient
+	modelRouterSelector     *ModelRouterSelector
 }
 
 // NewSProxy 创建 SProxy。
@@ -203,10 +203,10 @@ func (sp *SProxy) SetGroupMultiBindingFinder(fn func(groupID string) ([]string, 
 	sp.groupMultiBindingFinder = fn
 }
 
-// SetModelRouterClient 设置 MaaS Model Router 客户端（v3.1.0+）。
+// SetModelRouterSelector 设置带缓存和多模态感知的模型路由选择器（v3.2.0+）。
 // 仅当分组有多绑定时（≥2 个 target）才被调用，选取最优模型对应的 target。
-func (sp *SProxy) SetModelRouterClient(c *ModelRouterClient) {
-	sp.modelRouterClient = c
+func (sp *SProxy) SetModelRouterSelector(s *ModelRouterSelector) {
+	sp.modelRouterSelector = s
 }
 
 // SetMaxRetries 设置 RetryTransport 的最大重试次数（默认 2）。
@@ -1564,7 +1564,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 一次 Anthropic→OpenAI 转换，Router 收到合法的 OpenAI 格式 body；
 	// 转换结果在 line ~1770 直接复用（仅补 model mapping），避免对同一 body 重复全量转换。
 	var preConvertedBody []byte
-	if sp.groupMultiBindingFinder != nil && sp.modelRouterClient != nil &&
+	if sp.groupMultiBindingFinder != nil && sp.modelRouterSelector != nil &&
 		sp.bindingResolver != nil && claims.GroupID != "" {
 
 		// 检查用户是否有个人绑定（有则跳过 Router，直接用个人绑定）
@@ -1589,7 +1589,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				selectedModel, rErr := sp.modelRouterClient.Route(
+				selectedModel, rErr := sp.modelRouterSelector.SelectModel(
 					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, dl,
 				)
 				if rErr != nil {

@@ -63,9 +63,20 @@ type TrackConfig struct {
 // ModelRouterConfig 分组多绑定场景下的 MaaS 模型路由器配置（v3.1.0+）。
 // 仅当分组绑定了 2 个或以上 LLM target 时生效；用户级绑定始终直接使用绑定目标。
 type ModelRouterConfig struct {
-	Enabled bool          `yaml:"enabled"` // 默认 false
-	URL     string        `yaml:"url"`     // 路由器端点，如 "https://api.router.com/v1/models/router"
-	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认 3s
+	Enabled         bool          `yaml:"enabled"`           // 默认 false
+	URL             string        `yaml:"url"`               // 路由器端点，如 "https://api.router.com/v1/models/router"
+	Timeout         time.Duration `yaml:"timeout"`           // 调用 Router HTTP API 的超时，默认 3s
+	SessionHistoryN int           `yaml:"session_history_n"` // 每个 session 保留的最近模型历史条数，默认 5
+	Redis           RedisConfig   `yaml:"redis"`             // Redis 缓存配置；Addr 为空时禁用缓存
+}
+
+// RedisConfig model_router session 缓存所用的 Redis 连接配置。
+// Addr 为空时不启用缓存，每次请求均调用 Router API。
+type RedisConfig struct {
+	Addr     string        `yaml:"addr"`     // "host:port"，如 "localhost:6379"；空 = 禁用缓存
+	Password string        `yaml:"password"` // 支持 ${ENV_VAR}
+	DB       int           `yaml:"db"`       // Redis 库编号，默认 0
+	TTL      time.Duration `yaml:"ttl"`      // session key 有效期，默认 24h
 }
 
 // PricingConfig 模型定价配置（用于估算费用）

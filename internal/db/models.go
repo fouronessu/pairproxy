@@ -138,6 +138,16 @@ type LLMTarget struct {
 	UpdatedAt       time.Time
 }
 
+// ModelInfo 模型信息表，记录模型名、参数规模及是否支持多模态输入。
+// 由管理员手动插入/维护，model_router 路由决策时查询。
+type ModelInfo struct {
+	ID           string    `gorm:"primarykey"`
+	ModelName    string    `gorm:"uniqueIndex;not null"` // 模型名，全局唯一
+	ModelScale   string    `gorm:"not null"`             // 参数规模："big" | "middle" | "small"
+	IsMultimodal bool      `gorm:"default:false"`        // true = 支持图片/视频输入
+	CreatedAt    time.Time
+}
+
 // TableName 方法（可选，用于显式指定表名）
 func (Group) TableName() string           { return "groups" }
 func (User) TableName() string            { return "users" }
@@ -148,4 +158,5 @@ func (AuditLog) TableName() string        { return "audit_logs" }
 func (APIKey) TableName() string     { return "api_keys" }
 func (LLMBinding) TableName() string { return "llm_bindings" }
 func (LLMTarget) TableName() string       { return "llm_targets" }
+func (ModelInfo) TableName() string       { return "model_infos" }
 
