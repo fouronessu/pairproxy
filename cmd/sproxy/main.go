@@ -636,6 +636,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 		)
 
 		// Redis 客户端（addr 为空时禁用缓存）
+		// 诊断日志：无论是否配置均打印解析结果，方便排查配置未生效问题
+		logger.Info("model router Redis config parsed",
+			zap.String("addr", cfg.ModelRouter.Redis.Addr),
+			zap.Int("db", cfg.ModelRouter.Redis.DB),
+			zap.Duration("ttl", cfg.ModelRouter.Redis.TTL),
+			zap.Int("session_history_n", cfg.ModelRouter.SessionHistoryN),
+		)
 		var rdb *redis.Client
 		if cfg.ModelRouter.Redis.Addr != "" {
 			rdb = redis.NewClient(&redis.Options{
@@ -648,7 +655,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				zap.Duration("ttl", cfg.ModelRouter.Redis.TTL),
 			)
 		} else {
-			logger.Info("model router Redis not configured, cache disabled")
+			logger.Warn("model router Redis addr is empty, cache disabled; check model_router.redis.addr in config")
 		}
 
 		selector := proxy.NewModelRouterSelector(routerClient, rdb, querier, cfg.ModelRouter, logger)
