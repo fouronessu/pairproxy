@@ -620,17 +620,27 @@ func runStart(cmd *cobra.Command, args []string) error {
 		modelInfoRepo := db.NewModelInfoRepo(database)
 
 		// 将 db.ModelInfoRepo 适配为 proxy.ModelSelectorQuerier（main 层桥接，避免 proxy→db 循环依赖）
+		toNames := func(infos []db.ModelInfo) []string {
+			names := make([]string, 0, len(infos))
+			for _, info := range infos {
+				names = append(names, info.ModelName)
+			}
+			return names
+		}
 		querier := proxy.ModelSelectorQuerierFunc(
 			func() ([]string, error) {
 				infos, err := modelInfoRepo.ListMultimodal()
 				if err != nil {
 					return nil, err
 				}
-				names := make([]string, 0, len(infos))
-				for _, info := range infos {
-					names = append(names, info.ModelName)
+				return toNames(infos), nil
+			},
+			func() ([]string, error) {
+				infos, err := modelInfoRepo.ListNonMultimodal()
+				if err != nil {
+					return nil, err
 				}
-				return names, nil
+				return toNames(infos), nil
 			},
 			modelInfoRepo.GetScaleByName,
 		)

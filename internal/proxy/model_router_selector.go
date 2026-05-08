@@ -36,29 +36,42 @@ type ModelRouterSelector struct {
 
 // ModelSelectorQuerier 是 ModelRouterSelector 对模型信息的查询接口。
 type ModelSelectorQuerier interface {
-	// ListMultimodalNames 返回所有多模态模型名列表。
+	// ListMultimodalNames 返回所有多模态模型名列表（is_multimodal=true）。
 	ListMultimodalNames() ([]string, error)
+	// ListNonMultimodalNames 返回所有非多模态模型名列表（is_multimodal=false）。
+	ListNonMultimodalNames() ([]string, error)
 	// GetScaleByName 按模型名返回规模字符串（"big"|"middle"|"small"|""）。
 	GetScaleByName(modelName string) (string, error)
 }
 
 // modelSelectorQuerierFuncs 是 ModelSelectorQuerier 的函数式实现，用于 main 层桥接。
 type modelSelectorQuerierFuncs struct {
-	listFn     func() ([]string, error)
-	getScaleFn func(string) (string, error)
+	listMultimodalFn    func() ([]string, error)
+	listNonMultimodalFn func() ([]string, error)
+	getScaleFn          func(string) (string, error)
 }
 
-func (f *modelSelectorQuerierFuncs) ListMultimodalNames() ([]string, error) { return f.listFn() }
+func (f *modelSelectorQuerierFuncs) ListMultimodalNames() ([]string, error) {
+	return f.listMultimodalFn()
+}
+func (f *modelSelectorQuerierFuncs) ListNonMultimodalNames() ([]string, error) {
+	return f.listNonMultimodalFn()
+}
 func (f *modelSelectorQuerierFuncs) GetScaleByName(name string) (string, error) {
 	return f.getScaleFn(name)
 }
 
-// ModelSelectorQuerierFunc 从两个函数创建 ModelSelectorQuerier，供 main 层注入使用。
+// ModelSelectorQuerierFunc 从三个函数创建 ModelSelectorQuerier，供 main 层注入使用。
 func ModelSelectorQuerierFunc(
 	listMultimodal func() ([]string, error),
+	listNonMultimodal func() ([]string, error),
 	getScale func(string) (string, error),
 ) ModelSelectorQuerier {
-	return &modelSelectorQuerierFuncs{listFn: listMultimodal, getScaleFn: getScale}
+	return &modelSelectorQuerierFuncs{
+		listMultimodalFn:    listMultimodal,
+		listNonMultimodalFn: listNonMultimodal,
+		getScaleFn:          getScale,
+	}
 }
 
 // NewModelRouterSelector 创建 ModelRouterSelector。
@@ -123,10 +136,12 @@ func (s *ModelRouterSelector) SelectModel(
 		zap.Int("history_n", s.historyN),
 	)
 
-	// ── Step 1: 多模态检测 ──────────────────────────────────────────────────
+	// ── Step 1: 多模态 / 非多模态检测，过滤候选集 ────────────────────────────
 	if isMultimodalRequest(bodyBytes) {
 		return s.handleMultimodal(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
 	}
+	// 非多模态请求：取 DB 中非多模态模型与 candidateModels 的交集
+	candidateModels = s.filterNonMultimodalCandidates(ctx, reqID, sessionID, candidateModels)
 
 	// ── Step 2: session_id 以 "auto" 开头 → 直接调 Route ──────────────────
 	if strings.HasPrefix(sessionID, "auto") {
@@ -307,6 +322,47 @@ func (s *ModelRouterSelector) handleMultimodal(
 
 	s.writeRedis(ctx, sessionID, model)
 	return model, nil
+}
+
+// filterNonMultimodalCandidates 取 DB 非多模态模型列表与 candidateModels 的交集。
+// 若 DB 查询失败或交集为空，返回原始 candidateModels（兜底不中断路由）。
+func (s *ModelRouterSelector) filterNonMultimodalCandidates(
+	ctx context.Context,
+	reqID, sessionID string,
+	candidateModels []string,
+) []string {
+	nonMultiNames, err := s.querier.ListNonMultimodalNames()
+	if err != nil {
+		s.logger.Warn("model_router_selector: ListNonMultimodalNames failed, using all candidates",
+			zap.String("req_id", reqID),
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+		return candidateModels
+	}
+
+	s.logger.Debug("model_router_selector: non-multimodal model list from DB",
+		zap.String("req_id", reqID),
+		zap.Strings("non_multimodal_models", nonMultiNames),
+	)
+
+	effective := intersectModels(nonMultiNames, candidateModels)
+	if len(effective) == 0 {
+		// 交集为空（DB 表未维护或所有候选均为多模态）：兜底使用全部候选
+		s.logger.Warn("model_router_selector: non-multimodal intersection empty, using all candidates as fallback",
+			zap.String("req_id", reqID),
+			zap.String("session_id", sessionID),
+			zap.Strings("non_multimodal_models", nonMultiNames),
+			zap.Strings("candidate_models", candidateModels),
+		)
+		return candidateModels
+	}
+
+	s.logger.Info("model_router_selector: non-multimodal effective candidates after intersection",
+		zap.String("req_id", reqID),
+		zap.Strings("effective_candidates", effective),
+	)
+	return effective
 }
 
 // ---------------------------------------------------------------------------
