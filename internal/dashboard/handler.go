@@ -847,15 +847,24 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 解析 top_users_days 参数（默认 7 天，独立于 token/cost 图表的时间范围）
-	topUsersDaysStr := r.URL.Query().Get("top_users_days")
-	topUsersDays := 7
-	if topUsersDaysStr != "" {
-		if parsed, err := strconv.Atoi(topUsersDaysStr); err == nil && parsed > 0 && parsed <= 365 {
-			topUsersDays = parsed
+	// 解析 top_users 时间范围：优先使用 top_users_hours（小时粒度），
+	// 未设置时回退到 top_users_days（天粒度，默认 7 天）。
+	var topUsersFrom time.Time
+	if hoursStr := r.URL.Query().Get("top_users_hours"); hoursStr != "" {
+		if hours, err := strconv.Atoi(hoursStr); err == nil && hours > 0 && hours <= 8760 {
+			topUsersFrom = now.Add(-time.Duration(hours) * time.Hour)
 		}
 	}
-	topUsersFrom := now.AddDate(0, 0, -topUsersDays).Truncate(24 * time.Hour)
+	if topUsersFrom.IsZero() {
+		topUsersDaysStr := r.URL.Query().Get("top_users_days")
+		topUsersDays := 7
+		if topUsersDaysStr != "" {
+			if parsed, err := strconv.Atoi(topUsersDaysStr); err == nil && parsed > 0 && parsed <= 365 {
+				topUsersDays = parsed
+			}
+		}
+		topUsersFrom = now.AddDate(0, 0, -topUsersDays).Truncate(24 * time.Hour)
+	}
 
 	userMap := h.buildUserMap()
 

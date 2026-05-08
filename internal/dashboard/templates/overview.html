@@ -193,14 +193,16 @@
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-sm font-semibold text-gray-700">Top 10 用户（Token 用量）</h3>
       <select id="topUsersDaysSelect" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-300">
-        <option value="1">最近 1 天</option>
-        <option value="3">最近 3 天</option>
-        <option value="7" selected>最近 7 天</option>
+        <option value="1h">最近 1 小时</option>
+        <option value="1d">最近 1 天</option>
+        <option value="3d">最近 3 天</option>
+        <option value="7d" selected>最近 7 天</option>
       </select>
     </div>
     <div style="position: relative; height: 240px;">
       <canvas id="topUsersChart"></canvas>
     </div>
+    <div id="topUsersTable" class="mt-3 text-xs text-gray-600 select-text overflow-auto max-h-48"></div>
   </div>
   <!-- Top 10 by Request Count -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -211,17 +213,25 @@
     <div style="position: relative; height: 240px;">
       <canvas id="topUsersByRequestsChart"></canvas>
     </div>
+    <div id="topUsersByRequestsTable" class="mt-3 text-xs text-gray-600 select-text overflow-auto max-h-48"></div>
   </div>
 </div>
 
 <script>
 let tokenChart, costChart, topUsersChart, topUsersByRequestsChart;
 
+// 将选择器的值（"1h"/"1d"/"3d"/"7d"）转换为 API 查询参数
+function topUsersParam() {
+  const val = document.getElementById('topUsersDaysSelect').value;
+  if (val === '1h') return 'top_users_hours=1';
+  const days = parseInt(val) || 7;
+  return `top_users_days=${days}`;
+}
+
 // 加载趋势数据（token/cost 图表）
 async function loadTrends(days) {
   try {
-    const topUsersDays = parseInt(document.getElementById('topUsersDaysSelect').value) || 7;
-    const res = await fetch(`/api/dashboard/trends?days=${days}&top_users_days=${topUsersDays}`);
+    const res = await fetch(`/api/dashboard/trends?days=${days}&${topUsersParam()}`);
     const data = await res.json();
 
     // 更新 Token 趋势图
@@ -241,9 +251,8 @@ async function loadTrends(days) {
 // 仅加载 Top 用户数据（时间范围独立于 token/cost 图表）
 async function loadTopUsers() {
   try {
-    const topUsersDays = parseInt(document.getElementById('topUsersDaysSelect').value) || 7;
     const days = parseInt(document.getElementById('tokenDaysSelect').value) || 7;
-    const res = await fetch(`/api/dashboard/trends?days=${days}&top_users_days=${topUsersDays}`);
+    const res = await fetch(`/api/dashboard/trends?days=${days}&${topUsersParam()}`);
     const data = await res.json();
     updateTopUsersChart(data.top_users);
     updateTopUsersByRequestsChart(data.top_users_by_requests);
@@ -320,6 +329,28 @@ function updateCostChart(data) {
   });
 }
 
+// 渲染可复制的用户排名表格
+function renderUserTable(tableId, data, valueLabel, valueFn) {
+  const el = document.getElementById(tableId);
+  if (!el) return;
+  if (!data || data.length === 0) { el.innerHTML = ''; return; }
+  const rows = data.map((d, i) =>
+    `<tr>
+      <td class="pr-2 text-gray-400 select-text">${i + 1}</td>
+      <td class="pr-4 font-mono select-text">${d.username}</td>
+      <td class="text-right text-gray-500 select-text">${valueFn(d).toLocaleString()}</td>
+    </tr>`
+  ).join('');
+  el.innerHTML = `<table class="w-full border-separate" style="border-spacing:0 2px">
+    <thead><tr class="text-gray-400">
+      <th class="text-left pr-2">#</th>
+      <th class="text-left pr-4">用户名</th>
+      <th class="text-right">${valueLabel}</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 // Top 10 用户图 — 按 Token 用量（横向柱状图）
 function updateTopUsersChart(data) {
   const ctx = document.getElementById('topUsersChart');
@@ -349,6 +380,8 @@ function updateTopUsersChart(data) {
       }
     }
   });
+
+  renderUserTable('topUsersTable', data, 'Tokens', d => d.total_input + d.total_output);
 }
 
 // Top 10 用户图 — 按请求数（横向柱状图）
@@ -380,6 +413,8 @@ function updateTopUsersByRequestsChart(data) {
       }
     }
   });
+
+  renderUserTable('topUsersByRequestsTable', data, '请求数', d => d.request_count);
 }
 
 // 时间范围选择器（token/cost 图表）
