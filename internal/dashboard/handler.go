@@ -811,9 +811,10 @@ type topUserEntry struct {
 }
 
 type trendsResponse struct {
-	DailyTokens []db.DailyTokenRow `json:"daily_tokens"`
-	DailyCost   []db.DailyCostRow  `json:"daily_cost"`
-	TopUsers    []topUserEntry     `json:"top_users"`
+	DailyTokens        []db.DailyTokenRow `json:"daily_tokens"`
+	DailyCost          []db.DailyCostRow  `json:"daily_cost"`
+	TopUsers           []topUserEntry     `json:"top_users"`            // Top 10 by token consumption
+	TopUsersByRequests []topUserEntry     `json:"top_users_by_requests"` // Top 10 by request count
 }
 
 func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
@@ -856,14 +857,15 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	topUsersFrom := now.AddDate(0, 0, -topUsersDays).Truncate(24 * time.Hour)
 
-	// 查询 Top 10 用户，附加用户名
+	userMap := h.buildUserMap()
+
+	// 查询 Top 10 用户（按 token 用量降序）
 	rawTopUsers, err := h.usageRepo.UserStats(topUsersFrom, to, 10)
 	if err != nil {
-		h.logger.Error("failed to get top users", zap.Error(err))
+		h.logger.Error("failed to get top users by tokens", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	userMap := h.buildUserMap()
 	topUsers := make([]topUserEntry, len(rawTopUsers))
 	for i, u := range rawTopUsers {
 		name := u.UserID
@@ -879,11 +881,34 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 查询 Top 10 用户（按请求数降序）
+	rawTopByReq, err := h.usageRepo.UserStatsByRequests(topUsersFrom, to, 10)
+	if err != nil {
+		h.logger.Error("failed to get top users by requests", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	topUsersByRequests := make([]topUserEntry, len(rawTopByReq))
+	for i, u := range rawTopByReq {
+		name := u.UserID
+		if n, ok := userMap[u.UserID]; ok && n != "" {
+			name = n
+		}
+		topUsersByRequests[i] = topUserEntry{
+			UserID:       u.UserID,
+			Username:     name,
+			TotalInput:   u.TotalInput,
+			TotalOutput:  u.TotalOutput,
+			RequestCount: u.RequestCount,
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(trendsResponse{
-		DailyTokens: dailyTokens,
-		DailyCost:   dailyCost,
-		TopUsers:    topUsers,
+		DailyTokens:        dailyTokens,
+		DailyCost:          dailyCost,
+		TopUsers:           topUsers,
+		TopUsersByRequests: topUsersByRequests,
 	}); err != nil {
 		h.logger.Error("failed to encode trends response", zap.Error(err))
 	}

@@ -496,6 +496,31 @@ func (r *UsageRepo) UserStats(from, to time.Time, limit int) ([]UserStatRow, err
 	return rows, nil
 }
 
+// UserStatsByRequests 按用户聚合用量，按请求数降序，最多 limit 条。
+// 用于"Top N 用户（按请求数）"图表，与 UserStats（按 token 降序）互补。
+func (r *UsageRepo) UserStatsByRequests(from, to time.Time, limit int) ([]UserStatRow, error) {
+	from, to = toUTC(from), toUTC(to)
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []UserStatRow
+	err := r.db.Model(&UsageLog{}).
+		Select(`user_id,
+			COALESCE(SUM(input_tokens),0) as total_input,
+			COALESCE(SUM(output_tokens),0) as total_output,
+			COUNT(*) as request_count`).
+		Where("created_at >= ? AND created_at <= ?", from, to).
+		Group("user_id").
+		Order("COUNT(*) DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	if err != nil {
+		r.logger.Error("failed to get user stats by requests", zap.Error(err))
+		return nil, fmt.Errorf("user stats by requests: %w", err)
+	}
+	return rows, nil
+}
+
 // ExportLogs 以流式方式导出时间段内的所有用量日志，每条记录调用一次 fn 回调。
 // 使用分批查询（pageSize 条/批）避免一次性加载全部数据占用大量内存。
 // fn 返回非 nil error 时立即停止遍历并返回该 error（可用于提前中断）。

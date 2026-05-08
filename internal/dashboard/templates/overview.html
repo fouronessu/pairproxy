@@ -186,23 +186,36 @@
   </div>
 </div>
 
-<!-- Top 用户 -->
-<div class="mt-6 bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-sm font-semibold text-gray-700">Top 10 用户</h3>
-    <select id="topUsersDaysSelect" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-300">
-      <option value="1">最近 1 天</option>
-      <option value="3">最近 3 天</option>
-      <option value="7" selected>最近 7 天</option>
-    </select>
+<!-- Top 用户（两图共用时间选择器） -->
+<div class="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+  <!-- Top 10 by Token -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-gray-700">Top 10 用户（Token 用量）</h3>
+      <select id="topUsersDaysSelect" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-300">
+        <option value="1">最近 1 天</option>
+        <option value="3">最近 3 天</option>
+        <option value="7" selected>最近 7 天</option>
+      </select>
+    </div>
+    <div style="position: relative; height: 240px;">
+      <canvas id="topUsersChart"></canvas>
+    </div>
   </div>
-  <div style="position: relative; height: 240px;">
-    <canvas id="topUsersChart"></canvas>
+  <!-- Top 10 by Request Count -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-gray-700">Top 10 用户（请求数）</h3>
+      <span class="text-xs text-gray-400">与左侧时间范围同步</span>
+    </div>
+    <div style="position: relative; height: 240px;">
+      <canvas id="topUsersByRequestsChart"></canvas>
+    </div>
   </div>
 </div>
 
 <script>
-let tokenChart, costChart, topUsersChart;
+let tokenChart, costChart, topUsersChart, topUsersByRequestsChart;
 
 // 加载趋势数据（token/cost 图表）
 async function loadTrends(days) {
@@ -217,8 +230,9 @@ async function loadTrends(days) {
     // 更新费用趋势图
     updateCostChart(data.daily_cost);
 
-    // 更新 Top 用户
+    // 更新 Top 用户（两图）
     updateTopUsersChart(data.top_users);
+    updateTopUsersByRequestsChart(data.top_users_by_requests);
   } catch (err) {
     console.error('Failed to load trends:', err);
   }
@@ -232,6 +246,7 @@ async function loadTopUsers() {
     const res = await fetch(`/api/dashboard/trends?days=${days}&top_users_days=${topUsersDays}`);
     const data = await res.json();
     updateTopUsersChart(data.top_users);
+    updateTopUsersByRequestsChart(data.top_users_by_requests);
   } catch (err) {
     console.error('Failed to load top users:', err);
   }
@@ -305,7 +320,7 @@ function updateCostChart(data) {
   });
 }
 
-// Top 用户图（横向柱状图，含 Token 用量和请求数）
+// Top 10 用户图 — 按 Token 用量（横向柱状图）
 function updateTopUsersChart(data) {
   const ctx = document.getElementById('topUsersChart');
   if (topUsersChart) topUsersChart.destroy();
@@ -315,19 +330,11 @@ function updateTopUsersChart(data) {
     data: {
       labels: data.map(d => d.username),
       datasets: [{
-        label: 'Token 用量',
+        label: 'Total Tokens',
         data: data.map(d => d.total_input + d.total_output),
         backgroundColor: 'rgba(99, 102, 241, 0.6)',
         borderColor: 'rgb(99, 102, 241)',
-        borderWidth: 1,
-        yAxisID: 'yTokens'
-      }, {
-        label: '请求数',
-        data: data.map(d => d.request_count),
-        backgroundColor: 'rgba(251, 146, 60, 0.6)',
-        borderColor: 'rgb(251, 146, 60)',
-        borderWidth: 1,
-        yAxisID: 'yRequests'
+        borderWidth: 1
       }]
     },
     options: {
@@ -335,20 +342,41 @@ function updateTopUsersChart(data) {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        yTokens: {
-          position: 'left',
-          beginAtZero: true,
-          title: { display: true, text: 'Tokens' }
-        },
-        yRequests: {
-          position: 'right',
-          beginAtZero: true,
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: '请求数' }
-        }
+        x: { beginAtZero: true }
       },
       plugins: {
-        legend: { display: true, position: 'top' }
+        legend: { display: false }
+      }
+    }
+  });
+}
+
+// Top 10 用户图 — 按请求数（横向柱状图）
+function updateTopUsersByRequestsChart(data) {
+  const ctx = document.getElementById('topUsersByRequestsChart');
+  if (topUsersByRequestsChart) topUsersByRequestsChart.destroy();
+
+  topUsersByRequestsChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.username),
+      datasets: [{
+        label: '请求数',
+        data: data.map(d => d.request_count),
+        backgroundColor: 'rgba(251, 146, 60, 0.6)',
+        borderColor: 'rgb(251, 146, 60)',
+        borderWidth: 1
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { beginAtZero: true }
+      },
+      plugins: {
+        legend: { display: false }
       }
     }
   });
