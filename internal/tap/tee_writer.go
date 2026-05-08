@@ -20,12 +20,13 @@ import (
 type TeeResponseWriter struct {
 	http.ResponseWriter // 原始 writer（透传 Header() 等方法）
 
-	logger      *zap.Logger
-	parser      ResponseParser
-	writer      *db.UsageWriter
-	record      db.UsageRecord // 预填充的 UsageRecord 模板（requestID、userID 等）
-	statusCode  int
-	isStreaming bool
+	logger           *zap.Logger
+	parser           ResponseParser
+	writer           *db.UsageWriter
+	record           db.UsageRecord // 预填充的 UsageRecord 模板（requestID、userID 等）
+	statusCode       int
+	isStreaming      bool
+	streamingRecorded bool // onComplete 回调已触发（message_stop 已收到）
 
 	// debug 支持
 	startTime     time.Time  // 请求开始时间，用于计算 TTFB
@@ -60,6 +61,7 @@ func NewTeeResponseWriter(
 
 	// 按 provider 创建解析器，注册 SSE 解析完成回调
 	tw.parser = NewResponseParser(provider, func(inputTokens, outputTokens int) {
+		tw.streamingRecorded = true
 		tw.logger.Debug("streaming token usage captured",
 			zap.String("request_id", record.RequestID),
 			zap.String("user_id", record.UserID),
@@ -156,6 +158,42 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 		r.CreatedAt = time.Now().UTC()
 	}
 	tw.writer.Record(r)
+}
+
+// FlushPartialTokens 在 streaming 响应被中断（连接断开、上游提前关闭等）时，
+// 将已解析的 input_tokens 兜底写入 UsageWriter。
+// 仅在以下所有条件同时满足时写入：
+//  1. 响应确实是 streaming（Content-Type: text/event-stream）
+//  2. onComplete 回调尚未触发（message_stop 未收到）
+//  3. 解析器已捕获到 input_tokens > 0（message_start 已收到）
+//
+// 调用方（serveProxy）在 proxy.ServeHTTP 返回后调用此方法，确保部分 token 不丢失。
+func (tw *TeeResponseWriter) FlushPartialTokens(statusCode int, durationMs int64) {
+	if !tw.isStreaming || tw.streamingRecorded {
+		return
+	}
+	inputTokens := tw.parser.InputTokens()
+	if inputTokens == 0 {
+		return
+	}
+	tw.logger.Warn("streaming interrupted before message_stop, flushing partial tokens",
+		zap.String("request_id", tw.record.RequestID),
+		zap.String("user_id", tw.record.UserID),
+		zap.Int("input_tokens", inputTokens),
+		zap.Int("output_tokens", tw.parser.OutputTokens()),
+		zap.Int("status_code", statusCode),
+	)
+	r := tw.record
+	r.InputTokens = inputTokens
+	r.OutputTokens = tw.parser.OutputTokens()
+	r.StatusCode = statusCode
+	r.IsStreaming = true
+	r.DurationMs = durationMs
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	tw.writer.Record(r)
+	tw.streamingRecorded = true // 防止重复写入
 }
 
 // TTFBMs 返回首字节时延（毫秒）。在 Write() 被调用后有效，否则返回 0。

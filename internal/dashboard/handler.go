@@ -846,8 +846,18 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 查询 Top 5 用户，附加用户名
-	rawTopUsers, err := h.usageRepo.UserStats(from, to, 5)
+	// 解析 top_users_days 参数（默认 7 天，独立于 token/cost 图表的时间范围）
+	topUsersDaysStr := r.URL.Query().Get("top_users_days")
+	topUsersDays := 7
+	if topUsersDaysStr != "" {
+		if parsed, err := strconv.Atoi(topUsersDaysStr); err == nil && parsed > 0 && parsed <= 365 {
+			topUsersDays = parsed
+		}
+	}
+	topUsersFrom := now.AddDate(0, 0, -topUsersDays).Truncate(24 * time.Hour)
+
+	// 查询 Top 10 用户，附加用户名
+	rawTopUsers, err := h.usageRepo.UserStats(topUsersFrom, to, 10)
 	if err != nil {
 		h.logger.Error("failed to get top users", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)

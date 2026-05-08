@@ -373,8 +373,8 @@ func TestOverviewChartContainerFix(t *testing.T) {
 		}
 	}
 
-	// --- 4. Top-users canvas must be inside a 120px wrapper ---------------
-	topUsersWrapper := `height: 120px`
+	// --- 4. Top-users canvas must be inside a 240px wrapper ---------------
+	topUsersWrapper := `height: 240px`
 	topUsersCanvas := `id="topUsersChart"`
 	canvasIdx := strings.Index(body, topUsersCanvas)
 	if canvasIdx == -1 {
@@ -383,9 +383,9 @@ func TestOverviewChartContainerFix(t *testing.T) {
 		preceding := body[:canvasIdx]
 		wrapperIdx := strings.LastIndex(preceding, topUsersWrapper)
 		if wrapperIdx == -1 {
-			t.Errorf("no 'height: 120px' wrapper div found before topUsersChart canvas")
+			t.Errorf("no 'height: 240px' wrapper div found before topUsersChart canvas")
 		} else if canvasIdx-wrapperIdx > 300 {
-			t.Errorf("topUsersChart canvas is not immediately inside a 'height: 120px' wrapper div (distance=%d chars)",
+			t.Errorf("topUsersChart canvas is not immediately inside a 'height: 240px' wrapper div (distance=%d chars)",
 				canvasIdx-wrapperIdx)
 		}
 	}

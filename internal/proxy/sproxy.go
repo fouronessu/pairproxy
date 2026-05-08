@@ -2243,6 +2243,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	proxy.ServeHTTP(tw, r)
 
+	// streaming 中断兜底：若上游在 message_stop 之前断开连接（或提前关闭流），
+	// onComplete 回调不会触发，导致已解析的 input_tokens 丢失。
+	// FlushPartialTokens 检测该场景并将部分 token 写入 UsageWriter。
+	tw.FlushPartialTokens(tw.StatusCode(), time.Since(startTime).Milliseconds())
+
 	// 对话跟踪：流式响应完成后兜底 Flush（幂等，已由 FeedChunk 触发者不重复写入）。
 	// 防止上游流未发出 message_stop / [DONE] 时记录丢失。
 	if captureSession != nil {

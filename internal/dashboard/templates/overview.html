@@ -188,8 +188,15 @@
 
 <!-- Top 用户 -->
 <div class="mt-6 bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-  <h3 class="text-sm font-semibold text-gray-700 mb-4">Top 5 用户（最近 7 天）</h3>
-  <div style="position: relative; height: 120px;">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-semibold text-gray-700">Top 10 用户</h3>
+    <select id="topUsersDaysSelect" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-300">
+      <option value="1">最近 1 天</option>
+      <option value="3">最近 3 天</option>
+      <option value="7" selected>最近 7 天</option>
+    </select>
+  </div>
+  <div style="position: relative; height: 240px;">
     <canvas id="topUsersChart"></canvas>
   </div>
 </div>
@@ -197,10 +204,11 @@
 <script>
 let tokenChart, costChart, topUsersChart;
 
-// 加载趋势数据
+// 加载趋势数据（token/cost 图表）
 async function loadTrends(days) {
   try {
-    const res = await fetch(`/api/dashboard/trends?days=${days}`);
+    const topUsersDays = parseInt(document.getElementById('topUsersDaysSelect').value) || 7;
+    const res = await fetch(`/api/dashboard/trends?days=${days}&top_users_days=${topUsersDays}`);
     const data = await res.json();
 
     // 更新 Token 趋势图
@@ -209,12 +217,23 @@ async function loadTrends(days) {
     // 更新费用趋势图
     updateCostChart(data.daily_cost);
 
-    // 更新 Top 用户（仅 7 天时更新）
-    if (days === 7) {
-      updateTopUsersChart(data.top_users);
-    }
+    // 更新 Top 用户
+    updateTopUsersChart(data.top_users);
   } catch (err) {
     console.error('Failed to load trends:', err);
+  }
+}
+
+// 仅加载 Top 用户数据（时间范围独立于 token/cost 图表）
+async function loadTopUsers() {
+  try {
+    const topUsersDays = parseInt(document.getElementById('topUsersDaysSelect').value) || 7;
+    const days = parseInt(document.getElementById('tokenDaysSelect').value) || 7;
+    const res = await fetch(`/api/dashboard/trends?days=${days}&top_users_days=${topUsersDays}`);
+    const data = await res.json();
+    updateTopUsersChart(data.top_users);
+  } catch (err) {
+    console.error('Failed to load top users:', err);
   }
 }
 
@@ -286,7 +305,7 @@ function updateCostChart(data) {
   });
 }
 
-// Top 用户图（横向柱状图）
+// Top 用户图（横向柱状图，含 Token 用量和请求数）
 function updateTopUsersChart(data) {
   const ctx = document.getElementById('topUsersChart');
   if (topUsersChart) topUsersChart.destroy();
@@ -296,11 +315,19 @@ function updateTopUsersChart(data) {
     data: {
       labels: data.map(d => d.username),
       datasets: [{
-        label: 'Total Tokens',
+        label: 'Token 用量',
         data: data.map(d => d.total_input + d.total_output),
         backgroundColor: 'rgba(99, 102, 241, 0.6)',
         borderColor: 'rgb(99, 102, 241)',
-        borderWidth: 1
+        borderWidth: 1,
+        yAxisID: 'yTokens'
+      }, {
+        label: '请求数',
+        data: data.map(d => d.request_count),
+        backgroundColor: 'rgba(251, 146, 60, 0.6)',
+        borderColor: 'rgb(251, 146, 60)',
+        borderWidth: 1,
+        yAxisID: 'yRequests'
       }]
     },
     options: {
@@ -308,16 +335,26 @@ function updateTopUsersChart(data) {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        x: { beginAtZero: true }
+        yTokens: {
+          position: 'left',
+          beginAtZero: true,
+          title: { display: true, text: 'Tokens' }
+        },
+        yRequests: {
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: '请求数' }
+        }
       },
       plugins: {
-        legend: { display: false }
+        legend: { display: true, position: 'top' }
       }
     }
   });
 }
 
-// 时间范围选择器
+// 时间范围选择器（token/cost 图表）
 document.getElementById('tokenDaysSelect').addEventListener('change', (e) => {
   loadTrends(parseInt(e.target.value));
   document.getElementById('costDaysSelect').value = e.target.value;
@@ -326,6 +363,11 @@ document.getElementById('tokenDaysSelect').addEventListener('change', (e) => {
 document.getElementById('costDaysSelect').addEventListener('change', (e) => {
   loadTrends(parseInt(e.target.value));
   document.getElementById('tokenDaysSelect').value = e.target.value;
+});
+
+// Top 用户时间范围选择器（独立）
+document.getElementById('topUsersDaysSelect').addEventListener('change', () => {
+  loadTopUsers();
 });
 
 // 页面加载时初始化
