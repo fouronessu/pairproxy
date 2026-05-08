@@ -857,7 +857,7 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if topUsersFrom.IsZero() {
 		topUsersDaysStr := r.URL.Query().Get("top_users_days")
-		topUsersDays := 7
+		topUsersDays := 1
 		if topUsersDaysStr != "" {
 			if parsed, err := strconv.Atoi(topUsersDaysStr); err == nil && parsed > 0 && parsed <= 365 {
 				topUsersDays = parsed
