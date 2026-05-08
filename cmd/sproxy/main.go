@@ -938,6 +938,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		legacyKeygenSecret = []byte(cfg.Auth.KeygenSecret)
 	}
 	dbUserLister := proxy.NewDBUserLister(userRepo)
+	// JWT 认证路径需要逐请求校验 is_active，确保禁用用户立即失效（不等 JWT 自然过期）
+	sp.SetUserActiveChecker(dbUserLister)
 	directHandler := proxy.NewDirectProxyHandler(logger, sp, dbUserLister, apiKeyCache, legacyKeygenSecret, quotaChecker)
 	openAIDirectHandler := directHandler.HandlerOpenAI()
 	anthropicDirectHandler := directHandler.HandlerAnthropic()

@@ -109,6 +109,10 @@ type SProxy struct {
 	// modelRouterSelector: 带缓存和多模态感知的模型路由选择器
 	groupMultiBindingFinder func(groupID string) ([]string, error)
 	modelRouterSelector     *ModelRouterSelector
+
+	// userActiveChecker 用于 JWT 认证路径的逐请求用户状态校验。
+	// JWT 本身不携带 is_active 状态；不设置此字段时禁用用户的 JWT 在过期前仍可使用。
+	userActiveChecker UserActiveChecker
 }
 
 // NewSProxy 创建 SProxy。
@@ -207,6 +211,13 @@ func (sp *SProxy) SetGroupMultiBindingFinder(fn func(groupID string) ([]string, 
 // 仅当分组有多绑定时（≥2 个 target）才被调用，选取最优模型对应的 target。
 func (sp *SProxy) SetModelRouterSelector(s *ModelRouterSelector) {
 	sp.modelRouterSelector = s
+}
+
+// SetUserActiveChecker 设置 JWT 认证路径的用户状态校验器。
+// 设置后每次 JWT 认证成功时均会查询 DB 确认用户未被禁用，
+// 确保管理员禁用用户后立即生效，不再等待 JWT 自然过期。
+func (sp *SProxy) SetUserActiveChecker(c UserActiveChecker) {
+	sp.userActiveChecker = c
 }
 
 // SetMaxRetries 设置 RetryTransport 的最大重试次数（默认 2）。
@@ -967,7 +978,7 @@ func (sp *SProxy) Handler() http.Handler {
 		afterAuth.ServeHTTP(w, r)
 	})
 
-	withAuth := AuthMiddleware(sp.logger, sp.jwtMgr, withCounter)
+	withAuth := AuthMiddleware(sp.logger, sp.jwtMgr, sp.userActiveChecker, withCounter)
 	withReqID := RequestIDMiddleware(sp.logger, withAuth)
 	return RecoveryMiddleware(sp.logger, withReqID)
 }
