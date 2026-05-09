@@ -281,7 +281,8 @@
       var ts = formatTime(e.time);
       var logger = escHtml(e.logger || '—');
       var caller = e.caller ? ' <span class="text-gray-400 text-xs">(' + escHtml(e.caller) + ')</span>' : '';
-      var msg = escHtml(e.message || '');
+      var msgFull = e.message || '';
+      var msg = '<span title="' + escHtml(msgFull) + '">' + escHtml(msgFull) + '</span>';
       var fields = formatFields(e.fields);
 
       return '<tr class="' + rowBg + ' border-b border-gray-100 last:border-0 align-top">' +
@@ -371,7 +372,8 @@
 
       var ts = formatTime(e.time);
       var logger = escHtml(e.logger || '—');
-      var msg = escHtml(e.message || '');
+      var msgFull = e.message || '';
+      var msg = '<span title="' + escHtml(msgFull) + '">' + escHtml(msgFull) + '</span>';
       var fields = formatFields(e.fields);
 
       return '<tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50 align-top">' +
@@ -433,9 +435,10 @@
     Object.keys(fields).forEach(function(k) {
       var v = fields[k];
       if (v === null || v === undefined) return;
-      var vStr = (typeof v === 'object') ? JSON.stringify(v) : String(v);
-      if (vStr.length > 60) vStr = vStr.slice(0, 57) + '…';
-      parts.push('<span class="text-gray-400">' + escHtml(k) + '=</span>' + escHtml(vStr));
+      var full = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+      var display = full.length > 60 ? full.slice(0, 57) + '…' : full;
+      var titleAttr = full.length > 60 ? ' title="' + escHtml(k) + '=' + escHtml(full) + '"' : '';
+      parts.push('<span' + titleAttr + '><span class="text-gray-400">' + escHtml(k) + '=</span>' + escHtml(display) + '</span>');
     });
     return parts.join('<br>');
   }
