@@ -519,13 +519,27 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 	}
 }
 
+// resolveID 将 Addr（URL）规范化为 target 的 canonical ID。
+// 被动路径调用方（RetryTransport）持有的是 URL，而内部 failures/credentials/healthPaths
+// 均以 targetID（通常是 UUID）为键。统一规范化后，主被动路径共用同一个 key，
+// 避免恢复 goroutine 因 key 不一致而重复触发。
+func (hc *HealthChecker) resolveID(addr string) string {
+	for _, t := range hc.balancer.Targets() {
+		if t.Addr == addr {
+			return t.ID
+		}
+	}
+	return addr // 未命中（config-sourced target ID 本就是 URL）：原样返回
+}
+
 // RecordSuccess 被动上报：请求成功，重置连续失败计数，恢复健康状态。
 func (hc *HealthChecker) RecordSuccess(id string) {
-	hc.recordSuccess(id, "passive")
+	hc.recordSuccess(hc.resolveID(id), "passive")
 }
 
 // RecordFailure 被动上报：请求失败，增加连续失败计数，达阈值则标记不健康。
 func (hc *HealthChecker) RecordFailure(id string) {
+	id = hc.resolveID(id)
 	hc.mu.Lock()
 	next := hc.failures[id] + 1
 	hc.mu.Unlock()
