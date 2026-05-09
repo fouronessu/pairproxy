@@ -584,10 +584,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		cfg.Admin.PasswordHash, adminTokenTTL,
 	)
 
-	// F-5: 多 API Key 管理（需要 key_encryption_key 配置）
-	var apiKeyRepo *db.APIKeyRepo
+	// F-5: 多 API Key 管理
+	// apiKeyRepo 无条件创建，供 dashboard 下拉菜单读取 API Key 列表（List 不涉及加解密）。
+	// 加解密函数仅在配置了 key_encryption_key 时注入（用于 admin API 创建/解密 key）。
+	apiKeyRepo := db.NewAPIKeyRepo(database, logger)
 	if cfg.Admin.KeyEncryptionKey != "" {
-		apiKeyRepo = db.NewAPIKeyRepo(database, logger)
 		encryptFn := func(plain string) (string, error) {
 			return auth.Encrypt(plain, cfg.Admin.KeyEncryptionKey)
 		}
