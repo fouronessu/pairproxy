@@ -369,7 +369,7 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 			checkCancel() // 立即释放 timer，不用 defer（函数此后有多条路径，defer 会延迟释放）
 			if result.okWithAuth(hasCredential) {
 				hc.logger.Debug("health check ok", zap.String("target", t.ID))
-				hc.recordSuccess(t.ID)
+				hc.recordSuccess(t.ID, "active")
 			} else if result.definitivelyUnhealthy() {
 				hc.logger.Info("health check failed (connection error)",
 					zap.String("target", t.ID),
@@ -437,7 +437,7 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 	checkCancel() // 立即释放 timer
 	if result.okWithAuth(hasCredential) {
 		hc.logger.Debug("smart probe: initial health check ok after discovery", zap.String("target", t.ID))
-		hc.recordSuccess(t.ID)
+		hc.recordSuccess(t.ID, "active")
 	} else {
 		hc.logger.Info("smart probe: initial health check failed after discovery",
 			zap.String("target", t.ID),
@@ -509,7 +509,7 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 
 	if resp.StatusCode == http.StatusOK {
 		hc.logger.Debug("health check ok", zap.String("target", t.ID))
-		hc.recordSuccess(t.ID)
+		hc.recordSuccess(t.ID, "active")
 	} else {
 		hc.logger.Info("health check non-200",
 			zap.String("target", t.ID),
@@ -521,7 +521,7 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 
 // RecordSuccess 被动上报：请求成功，重置连续失败计数，恢复健康状态。
 func (hc *HealthChecker) RecordSuccess(id string) {
-	hc.recordSuccess(id)
+	hc.recordSuccess(id, "passive")
 }
 
 // RecordFailure 被动上报：请求失败，增加连续失败计数，达阈值则标记不健康。
@@ -537,14 +537,17 @@ func (hc *HealthChecker) RecordFailure(id string) {
 	hc.recordFailure(id, "passive")
 }
 
-func (hc *HealthChecker) recordSuccess(id string) {
+func (hc *HealthChecker) recordSuccess(id, source string) {
 	hc.mu.Lock()
 	wasUnhealthy := hc.failures[id] >= hc.failThreshold
 	hc.failures[id] = 0
 	hc.mu.Unlock()
 
 	if wasUnhealthy {
-		hc.logger.Info("target recovered", zap.String("target", id))
+		hc.logger.Info("target recovered",
+			zap.String("target", id),
+			zap.String("source", source),
+		)
 		if hc.notifier != nil {
 			hc.notifier.Notify(alert.Event{
 				Kind:    alert.EventNodeRecovered,
