@@ -425,7 +425,7 @@ func (h *KeygenHandler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	from := now.AddDate(0, 0, -days)
 
-	rows, err := h.usageRepo.DailyTokens(from, now, claims.UserID)
+	rows, err := h.usageRepo.DailyTokens(from, now, claims.UserID, "day")
 	if err != nil {
 		h.logger.Error("keygen history: failed", zap.String("user_id", claims.UserID), zap.Error(err))
 		writeKeygenError(w, http.StatusInternalServerError, "internal_error", "failed to get usage history")

@@ -812,7 +812,6 @@ type topUserEntry struct {
 
 type trendsResponse struct {
 	DailyTokens        []db.DailyTokenRow `json:"daily_tokens"`
-	DailyCost          []db.DailyCostRow  `json:"daily_cost"`
 	TopUsers           []topUserEntry     `json:"top_users"`            // Top 10 by token consumption
 	TopUsersByRequests []topUserEntry     `json:"top_users_by_requests"` // Top 10 by request count
 }
@@ -828,21 +827,26 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	from := now.AddDate(0, 0, -days).Truncate(24 * time.Hour)
+	// granularity: days==1 → 15分钟, days<=3 → 小时, 其余 → 天
+	var granularity string
+	var from time.Time
+	switch {
+	case days == 1:
+		granularity = "quarter"
+		from = now.Add(-24 * time.Hour)
+	case days <= 3:
+		granularity = "hour"
+		from = now.Add(-time.Duration(days) * 24 * time.Hour)
+	default:
+		granularity = "day"
+		from = now.AddDate(0, 0, -days).Truncate(24 * time.Hour)
+	}
 	to := now
 
-	// 查询按天聚合的 token 用量
-	dailyTokens, err := h.usageRepo.DailyTokens(from, to, "")
+	// 查询聚合的 token 用量（粒度由 granularity 控制）
+	dailyTokens, err := h.usageRepo.DailyTokens(from, to, "", granularity)
 	if err != nil {
 		h.logger.Error("failed to get daily tokens", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// 查询按天聚合的费用
-	dailyCost, err := h.usageRepo.DailyCost(from, to, "")
-	if err != nil {
-		h.logger.Error("failed to get daily cost", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -915,7 +919,6 @@ func (h *Handler) handleTrendsAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(trendsResponse{
 		DailyTokens:        dailyTokens,
-		DailyCost:          dailyCost,
 		TopUsers:           topUsers,
 		TopUsersByRequests: topUsersByRequests,
 	}); err != nil {

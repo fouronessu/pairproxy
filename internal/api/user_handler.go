@@ -227,7 +227,7 @@ func (h *UserHandler) handleUsageHistory(w http.ResponseWriter, r *http.Request)
 	now := time.Now()
 	from := now.AddDate(0, 0, -days).Truncate(24 * time.Hour)
 
-	history, err := h.usageRepo.DailyTokens(from, now, targetUserID)
+	history, err := h.usageRepo.DailyTokens(from, now, targetUserID, "day")
 	if err != nil {
 		h.logger.Error("failed to get user usage history",
 			zap.String("user_id", targetUserID),

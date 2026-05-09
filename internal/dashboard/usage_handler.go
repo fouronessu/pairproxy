@@ -156,7 +156,7 @@ func (h *Handler) handleDashboardUserHistory(w http.ResponseWriter, r *http.Requ
 	now := time.Now()
 	from := now.AddDate(0, 0, -days)
 
-	rows, err := h.usageRepo.DailyTokens(from, now, user.ID)
+	rows, err := h.usageRepo.DailyTokens(from, now, user.ID, "day")
 	if err != nil {
 		h.logger.Error("dashboard: failed to get usage history", zap.Error(err))
 		writeDashJSONError(w, http.StatusInternalServerError, "failed to get usage history")

@@ -170,9 +170,7 @@ func TestHandleTrendsAPI(t *testing.T) {
 		if _, ok := resp["daily_tokens"]; !ok {
 			t.Error("response missing daily_tokens field")
 		}
-		if _, ok := resp["daily_cost"]; !ok {
-			t.Error("response missing daily_cost field")
-		}
+		// daily_cost removed; request trend is now served via daily_tokens.request_count
 		if _, ok := resp["top_users"]; !ok {
 			t.Error("response missing top_users field")
 		}
@@ -349,7 +347,7 @@ func TestOverviewChartContainerFix(t *testing.T) {
 	// --- 3. Token and cost trend canvases must be inside a 200px wrapper ---
 	// We verify that the 200px height string appears in the page and that the
 	// canvas ids immediately follow it (within a reasonable HTML distance).
-	trendChartIDs := []string{"tokenTrendChart", "costTrendChart"}
+	trendChartIDs := []string{"tokenTrendChart", "requestTrendChart"}
 	for _, id := range trendChartIDs {
 		wrapperDiv := `height: 200px`
 		canvasTag := `id="` + id + `"`
@@ -408,7 +406,7 @@ func TestOverviewChartContainerCount(t *testing.T) {
 
 	expectedCanvases := []string{
 		`id="tokenTrendChart"`,
-		`id="costTrendChart"`,
+		`id="requestTrendChart"`,
 		`id="topUsersChart"`,
 	}
 	for _, id := range expectedCanvases {

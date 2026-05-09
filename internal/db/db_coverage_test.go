@@ -576,7 +576,7 @@ func TestUsageRepo_DailyTokens_WithUserID_Cov(t *testing.T) {
 		CreatedAt:    now,
 	}).Error)
 
-	rows, err := repo.DailyTokens(now.Add(-time.Minute), now.Add(time.Minute), "user-dt-cov-1")
+	rows, err := repo.DailyTokens(now.Add(-time.Minute), now.Add(time.Minute), "user-dt-cov-1", "day")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, int64(50), rows[0].InputTokens)
@@ -590,7 +590,7 @@ func TestUsageRepo_DailyTokens_GlobalEmpty(t *testing.T) {
 	repo := NewUsageRepo(db, logger)
 
 	now := time.Now()
-	rows, err := repo.DailyTokens(now.Add(-time.Hour), now, "")
+	rows, err := repo.DailyTokens(now.Add(-time.Hour), now, "", "day")
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
@@ -1121,7 +1121,7 @@ func TestUsageRepo_ErrorPaths_OnClosedDB(t *testing.T) {
 	})
 
 	t.Run("DailyTokens error", func(t *testing.T) {
-		_, err := repo.DailyTokens(now, now, "")
+		_, err := repo.DailyTokens(now, now, "", "day")
 		assert.Error(t, err)
 	})
 

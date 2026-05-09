@@ -329,6 +329,30 @@ func (r *UsageRepo) dateExpr(col string) string {
 	return fmt.Sprintf("DATE(%s)", col)
 }
 
+// hourExpr 返回将时间戳列截断到小时的 SQL 表达式，结果格式为 "YYYY-MM-DD HH:00"。
+// SQLite: strftime('%Y-%m-%d %H:00', col)
+// PostgreSQL: to_char(DATE_TRUNC('hour', col), 'YYYY-MM-DD HH24:00')
+func (r *UsageRepo) hourExpr(col string) string {
+	if r.driver == "postgres" {
+		return fmt.Sprintf("to_char(DATE_TRUNC('hour', %s), 'YYYY-MM-DD HH24:00')", col)
+	}
+	return fmt.Sprintf("strftime('%%Y-%%m-%%d %%H:00', %s)", col)
+}
+
+// quarterExpr 返回将时间戳列截断到 15 分钟的 SQL 表达式，结果格式为 "YYYY-MM-DD HH:MM:00"。
+// SQLite: strftime('%Y-%m-%d %H:', col) || printf('%02d', (cast(strftime('%M', col) as integer) / 15) * 15) || ':00'
+// PostgreSQL: to_char(date_trunc('hour', col) + floor(extract(minute from col)/15)*interval '15 minutes', 'YYYY-MM-DD HH24:MI:00')
+func (r *UsageRepo) quarterExpr(col string) string {
+	if r.driver == "postgres" {
+		return fmt.Sprintf(
+			"to_char(date_trunc('hour', %s) + floor(extract(minute from %s)/15)*interval '15 minutes', 'YYYY-MM-DD HH24:MI:00')",
+			col, col)
+	}
+	return fmt.Sprintf(
+		"strftime('%%Y-%%m-%%d %%H:', %s) || printf('%%02d', (cast(strftime('%%M', %s) as integer) / 15) * 15) || ':00'",
+		col, col)
+}
+
 // monthsActiveExpr 返回从某列最小值到现在经过月数的 SQL 表达式。
 // SQLite: CAST((julianday('now') - julianday(MIN(col))) / 30 AS INTEGER)
 // PostgreSQL: CAST(EXTRACT(EPOCH FROM (NOW() - MIN(col))) / (30 * 86400) AS INTEGER)
@@ -658,17 +682,30 @@ type DailyTokenRow struct {
 	RequestCount int64  `json:"request_count"`
 }
 
-// DailyTokens 返回指定时间段内按天聚合的 token 用量（全局或指定用户）
-// userID 为空时返回全局聚合，非空时返回该用户的聚合
-func (r *UsageRepo) DailyTokens(from, to time.Time, userID string) ([]DailyTokenRow, error) {
+// DailyTokens 返回指定时间段内聚合的 token 用量（全局或指定用户）。
+// granularity 控制聚合粒度：
+//   - "day"     按天，DailyTokenRow.Date 格式为 "YYYY-MM-DD"
+//   - "hour"    按小时，格式为 "YYYY-MM-DD HH:00"
+//   - "quarter" 按 15 分钟，格式为 "YYYY-MM-DD HH:MM:00"
+//
+// userID 为空时返回全局聚合，非空时返回该用户的聚合。
+func (r *UsageRepo) DailyTokens(from, to time.Time, userID string, granularity string) ([]DailyTokenRow, error) {
 	from, to = toUTC(from), toUTC(to)
-	dateExpr := r.dateExpr("created_at")
+	var periodExpr string
+	switch granularity {
+	case "hour":
+		periodExpr = r.hourExpr("created_at")
+	case "quarter":
+		periodExpr = r.quarterExpr("created_at")
+	default: // "day"
+		periodExpr = r.dateExpr("created_at")
+	}
 	query := r.db.Model(&UsageLog{}).
 		Select(fmt.Sprintf(`%s as date,
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
-			COUNT(*) as request_count`, dateExpr)).
+			COUNT(*) as request_count`, periodExpr)).
 		Where("created_at >= ? AND created_at <= ?", from, to)
 
 	if userID != "" {
@@ -676,13 +713,14 @@ func (r *UsageRepo) DailyTokens(from, to time.Time, userID string) ([]DailyToken
 	}
 
 	var rows []DailyTokenRow
-	err := query.Group(dateExpr).
+	err := query.Group(periodExpr).
 		Order("date ASC").
 		Scan(&rows).Error
 
 	if err != nil {
 		r.logger.Error("failed to get daily tokens",
 			zap.String("user_id", userID),
+			zap.String("granularity", granularity),
 			zap.Error(err),
 		)
 		return nil, fmt.Errorf("daily tokens: %w", err)
@@ -690,7 +728,8 @@ func (r *UsageRepo) DailyTokens(from, to time.Time, userID string) ([]DailyToken
 
 	r.logger.Debug("daily tokens queried",
 		zap.String("user_id", userID),
-		zap.Int("days", len(rows)),
+		zap.String("granularity", granularity),
+		zap.Int("rows", len(rows)),
 	)
 	return rows, nil
 }
