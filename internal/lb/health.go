@@ -371,20 +371,20 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 				hc.logger.Debug("health check ok", zap.String("target", t.ID))
 				hc.recordSuccess(t.ID)
 			} else if result.definitivelyUnhealthy() {
-				hc.logger.Debug("health check failed (connection error)",
+				hc.logger.Info("health check failed (connection error)",
 					zap.String("target", t.ID),
 					zap.Error(result.err),
 				)
 				hc.probeCache.invalidate(t.ID)
-				hc.recordFailure(t.ID)
+				hc.recordFailure(t.ID, "active")
 			} else {
 				// 非 ok 的 HTTP 状态：key 失效或路径变更，清缓存重新 discover
-				hc.logger.Debug("health check non-ok status",
+				hc.logger.Info("health check non-ok status",
 					zap.String("target", t.ID),
 					zap.Int("status", result.status),
 				)
 				hc.probeCache.invalidate(t.ID)
-				hc.recordFailure(t.ID)
+				hc.recordFailure(t.ID, "active")
 			}
 			return
 		}
@@ -408,7 +408,11 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 		// 连接层失败（拒绝连接/超时）：服务不可达
 		// 不缓存 unreachable 标记——下次心跳直接重试 Discover，
 		// 避免 2h TTL 内服务恢复后仍无法被重新探活（死锁）。
-		hc.recordFailure(t.ID)
+		hc.logger.Info("smart probe: target unreachable",
+			zap.String("target", t.ID),
+			zap.String("addr", t.Addr),
+		)
+		hc.recordFailure(t.ID, "active")
 		return
 	}
 
@@ -420,7 +424,7 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 			zap.String("target", t.ID),
 			zap.String("provider", provider),
 		)
-		hc.recordFailure(t.ID)
+		hc.recordFailure(t.ID, "active")
 		return
 	}
 
@@ -435,11 +439,11 @@ func (hc *HealthChecker) checkOneSmart(t Target, cred *TargetCredential, provide
 		hc.logger.Debug("smart probe: initial health check ok after discovery", zap.String("target", t.ID))
 		hc.recordSuccess(t.ID)
 	} else {
-		hc.logger.Debug("smart probe: initial health check failed after discovery",
+		hc.logger.Info("smart probe: initial health check failed after discovery",
 			zap.String("target", t.ID),
 			zap.Int("status", result.status),
 		)
-		hc.recordFailure(t.ID)
+		hc.recordFailure(t.ID, "active")
 	}
 }
 
@@ -480,7 +484,7 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 			zap.String("target", t.ID),
 			zap.Error(err),
 		)
-		hc.recordFailure(t.ID)
+		hc.recordFailure(t.ID, "active")
 		return
 	}
 
@@ -493,11 +497,11 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 
 	resp, err := hc.client.Do(req)
 	if err != nil {
-		hc.logger.Debug("health check failed",
+		hc.logger.Info("health check failed",
 			zap.String("target", t.ID),
 			zap.Error(err),
 		)
-		hc.recordFailure(t.ID)
+		hc.recordFailure(t.ID, "active")
 		return
 	}
 	defer resp.Body.Close()
@@ -507,11 +511,11 @@ func (hc *HealthChecker) checkOneWithPath(t Target, healthPath string, cred *Tar
 		hc.logger.Debug("health check ok", zap.String("target", t.ID))
 		hc.recordSuccess(t.ID)
 	} else {
-		hc.logger.Debug("health check non-200",
+		hc.logger.Info("health check non-200",
 			zap.String("target", t.ID),
 			zap.Int("status", resp.StatusCode),
 		)
-		hc.recordFailure(t.ID)
+		hc.recordFailure(t.ID, "active")
 	}
 }
 
@@ -522,7 +526,15 @@ func (hc *HealthChecker) RecordSuccess(id string) {
 
 // RecordFailure 被动上报：请求失败，增加连续失败计数，达阈值则标记不健康。
 func (hc *HealthChecker) RecordFailure(id string) {
-	hc.recordFailure(id)
+	hc.mu.Lock()
+	next := hc.failures[id] + 1
+	hc.mu.Unlock()
+	hc.logger.Warn("passive circuit breaker: request failed",
+		zap.String("target", id),
+		zap.Int("consecutive_failures", next),
+		zap.Int("threshold", hc.failThreshold),
+	)
+	hc.recordFailure(id, "passive")
 }
 
 func (hc *HealthChecker) recordSuccess(id string) {
@@ -544,7 +556,7 @@ func (hc *HealthChecker) recordSuccess(id string) {
 	hc.balancer.MarkHealthy(id)
 }
 
-func (hc *HealthChecker) recordFailure(id string) {
+func (hc *HealthChecker) recordFailure(id, source string) {
 	hc.mu.Lock()
 	hc.failures[id]++
 	count := hc.failures[id]
@@ -553,6 +565,7 @@ func (hc *HealthChecker) recordFailure(id string) {
 	if count >= hc.failThreshold {
 		hc.logger.Warn("target marked unhealthy",
 			zap.String("target", id),
+			zap.String("source", source),
 			zap.Int("consecutive_failures", count),
 		)
 		hc.balancer.MarkUnhealthy(id)
@@ -618,6 +631,7 @@ func (hc *HealthChecker) recordFailure(id string) {
 	} else {
 		hc.logger.Debug("target failure recorded",
 			zap.String("target", id),
+			zap.String("source", source),
 			zap.Int("consecutive_failures", count),
 			zap.Int("threshold", hc.failThreshold),
 		)
