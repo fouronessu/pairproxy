@@ -253,9 +253,6 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// 告知 s-proxy 本地路由版本（s-proxy 决定是否下发更新）
 			req.Header.Set("X-Routing-Version", strconv.FormatInt(localVersion, 10))
 
-			// 注入真实客户端 IP，供 s-proxy 记录到 usage_logs
-			req.Header.Set("X-Forwarded-For", extractClientIP(r))
-
 			cp.logger.Debug("proxying request to s-proxy",
 				zap.String("request_id", reqID),
 				zap.String("target", target.Addr),
@@ -372,9 +369,6 @@ func (cp *CProxy) doRequest(r *http.Request, target *lb.Target, tf *auth.TokenFi
 
 	// 告知 s-proxy 本地路由版本
 	req.Header.Set("X-Routing-Version", strconv.FormatInt(cp.routingVersion.Load(), 10))
-
-	// 注入真实客户端 IP，供 s-proxy 记录到 usage_logs
-	req.Header.Set("X-Forwarded-For", extractClientIP(r))
 
 	// 移除 hop-by-hop headers（避免代理链问题）
 	req.Header.Del("Connection")
