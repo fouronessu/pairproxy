@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -200,6 +201,25 @@ func extractSessionID(r *http.Request, bodyBytes []byte) string {
 
 	// 3. 自动生成
 	return "auto-session-" + uuid.NewString()
+}
+
+// extractClientIP 从请求中提取真实客户端 IP。
+// 优先级：X-Forwarded-For 首项 > X-Real-IP > RemoteAddr。
+func extractClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if idx := strings.IndexByte(xff, ','); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // expandCandidateModels 从 targets 中收集候选模型名。

@@ -1907,6 +1907,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		ActualModel:        recordedActualModel,
 		UpstreamURL:        firstInfo.URL,
 		SourceNode:         sp.sourceNode,
+		ClientIP:           extractClientIP(r),
 		SessionID:          routerSessionID,
 		EnteredModelRouter: enteredModelRouter,
 		RouterResultStatus: routerResultStatus,

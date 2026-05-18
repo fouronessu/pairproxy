@@ -59,6 +59,7 @@ type UsageLog struct {
 	CostUSD            float64   `gorm:"default:0"`           // 估算费用（USD）
 	SourceNode         string    `gorm:"default:'local'"`     // 数据来源节点 ID
 	Synced             bool      `gorm:"default:false;index"` // sp-2+ 用：是否已上报给 sp-1
+	ClientIP           string    `gorm:"default:''"`          // 请求来源 IP
 	SessionID          string    `gorm:"default:''"`          // 来自请求的真实 session_id，自动生成的留空
 	EnteredModelRouter bool      `gorm:"default:false"`       // 是否进入了多绑定 Router 分支（组绑定≥2）
 	RouterResultStatus int       `gorm:"default:0"`           // 0=未调用, 1=调用成功, 2=调用失败

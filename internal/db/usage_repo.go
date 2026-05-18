@@ -37,6 +37,7 @@ type UsageRecord struct {
 	StatusCode         int
 	DurationMs         int64
 	SourceNode         string
+	ClientIP           string // 请求来源 IP
 	SessionID          string // 来自请求的真实 session_id，自动生成的留空
 	EnteredModelRouter bool   // 是否进入了多绑定 Router 分支
 	RouterResultStatus int    // 0=未调用, 1=调用成功, 2=调用失败
@@ -267,6 +268,7 @@ func (w *UsageWriter) writeBatch(batch []UsageRecord) {
 			DurationMs:         r.DurationMs,
 			CostUSD:            cost,
 			SourceNode:         r.SourceNode,
+			ClientIP:           r.ClientIP,
 			SessionID:          r.SessionID,
 			EnteredModelRouter: r.EnteredModelRouter,
 			RouterResultStatus: r.RouterResultStatus,
