@@ -101,7 +101,7 @@ func NewCProxy(
 			MaxIdleConnsPerHost:   10,
 			ForceAttemptHTTP2:     false, // s-proxy 不需要 HTTP/2
 		},
-		cacheDir:   cacheDir,
+		cacheDir: cacheDir,
 	}
 
 	// 尝试从本地缓存恢复路由表版本
@@ -253,6 +253,9 @@ func (cp *CProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// 告知 s-proxy 本地路由版本（s-proxy 决定是否下发更新）
 			req.Header.Set("X-Routing-Version", strconv.FormatInt(localVersion, 10))
 
+			// 注入真实客户端 IP，供 s-proxy 记录到 usage_logs
+			req.Header.Set("X-Forwarded-For", extractClientIP(r))
+
 			cp.logger.Debug("proxying request to s-proxy",
 				zap.String("request_id", reqID),
 				zap.String("target", target.Addr),
@@ -369,6 +372,9 @@ func (cp *CProxy) doRequest(r *http.Request, target *lb.Target, tf *auth.TokenFi
 
 	// 告知 s-proxy 本地路由版本
 	req.Header.Set("X-Routing-Version", strconv.FormatInt(cp.routingVersion.Load(), 10))
+
+	// 注入真实客户端 IP，供 s-proxy 记录到 usage_logs
+	req.Header.Set("X-Forwarded-For", extractClientIP(r))
 
 	// 移除 hop-by-hop headers（避免代理链问题）
 	req.Header.Del("Connection")
@@ -590,6 +596,7 @@ func (cp *CProxy) pollRoutingTable(ctx context.Context) {
 		zap.Int64("version", cp.routingVersion.Load()),
 	)
 }
+
 // 使用互斥锁防止并发刷新（仅一个 goroutine 实际发出请求，其余等待后复用结果）。
 // HTTP 请求使用 5s context 超时（P2-4）。
 func (cp *CProxy) tryRefresh(ctx context.Context, tf *auth.TokenFile) (*auth.TokenFile, error) {
@@ -748,4 +755,3 @@ func (cp *CProxy) ApplyRoutingTable(rt *cluster.RoutingTable) {
 func (cp *CProxy) RoutingVersion() int64 {
 	return cp.routingVersion.Load()
 }
-
