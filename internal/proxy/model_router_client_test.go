@@ -100,7 +100,7 @@ func TestExpandCandidateModels_OnlyIncludesRequestedIDs(t *testing.T) {
 
 func TestExpandCandidateModels_EmptySupportedModels_Skipped(t *testing.T) {
 	targets := []lbTarget{
-		{id: "t1", supportedModels: nil},        // no restriction
+		{id: "t1", supportedModels: nil}, // no restriction
 		{id: "t2", supportedModels: []string{"gpt-4o"}},
 	}
 	models := expandCandidateModels(targets, []string{"t1", "t2"})
@@ -234,7 +234,7 @@ func TestModelRouterClient_Route_Success(t *testing.T) {
 	})
 
 	body := []byte(`{"model":"claude-3-5-sonnet-20241022","messages":[{"role":"user","content":"hello"}]}`)
-	selected, err := client.Route(context.Background(), "req-123", "alice", "sess-001", body, "claude-3-5-sonnet-20241022", []string{"DeepSeek-V3", "gpt-4o"}, nil)
+	selected, _, err := client.Route(context.Background(), "req-123", "alice", "sess-001", body, "claude-3-5-sonnet-20241022", []string{"DeepSeek-V3", "gpt-4o"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "DeepSeek-V3", selected, "should select rank=1 model")
 }
@@ -243,7 +243,7 @@ func TestModelRouterClient_Route_ServerError(t *testing.T) {
 	_, client := newTestRouterServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	_, err := client.Route(context.Background(), "req-x", "user", "sess", nil, "", nil, nil)
+	_, _, err := client.Route(context.Background(), "req-x", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "non-200")
 }
@@ -255,7 +255,7 @@ func TestModelRouterClient_Route_EmptyRankings(t *testing.T) {
 			"model_rankings": []interface{}{},
 		})
 	})
-	_, err := client.Route(context.Background(), "req-y", "user", "sess", nil, "", nil, nil)
+	_, _, err := client.Route(context.Background(), "req-y", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty model_rankings")
 }
@@ -265,7 +265,7 @@ func TestModelRouterClient_Route_InvalidJSON(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`not json`)) //nolint:errcheck
 	})
-	_, err := client.Route(context.Background(), "req-z", "user", "sess", nil, "", nil, nil)
+	_, _, err := client.Route(context.Background(), "req-z", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err)
 }
 
@@ -284,14 +284,14 @@ func TestModelRouterClient_Route_Timeout(t *testing.T) {
 		Timeout: 50 * time.Millisecond,
 	}, logger)
 
-	_, err := client.Route(context.Background(), "req-t", "user", "sess", nil, "", nil, nil)
+	_, _, err := client.Route(context.Background(), "req-t", "user", "sess", nil, "", nil, nil)
 	assert.Error(t, err, "should time out")
 }
 
 func TestModelRouterClient_Route_NoURL(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	client := NewModelRouterClient(config.ModelRouterConfig{URL: ""}, logger)
-	_, err := client.Route(context.Background(), "", "", "", nil, "", nil, nil)
+	_, _, err := client.Route(context.Background(), "", "", "", nil, "", nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
 }

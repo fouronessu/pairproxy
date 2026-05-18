@@ -26,12 +26,12 @@ import (
 //  2. Redis session 历史缓存 → 避免重复调用 Router API
 //  3. 规模感知决策 → 最近模型为 big 时直接复用
 type ModelRouterSelector struct {
-	client    *ModelRouterClient
-	redis     *redis.Client // nil = 无缓存，每次均调用 Route()
-	querier   ModelSelectorQuerier
-	historyN  int
-	redisTTL  time.Duration
-	logger    *zap.Logger
+	client   *ModelRouterClient
+	redis    *redis.Client // nil = 无缓存，每次均调用 Route()
+	querier  ModelSelectorQuerier
+	historyN int
+	redisTTL time.Duration
+	logger   *zap.Logger
 }
 
 // ModelSelectorQuerier 是 ModelRouterSelector 对模型信息的查询接口。
@@ -105,6 +105,14 @@ func NewModelRouterSelector(
 	}
 }
 
+// SelectModelResult 封装 SelectModel 的决策结果，供调用方记录路由元数据。
+type SelectModelResult struct {
+	Model              string
+	RouterResultStatus int    // 0=未调用 Router API, 1=调用成功, 2=调用失败
+	RouterRawResponse  string // Router API 原始响应体 JSON（未调用时为空）
+	CacheHitScene      int    // 0=无缓存/未命中, 1=缓存满复用, 2=big模型复用, 3=未满非big调API
+}
+
 // SelectModel 根据请求内容和 session 历史选取最优模型名。
 //
 // 决策流程：
@@ -114,7 +122,7 @@ func NewModelRouterSelector(
 //  4. Redis 历史 < N：最近模型为 big → 直接返回；否则调 Route()
 //
 // 调用 Route() 后，若 len(history) < N，将结果追加写入 Redis。
-// 失败时返回 ("", err)，调用方应 passthrough（保留原始模型）。
+// 失败时返回 (SelectModelResult{}, err)，调用方应 passthrough（保留原始模型）。
 func (s *ModelRouterSelector) SelectModel(
 	ctx context.Context,
 	reqID string,
@@ -124,7 +132,7 @@ func (s *ModelRouterSelector) SelectModel(
 	requestedModel string,
 	candidateModels []string,
 	dl *zap.Logger,
-) (string, error) {
+) (SelectModelResult, error) {
 	// 入口日志：记录本次路由决策的关键输入，便于全链路追踪
 	s.logger.Debug("model_router_selector: SelectModel called",
 		zap.String("req_id", reqID),
@@ -149,12 +157,12 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.String("req_id", reqID),
 			zap.String("session_id", sessionID),
 		)
-		model, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		model, raw, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
 		if err != nil {
-			return "", err
+			return SelectModelResult{}, err
 		}
 		s.writeRedis(ctx, sessionID, model)
-		return model, nil
+		return SelectModelResult{Model: model, RouterResultStatus: 1, RouterRawResponse: raw, CacheHitScene: 0}, nil
 	}
 
 	// ── Step 3: 查询 Redis ─────────────────────────────────────────────────
@@ -164,7 +172,11 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.String("req_id", reqID),
 			zap.String("session_id", sessionID),
 		)
-		return s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		model, raw, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		if err != nil {
+			return SelectModelResult{}, err
+		}
+		return SelectModelResult{Model: model, RouterResultStatus: 1, RouterRawResponse: raw, CacheHitScene: 0}, nil
 	}
 
 	history, err := s.loadHistory(ctx, sessionID)
@@ -175,7 +187,11 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.String("session_id", sessionID),
 			zap.Error(err),
 		)
-		return s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		model, raw, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		if err != nil {
+			return SelectModelResult{}, err
+		}
+		return SelectModelResult{Model: model, RouterResultStatus: 1, RouterRawResponse: raw, CacheHitScene: 0}, nil
 	}
 
 	if history == nil {
@@ -184,12 +200,12 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.String("req_id", reqID),
 			zap.String("session_id", sessionID),
 		)
-		model, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+		model, raw, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
 		if err != nil {
-			return "", err
+			return SelectModelResult{}, err
 		}
 		s.writeRedis(ctx, sessionID, model)
-		return model, nil
+		return SelectModelResult{Model: model, RouterResultStatus: 1, RouterRawResponse: raw, CacheHitScene: 0}, nil
 	}
 
 	// ── Step 4: 历史 >= N → 直接返回最近一次（不更新 Redis） ───────────────
@@ -202,7 +218,7 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.Int("history_n", s.historyN),
 			zap.String("model", last),
 		)
-		return last, nil
+		return SelectModelResult{Model: last, RouterResultStatus: 0, CacheHitScene: 1}, nil
 	}
 
 	// ── Step 5: 历史 < N → 检查最近模型规模 ───────────────────────────────
@@ -225,7 +241,7 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.Int("history_len", len(history)),
 			zap.Int("history_n", s.historyN),
 		)
-		return last, nil
+		return SelectModelResult{Model: last, RouterResultStatus: 0, CacheHitScene: 2}, nil
 	}
 
 	// 最近模型非 big（或规模查询失败）→ 调 Route
@@ -237,12 +253,12 @@ func (s *ModelRouterSelector) SelectModel(
 		zap.Int("history_len", len(history)),
 		zap.Int("history_n", s.historyN),
 	)
-	model, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
+	model, raw, err := s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, candidateModels, dl)
 	if err != nil {
-		return "", err
+		return SelectModelResult{}, err
 	}
 	s.writeRedis(ctx, sessionID, model)
-	return model, nil
+	return SelectModelResult{Model: model, RouterResultStatus: 1, RouterRawResponse: raw, CacheHitScene: 3}, nil
 }
 
 // handleMultimodal 处理多模态请求：取多模态模型与 candidateModels 的交集作为候选。
@@ -253,7 +269,7 @@ func (s *ModelRouterSelector) handleMultimodal(
 	requestedModel string,
 	candidateModels []string,
 	dl *zap.Logger,
-) (string, error) {
+) (SelectModelResult, error) {
 	// 多模态检测命中，记录关键上下文
 	s.logger.Info("model_router_selector: multimodal request detected",
 		zap.String("req_id", reqID),
@@ -294,9 +310,12 @@ func (s *ModelRouterSelector) handleMultimodal(
 	}
 
 	var model string
+	var routerResultStatus int
+	var routerRawResponse string
 	if len(effective) == 1 {
 		// 唯一候选，直接选定，不调 Route
 		model = effective[0]
+		routerResultStatus = 0
 		s.logger.Info("model_router_selector: multimodal single candidate, selected directly",
 			zap.String("req_id", reqID),
 			zap.String("session_id", sessionID),
@@ -309,10 +328,11 @@ func (s *ModelRouterSelector) handleMultimodal(
 			zap.String("session_id", sessionID),
 			zap.Strings("effective_candidates", effective),
 		)
-		model, err = s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, effective, dl)
+		model, routerRawResponse, err = s.client.Route(ctx, reqID, username, sessionID, bodyBytes, requestedModel, effective, dl)
 		if err != nil {
-			return "", fmt.Errorf("multimodal route: %w", err)
+			return SelectModelResult{}, fmt.Errorf("multimodal route: %w", err)
 		}
+		routerResultStatus = 1
 		s.logger.Info("model_router_selector: multimodal Route selected model",
 			zap.String("req_id", reqID),
 			zap.String("session_id", sessionID),
@@ -321,7 +341,7 @@ func (s *ModelRouterSelector) handleMultimodal(
 	}
 
 	s.writeRedis(ctx, sessionID, model)
-	return model, nil
+	return SelectModelResult{Model: model, RouterResultStatus: routerResultStatus, RouterRawResponse: routerRawResponse, CacheHitScene: 0}, nil
 }
 
 // filterNonMultimodalCandidates 取 DB 非多模态模型列表与 candidateModels 的交集。
@@ -522,4 +542,3 @@ func intersectModels(multiNames, candidateModels []string) []string {
 	}
 	return result
 }
-

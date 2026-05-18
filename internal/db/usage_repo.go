@@ -26,18 +26,23 @@ type UsageFilter struct {
 
 // UsageRecord 用量写入数据（通过 channel 传递，不直接操作 DB）
 type UsageRecord struct {
-	RequestID    string
-	UserID       string
-	Model        string
-	ActualModel  string // 实际转发的模型名（model mapping / auto 模式后）；空表示与 Model 相同
-	InputTokens  int
-	OutputTokens int
-	IsStreaming  bool
-	UpstreamURL  string
-	StatusCode   int
-	DurationMs   int64
-	SourceNode   string
-	CreatedAt    time.Time
+	RequestID          string
+	UserID             string
+	Model              string
+	ActualModel        string // 实际转发的模型名（model mapping / auto 模式后）；空表示与 Model 相同
+	InputTokens        int
+	OutputTokens       int
+	IsStreaming        bool
+	UpstreamURL        string
+	StatusCode         int
+	DurationMs         int64
+	SourceNode         string
+	SessionID          string // 来自请求的真实 session_id，自动生成的留空
+	EnteredModelRouter bool   // 是否进入了多绑定 Router 分支
+	RouterResultStatus int    // 0=未调用, 1=调用成功, 2=调用失败
+	RouterResult       string // Router 返回的模型名
+	CacheHitScene      int    // 0=无缓存/未命中, 1=缓存满复用, 2=big模型复用, 3=未满非big调API
+	CreatedAt          time.Time
 }
 
 // CostFunc 费用计算函数类型（model, inputTokens, outputTokens → USD）
@@ -46,13 +51,13 @@ type CostFunc func(model string, inputTokens, outputTokens int) float64
 // UsageWriter 异步批量写入用量日志
 type UsageWriter struct {
 	db         *gorm.DB
-	driver     string       // "sqlite" 或 "postgres"，从 DriverName(db) 获取
+	driver     string // "sqlite" 或 "postgres"，从 DriverName(db) 获取
 	logger     *zap.Logger
 	ch         chan UsageRecord
 	bufferSize int
 	interval   time.Duration
-	done       chan struct{} // closed when runLoop exits
-	costFn     CostFunc     // 可选：用于计算 cost_usd（nil 则不计算）
+	done       chan struct{}          // closed when runLoop exits
+	costFn     CostFunc               // 可选：用于计算 cost_usd（nil 则不计算）
 	onFlush    func(userIDs []string) // 可选：批量写入 DB 成功后的回调（供配额缓存失效使用）
 
 	dropped atomic.Int64 // 因 channel 满而丢弃的记录数（累计）
@@ -249,20 +254,25 @@ func (w *UsageWriter) writeBatch(batch []UsageRecord) {
 			cost = w.costFn(r.Model, r.InputTokens, r.OutputTokens)
 		}
 		logs = append(logs, UsageLog{
-			RequestID:    r.RequestID,
-			UserID:       r.UserID,
-			Model:        r.Model,
-			ActualModel:  r.ActualModel,
-			InputTokens:  r.InputTokens,
-			OutputTokens: r.OutputTokens,
-			TotalTokens:  total,
-			IsStreaming:  r.IsStreaming,
-			UpstreamURL:  r.UpstreamURL,
-			StatusCode:   r.StatusCode,
-			DurationMs:   r.DurationMs,
-			CostUSD:      cost,
-			SourceNode:   r.SourceNode,
-			CreatedAt:    r.CreatedAt,
+			RequestID:          r.RequestID,
+			UserID:             r.UserID,
+			Model:              r.Model,
+			ActualModel:        r.ActualModel,
+			InputTokens:        r.InputTokens,
+			OutputTokens:       r.OutputTokens,
+			TotalTokens:        total,
+			IsStreaming:        r.IsStreaming,
+			UpstreamURL:        r.UpstreamURL,
+			StatusCode:         r.StatusCode,
+			DurationMs:         r.DurationMs,
+			CostUSD:            cost,
+			SourceNode:         r.SourceNode,
+			SessionID:          r.SessionID,
+			EnteredModelRouter: r.EnteredModelRouter,
+			RouterResultStatus: r.RouterResultStatus,
+			RouterResult:       r.RouterResult,
+			CacheHitScene:      r.CacheHitScene,
+			CreatedAt:          r.CreatedAt,
 		})
 	}
 
@@ -675,7 +685,7 @@ func (r *UsageRepo) MarkSynced(requestIDs []string) error {
 
 // DailyTokenRow 按天聚合的 token 用量
 type DailyTokenRow struct {
-	Date         string `json:"date"`          // YYYY-MM-DD
+	Date         string `json:"date"` // YYYY-MM-DD
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
 	TotalTokens  int64  `json:"total_tokens"`
@@ -736,7 +746,7 @@ func (r *UsageRepo) DailyTokens(from, to time.Time, userID string, granularity s
 
 // DailyCostRow 按天聚合的费用
 type DailyCostRow struct {
-	Date    string  `json:"date"`     // YYYY-MM-DD
+	Date    string  `json:"date"` // YYYY-MM-DD
 	CostUSD float64 `json:"cost_usd"`
 }
 

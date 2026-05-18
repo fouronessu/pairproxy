@@ -76,12 +76,12 @@ type SProxy struct {
 	targets        []LLMTarget
 	idx            atomic.Uint32 // 轮询计数器（无 LLM 均衡器时使用）
 	transport      http.RoundTripper
-	clusterMgr     *cluster.Manager                                // 可选，nil 表示单节点模式（不注入路由头）
-	sourceNode     string                                          // 来源节点标识（用于 usage_logs）
-	quotaChecker   *quota.Checker                                  // 可选，nil 表示不检查配额
-	startTime      time.Time                                       // 进程启动时间（供 /health 返回 uptime）
-	activeRequests atomic.Int64                                    // 当前正在处理的代理请求数
-	sqlDB          *sql.DB                                         // 可选，用于 /health 检查 DB 可达性
+	clusterMgr     *cluster.Manager // 可选，nil 表示单节点模式（不注入路由头）
+	sourceNode     string           // 来源节点标识（用于 usage_logs）
+	quotaChecker   *quota.Checker   // 可选，nil 表示不检查配额
+	startTime      time.Time        // 进程启动时间（供 /health 返回 uptime）
+	activeRequests atomic.Int64     // 当前正在处理的代理请求数
+	sqlDB          *sql.DB          // 可选，用于 /health 检查 DB 可达性
 	// 排水模式控制
 	draining     atomic.Bool // 排水模式标志
 	drainReason  string      // 排水原因（用于日志和状态查询）
@@ -94,15 +94,15 @@ type SProxy struct {
 	maxRetries      int                                         // RetryTransport 最大重试次数
 	retryOnStatus   []int                                       // 额外触发 try-next 的 HTTP 状态码（如 [429]）
 
-	debugLogger    atomic.Pointer[zap.Logger]    // 可选，非 nil 时将转发内容写入独立 debug 文件
-	notifier       *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
-	convTracker    atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
-	corpusWriter   atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
+	debugLogger  atomic.Pointer[zap.Logger]    // 可选，非 nil 时将转发内容写入独立 debug 文件
+	notifier     *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
+	convTracker  atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
+	corpusWriter atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
 
 	// 配置和数据库（用于 config target sync）
-	cfg           *config.SProxyFullConfig     // 可选，用于同步配置文件中的 LLM targets
-	db            *gorm.DB                     // 可选，用于同步配置文件中的 LLM targets
-	keyDecryptFn  func(string) (string, error) // 可选，当配置了 key_encryption_key 时用于解密 AES key
+	cfg          *config.SProxyFullConfig     // 可选，用于同步配置文件中的 LLM targets
+	db           *gorm.DB                     // 可选，用于同步配置文件中的 LLM targets
+	keyDecryptFn func(string) (string, error) // 可选，当配置了 key_encryption_key 时用于解密 AES key
 
 	// 分组多绑定智能路由（v3.1.0+）
 	// groupMultiBindingFinder: 查询分组的全部 target ID 列表（来自 DB）
@@ -467,7 +467,7 @@ func (sp *SProxy) loadAllTargets(repo *db.LLMTargetRepo) ([]config.LLMTarget, er
 			URL:             dt.URL,
 			APIKey:          apiKey,
 			Provider:        dt.Provider,
-			Name:             dt.Name,
+			Name:            dt.Name,
 			Weight:          dt.Weight,
 			HealthCheckPath: dt.HealthCheckPath,
 			ModelMapping:    modelMapping,
@@ -1065,6 +1065,7 @@ func (sp *SProxy) HealthHandler() http.HandlerFunc {
 //  1. 用户/分组绑定（bindingResolver）→ 若绑定 target 健康且未尝试过
 //  2. 加权随机负载均衡（llmBalancer）→ 过滤已尝试 + 不健康 + provider 不匹配
 //  3. 回退简单轮询（无均衡器时）
+//
 // pickLLMTarget 选取本次请求的 LLM target。
 //
 // boundOverride: 若非空，跳过 bindingResolver，直接将此 targetID 视为绑定结果（用于分组多绑定 Router 预选）。
@@ -1575,6 +1576,14 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// 一次 Anthropic→OpenAI 转换，Router 收到合法的 OpenAI 格式 body；
 	// 转换结果在 line ~1770 直接复用（仅补 model mapping），避免对同一 body 重复全量转换。
 	var preConvertedBody []byte
+	// model_router 路由元数据，写入 usageRecord
+	var (
+		routerSessionID    string
+		enteredModelRouter bool
+		routerResultStatus int
+		routerResult       string
+		cacheHitScene      int
+	)
 	if sp.groupMultiBindingFinder != nil && sp.modelRouterSelector != nil &&
 		sp.bindingResolver != nil && claims.GroupID != "" {
 
@@ -1583,10 +1592,16 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		if !userHasBinding {
 			groupTargetIDs, gErr := sp.groupMultiBindingFinder(claims.GroupID)
 			if gErr == nil && len(groupTargetIDs) >= 2 {
+				enteredModelRouter = true
+
 				// 展开候选模型列表
 				balTargets := sp.llmBalancerTargetsAsLBTargets()
 				candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
 				sessionID := extractSessionID(r, bodyBytes)
+				// 仅记录来自请求的真实 session_id，自动生成的（auto- 前缀）不写入日志
+				if !strings.HasPrefix(sessionID, "auto") {
+					routerSessionID = sessionID
+				}
 
 				// 若组 provider 要求 AtoO，提前转换一次并缓存结果（转换后的 body 同时用于 Router 和转发）。
 				// nil modelMapping：model name 在选定 target 后再通过 applyModelToOpenAIBody 更新，代价极小。
@@ -1600,20 +1615,24 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				selectedModel, rErr := sp.modelRouterSelector.SelectModel(
+				result, rErr := sp.modelRouterSelector.SelectModel(
 					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, dl,
 				)
 				if rErr != nil {
+					routerResultStatus = 2
 					sp.logger.Warn("model_router: routing failed, falling back to first group binding",
 						zap.String("request_id", reqID),
 						zap.String("group_id", claims.GroupID),
 						zap.Error(rErr),
 					)
-				} else if selectedModel != "" {
-					routerBoundOverride = resolveModelToTarget(selectedModel, balTargets, groupTargetIDs)
+				} else if result.Model != "" {
+					routerResultStatus = result.RouterResultStatus
+					routerResult = result.RouterRawResponse
+					cacheHitScene = result.CacheHitScene
+					routerBoundOverride = resolveModelToTarget(result.Model, balTargets, groupTargetIDs)
 					sp.logger.Info("model_router: pre-selected target",
 						zap.String("request_id", reqID),
-						zap.String("selected_model", selectedModel),
+						zap.String("selected_model", result.Model),
 						zap.String("target_id", routerBoundOverride),
 					)
 				}
@@ -1882,13 +1901,18 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	//   AtoO 场景为 Anthropic 模型名（非 mapped 名）；OtoA 场景为 OpenAI 模型名（如 "gpt-4o"）
 	model := requestedModel
 	usageRecord := db.UsageRecord{
-		RequestID:   reqID,
-		UserID:      claims.UserID,
-		Model:       model,
-		ActualModel: recordedActualModel,
-		UpstreamURL: firstInfo.URL,
-		SourceNode:  sp.sourceNode,
-		CreatedAt:   time.Now().UTC(),
+		RequestID:          reqID,
+		UserID:             claims.UserID,
+		Model:              model,
+		ActualModel:        recordedActualModel,
+		UpstreamURL:        firstInfo.URL,
+		SourceNode:         sp.sourceNode,
+		SessionID:          routerSessionID,
+		EnteredModelRouter: enteredModelRouter,
+		RouterResultStatus: routerResultStatus,
+		RouterResult:       routerResult,
+		CacheHitScene:      cacheHitScene,
+		CreatedAt:          time.Now().UTC(),
 	}
 	if usageRecord.Model != "" {
 		span.SetAttributes(attribute.String("model", usageRecord.Model))

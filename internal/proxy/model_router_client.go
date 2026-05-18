@@ -19,9 +19,9 @@ import (
 // ModelRouterClient 调用 MaaS Router API，根据候选模型列表为请求选取最优模型。
 // 实现基于 router-api.yaml 规范，仅在分组有多绑定（≥2 个 target）时被调用。
 type ModelRouterClient struct {
-	url     string
-	client  *http.Client
-	logger  *zap.Logger
+	url    string
+	client *http.Client
+	logger *zap.Logger
 }
 
 // NewModelRouterClient 创建 ModelRouterClient。
@@ -50,8 +50,8 @@ func (rr *routerRequest) MarshalJSON() ([]byte, error) {
 
 // routerResponse 对应 ModelRouterResponse schema。
 type routerResponse struct {
-	XSpanID      string      `json:"x_span_id"`
-	SessionID    string      `json:"session_id"`
+	XSpanID       string      `json:"x_span_id"`
+	SessionID     string      `json:"session_id"`
 	ModelRankings []modelRank `json:"model_rankings"`
 }
 
@@ -81,9 +81,9 @@ func (c *ModelRouterClient) Route(
 	requestedModel string,
 	candidateModels []string,
 	dl *zap.Logger,
-) (selectedModel string, err error) {
+) (selectedModel string, rawResponse string, err error) {
 	if c.url == "" {
-		return "", fmt.Errorf("model router URL not configured")
+		return "", "", fmt.Errorf("model router URL not configured")
 	}
 
 	// 解析原始请求 body（OpenAI/Anthropic 格式）
@@ -94,7 +94,7 @@ func (c *ModelRouterClient) Route(
 				zap.String("req_id", reqID),
 				zap.Error(err),
 			)
-			return "", fmt.Errorf("parse request body: %w", err)
+			return "", "", fmt.Errorf("parse request body: %w", err)
 		}
 	} else {
 		bodyFields = make(map[string]interface{})
@@ -112,12 +112,12 @@ func (c *ModelRouterClient) Route(
 
 	reqBody, err := json.Marshal(bodyFields)
 	if err != nil {
-		return "", fmt.Errorf("marshal router request: %w", err)
+		return "", "", fmt.Errorf("marshal router request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("create router request: %w", err)
+		return "", "", fmt.Errorf("create router request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Span-Id", reqID)
@@ -139,26 +139,26 @@ func (c *ModelRouterClient) Route(
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("router request failed: %w", err)
+		return "", "", fmt.Errorf("router request failed: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("router returned non-200: %d", resp.StatusCode)
+		return "", "", fmt.Errorf("router returned non-200: %d", resp.StatusCode)
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read router response: %w", err)
+		return "", "", fmt.Errorf("read router response: %w", err)
 	}
 
 	var result routerResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parse router response: %w", err)
+		return "", "", fmt.Errorf("parse router response: %w", err)
 	}
 
 	if len(result.ModelRankings) == 0 {
-		return "", fmt.Errorf("router returned empty model_rankings")
+		return "", "", fmt.Errorf("router returned empty model_rankings")
 	}
 
 	// 取 rank=1 的模型（已按 rank 排序）
@@ -174,7 +174,7 @@ func (c *ModelRouterClient) Route(
 		zap.String("selected_model", best.Model),
 		zap.Int("rank", best.Rank),
 	)
-	return best.Model, nil
+	return best.Model, string(respBody), nil
 }
 
 // extractSessionID 从请求体或请求头中提取会话 ID。
