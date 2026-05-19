@@ -94,7 +94,8 @@ type SProxy struct {
 	maxRetries      int                                         // RetryTransport 最大重试次数
 	retryOnStatus   []int                                       // 额外触发 try-next 的 HTTP 状态码（如 [429]）
 
-	debugLogger  atomic.Pointer[zap.Logger]    // 可选，非 nil 时将转发内容写入独立 debug 文件
+	debugLogger       atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
+	modelRouterLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将 model_router 调用写入独立文件
 	notifier     *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
 	convTracker  atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
 	corpusWriter atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
@@ -249,6 +250,20 @@ func (sp *SProxy) SyncAndSetDebugLogger(l *zap.Logger) {
 		_ = old.Sync()
 	}
 	sp.debugLogger.Store(l)
+}
+
+// SetModelRouterLogger 设置 model_router 独立日志器。
+func (sp *SProxy) SetModelRouterLogger(l *zap.Logger) {
+	sp.modelRouterLogger.Store(l)
+}
+
+// SyncAndSetModelRouterLogger 先 Sync 旧 logger，再原子切换为新 logger。
+// 供 SIGHUP 热重载时调用；传入 nil 表示关闭 model_router 日志。
+func (sp *SProxy) SyncAndSetModelRouterLogger(l *zap.Logger) {
+	if old := sp.modelRouterLogger.Load(); old != nil {
+		_ = old.Sync()
+	}
+	sp.modelRouterLogger.Store(l)
 }
 
 // SetConvTracker 设置用户对话内容跟踪器。
@@ -1532,8 +1547,9 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
-	// 每次请求捕获一次 debug logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
+	// 每次请求捕获一次 logger 快照，保证单请求内行为一致（SIGHUP 切换时不会半途改变）。
 	dl := sp.debugLogger.Load()
+	mrl := sp.modelRouterLogger.Load() // model_router 独立日志（nil = 禁用）
 
 	// debug 日志：← client request（body 未被上面读取时，在此补读）
 	if dl != nil {
@@ -1616,7 +1632,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				}
 
 				result, rErr := sp.modelRouterSelector.SelectModel(
-					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, dl,
+					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, mrl,
 				)
 				if rErr != nil {
 					routerResultStatus = 2

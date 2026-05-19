@@ -29,13 +29,13 @@ import (
 	"github.com/l17728/pairproxy/internal/alert"
 	"github.com/l17728/pairproxy/internal/api"
 	"github.com/l17728/pairproxy/internal/auth"
-	"github.com/l17728/pairproxy/internal/keygen"
 	"github.com/l17728/pairproxy/internal/cluster"
 	"github.com/l17728/pairproxy/internal/config"
 	"github.com/l17728/pairproxy/internal/corpus"
 	"github.com/l17728/pairproxy/internal/dashboard"
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/eventlog"
+	"github.com/l17728/pairproxy/internal/keygen"
 	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/l17728/pairproxy/internal/metrics"
 	pptel "github.com/l17728/pairproxy/internal/otel"
@@ -44,6 +44,7 @@ import (
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
@@ -227,8 +228,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		sourceNode = cfg.Cluster.SelfAddr
 	}
 
-	isPrimary  := cfg.Cluster.Role == "primary" || cfg.Cluster.Role == ""
-	isWorker   := cfg.Cluster.Role == "worker"
+	isPrimary := cfg.Cluster.Role == "primary" || cfg.Cluster.Role == ""
+	isWorker := cfg.Cluster.Role == "worker"
 	isPeerMode := cfg.Cluster.Role == "peer"
 
 	if isPrimary {
@@ -305,7 +306,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			SelfAddr:     cfg.Cluster.SelfAddr,
 			SelfWeight:   cfg.Cluster.SelfWeight,
 			Interval:     reportInterval,
-			SharedSecret: cfg.Cluster.SharedSecret, // P0-4: 集群内部 API 认证密钥
+			SharedSecret: cfg.Cluster.SharedSecret,                   // P0-4: 集群内部 API 认证密钥
 			MaxBatch:     cfg.Cluster.UsageBuffer.MaxRecordsPerBatch, // 改进项2
 		}, usageRepo)
 		reporter.Start(ctx)
@@ -734,7 +735,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// debug 文件日志：转发内容双向记录（log.debug_file 配置时启用）
 	if cfg.Log.DebugFile != "" {
-		debugLogger, dbgErr := buildDebugFileLogger(cfg.Log.DebugFile)
+		debugLogger, dbgErr := buildDebugFileLogger(cfg.Log.DebugFile, cfg.Log.Rotate)
 		if dbgErr != nil {
 			logger.Warn("failed to init debug file logger, debug logging disabled",
 				zap.String("path", cfg.Log.DebugFile),
@@ -743,6 +744,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 		} else {
 			sp.SetDebugLogger(debugLogger)
 			logger.Info("debug file logging enabled", zap.String("path", cfg.Log.DebugFile))
+		}
+	}
+
+	// model_router 文件日志：Router API 调用记录（log.model_router_file 配置时启用）
+	if cfg.Log.ModelRouterFile != "" {
+		mrl, mrlErr := buildModelRouterLogger(cfg.Log.ModelRouterFile, cfg.Log.Rotate)
+		if mrlErr != nil {
+			logger.Warn("failed to init model_router file logger, model_router logging disabled",
+				zap.String("path", cfg.Log.ModelRouterFile),
+				zap.Error(mrlErr),
+			)
+		} else {
+			sp.SetModelRouterLogger(mrl)
+			logger.Info("model_router file logging enabled", zap.String("path", cfg.Log.ModelRouterFile))
 		}
 	}
 
@@ -827,7 +842,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	userHandler := api.NewUserHandler(logger, jwtMgr, userRepo, groupRepo, usageRepo)
 	userHandler.RegisterRoutes(mux)
 	logger.Info("user self-service API registered at /api/user/")
-
 
 	// 集群内部 API（仅 primary）
 	if peerRegistry != nil {
@@ -915,10 +929,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Phase 6: Prometheus metrics 端点
 	metricsHandler := metrics.NewHandler(logger, usageRepo, userRepo)
-	metricsHandler.SetDBPath(cfg.Database.Path)           // P2-2: 数据库文件大小指标
-	metricsHandler.SetQuotaCacheStats(quotaCache)         // P2-2: 配额缓存命中/未命中指标
+	metricsHandler.SetDBPath(cfg.Database.Path)   // P2-2: 数据库文件大小指标
+	metricsHandler.SetQuotaCacheStats(quotaCache) // P2-2: 配额缓存命中/未命中指标
 	if reporter != nil {
-		metricsHandler.SetReporterStats(reporter)         // P2-2: worker 心跳延迟/失败指标
+		metricsHandler.SetReporterStats(reporter) // P2-2: worker 心跳延迟/失败指标
 	}
 	metricsHandler.RegisterRoutes(mux)
 	logger.Info("metrics endpoint registered at GET /metrics")
@@ -1003,7 +1017,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	logger.Info("hybrid route registered", zap.String("path", "/v1/"), zap.String("modes", "cproxy+direct"))
 
 	// Key 生成 WebUI（用户自助服务）
-	adminHandler.SetKeyCache(apiKeyCache)     // 密码重置后立即踢出旧 API Key 缓存
+	adminHandler.SetKeyCache(apiKeyCache) // 密码重置后立即踢出旧 API Key 缓存
 	keygenAPIHandler := api.NewKeygenHandler(logger, userRepo, jwtMgr)
 	keygenAPIHandler.SetKeyCache(apiKeyCache) // 改密后立即踢出旧 Key 缓存
 	keygenAPIHandler.SetUsageRepo(usageRepo)  // 用量中心数据接口
@@ -1036,8 +1050,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// SIGHUP 热重载（Unix/Linux only；Windows 上为 no-op）
-	// 重新加载：log.level 动态切换；debug_file 开关切换；其他字段（端口、DB 路径）需重启生效。
-	currentDebugFile := cfg.Log.DebugFile // 仅在 SIGHUP goroutine 中读写，无需加锁
+	// 重新加载：log.level 动态切换；debug_file / model_router_file 开关切换；其他字段需重启生效。
+	currentDebugFile := cfg.Log.DebugFile       // 仅在 SIGHUP goroutine 中读写，无需加锁
+	currentModelRouterFile := cfg.Log.ModelRouterFile
 	sighupCh := make(chan os.Signal, 1)
 	notifySIGHUP(sighupCh)
 	go func() {
@@ -1067,25 +1082,42 @@ func runStart(cmd *cobra.Command, args []string) error {
 			}
 			// 动态切换 debug 文件日志（log.debug_file 变更时立即生效）
 			newDebugFile := newCfg.Log.DebugFile
-			debugFileChanged := newDebugFile != currentDebugFile
-			if debugFileChanged {
+			if newDebugFile != currentDebugFile {
 				if newDebugFile != "" {
-					newDL, dlErr := buildDebugFileLogger(newDebugFile)
+					newDL, dlErr := buildDebugFileLogger(newDebugFile, newCfg.Log.Rotate)
 					if dlErr != nil {
 						logger.Warn("failed to init debug file logger via SIGHUP",
 							zap.String("path", newDebugFile), zap.Error(dlErr))
 					} else {
-						sp.SyncAndSetDebugLogger(newDL) // flush 旧 logger，原子切换为新 logger
-						logger.Info("debug file logging enabled via SIGHUP",
-							zap.String("path", newDebugFile))
+						sp.SyncAndSetDebugLogger(newDL)
+						logger.Info("debug file logging enabled via SIGHUP", zap.String("path", newDebugFile))
 					}
 				} else {
-					sp.SyncAndSetDebugLogger(nil) // flush 旧 logger，关闭 debug 日志
+					sp.SyncAndSetDebugLogger(nil)
 					logger.Info("debug file logging disabled via SIGHUP")
 				}
 				currentDebugFile = newDebugFile
 			}
-			if !levelChanged && !debugFileChanged {
+
+			// 动态切换 model_router 文件日志（log.model_router_file 变更时立即生效）
+			newModelRouterFile := newCfg.Log.ModelRouterFile
+			if newModelRouterFile != currentModelRouterFile {
+				if newModelRouterFile != "" {
+					newMRL, mrlErr := buildModelRouterLogger(newModelRouterFile, newCfg.Log.Rotate)
+					if mrlErr != nil {
+						logger.Warn("failed to init model_router file logger via SIGHUP",
+							zap.String("path", newModelRouterFile), zap.Error(mrlErr))
+					} else {
+						sp.SyncAndSetModelRouterLogger(newMRL)
+						logger.Info("model_router file logging enabled via SIGHUP", zap.String("path", newModelRouterFile))
+					}
+				} else {
+					sp.SyncAndSetModelRouterLogger(nil)
+					logger.Info("model_router file logging disabled via SIGHUP")
+				}
+				currentModelRouterFile = newModelRouterFile
+			}
+			if !levelChanged && newDebugFile == currentDebugFile && newModelRouterFile == currentModelRouterFile {
 				logger.Info("config reloaded (no changes requiring restart)",
 					zap.String("log_level", newLevel.String()),
 				)
@@ -1622,11 +1654,11 @@ func init() {
 // --- group add ---
 
 var (
-	groupAddDailyLimit        int64
-	groupAddMonthlyLimit      int64
-	groupAddRPM               int
-	groupAddMaxReqTokens      int64
-	groupAddConcurrentReqs    int
+	groupAddDailyLimit     int64
+	groupAddMonthlyLimit   int64
+	groupAddRPM            int
+	groupAddMaxReqTokens   int64
+	groupAddConcurrentReqs int
 )
 
 var adminGroupAddCmd = &cobra.Command{
@@ -2541,23 +2573,61 @@ func buildCore(atom zap.AtomicLevel) zapcore.Core {
 	)
 }
 
-// buildDebugFileLogger 创建写入独立文件的 DEBUG 级日志器，用于转发内容记录。
-// 使用 JSON 格式，DEBUG 级别（不受主日志 level 限制），适合高频写入。
-func buildDebugFileLogger(path string) (*zap.Logger, error) {
-	// zap 内置 sink 无需检查目录
-	if path != "stderr" && path != "stdout" {
+// buildRotatingLogger 创建带轮转的独立文件日志器。
+// path 为 "stderr"/"stdout" 时退化为标准流（不轮转）。
+func buildRotatingLogger(path string, rotate config.LogRotateConfig, level zapcore.Level) (*zap.Logger, error) {
+	var ws zapcore.WriteSyncer
+	switch path {
+	case "stderr":
+		ws = zapcore.Lock(os.Stderr)
+	case "stdout":
+		ws = zapcore.Lock(os.Stdout)
+	default:
 		dir := filepath.Dir(path)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return nil, fmt.Errorf("directory %q does not exist; please create it manually before starting (mkdir -p %s)", dir, dir)
+			return nil, fmt.Errorf("directory %q does not exist; please create it manually (mkdir -p %s)", dir, dir)
 		}
+		maxSize := rotate.MaxSizeMB
+		if maxSize <= 0 {
+			maxSize = 100
+		}
+		maxBackups := rotate.MaxBackups
+		if maxBackups <= 0 {
+			maxBackups = 7
+		}
+		maxAge := rotate.MaxAgeDays
+		if maxAge <= 0 {
+			maxAge = 30
+		}
+		ws = zapcore.AddSync(&lumberjack.Logger{
+			Filename:   path,
+			MaxSize:    maxSize,
+			MaxBackups: maxBackups,
+			MaxAge:     maxAge,
+			Compress:   rotate.Compress,
+		})
 	}
-	cfg := zap.NewProductionConfig()
-	cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-	cfg.OutputPaths = []string{path}
-	cfg.ErrorOutputPaths = []string{path}
-	cfg.EncoderConfig.TimeKey = "ts"
-	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	return cfg.Build()
+	enc := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+		TimeKey:        "ts",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		MessageKey:     "msg",
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+	})
+	core := zapcore.NewCore(enc, ws, zap.NewAtomicLevelAt(level))
+	return zap.New(core), nil
+}
+
+// buildDebugFileLogger 创建写入独立文件的 DEBUG 级日志器，用于转发内容记录。
+func buildDebugFileLogger(path string, rotate config.LogRotateConfig) (*zap.Logger, error) {
+	return buildRotatingLogger(path, rotate, zapcore.DebugLevel)
+}
+
+// buildModelRouterLogger 创建写入独立文件的 DEBUG 级日志器，用于 model_router 调用记录。
+func buildModelRouterLogger(path string, rotate config.LogRotateConfig) (*zap.Logger, error) {
+	return buildRotatingLogger(path, rotate, zapcore.DebugLevel)
 }
 
 // parseZapLevel 将配置文件中的 log.level 字符串转换为 zapcore.Level。
