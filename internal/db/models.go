@@ -13,6 +13,9 @@ type Group struct {
 	DailyTokenLimit     *int64 // NULL = 无限制
 	MonthlyTokenLimit   *int64 // NULL = 无限制
 	RequestsPerMinute   *int   // NULL = 无限制（每分钟请求数 RPM）
+	RequestsPer15Minutes *int  `gorm:"column:requests_per_15_minutes"` // NULL = 无限制（每15分钟请求数）
+	RequestsPer30Minutes *int  `gorm:"column:requests_per_30_minutes"` // NULL = 无限制（每30分钟请求数）
+	RequestsPerHour      *int  `gorm:"column:requests_per_hour"`       // NULL = 无限制（每小时请求数）
 	MaxTokensPerRequest *int64 // NULL = 无限制（单次请求 max_tokens 上限）
 	ConcurrentRequests  *int   // NULL = 无限制（每用户最大并发请求数）
 	CreatedAt           time.Time

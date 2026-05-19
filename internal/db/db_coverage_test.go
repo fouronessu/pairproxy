@@ -145,10 +145,10 @@ func TestGroupRepo_SetQuota_NilValues(t *testing.T) {
 	require.NoError(t, repo.Create(g))
 
 	daily := int64(1000)
-	require.NoError(t, repo.SetQuota(g.ID, &daily, nil, nil, nil, nil))
+	require.NoError(t, repo.SetQuota(g.ID, &daily, nil, nil, nil, nil, nil, nil, nil))
 
 	// 传 nil 全部清除
-	require.NoError(t, repo.SetQuota(g.ID, nil, nil, nil, nil, nil))
+	require.NoError(t, repo.SetQuota(g.ID, nil, nil, nil, nil, nil, nil, nil, nil))
 
 	found, err := repo.GetByID(g.ID)
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestGroupRepo_SetQuota_AllFields(t *testing.T) {
 	rpm := 20
 	maxReq := int64(4096)
 	concurrent := 5
-	require.NoError(t, repo.SetQuota(g.ID, &daily, &monthly, &rpm, &maxReq, &concurrent))
+	require.NoError(t, repo.SetQuota(g.ID, &daily, &monthly, &rpm, &maxReq, &concurrent, nil, nil, nil))
 
 	found, err := repo.GetByID(g.ID)
 	require.NoError(t, err)
@@ -976,7 +976,6 @@ func TestGroupRepo_Delete_NonEmpty_NoForce_Cov(t *testing.T) {
 // 通过关闭底层 sql.DB，触发 GORM 操作返回错误，覆盖各 repo 的 error path。
 // ============================================================================
 
-
 // TestUserRepo_ErrorPaths_OnClosedDB 验证 UserRepo 在 DB 关闭后各方法返回错误。
 func TestUserRepo_ErrorPaths_OnClosedDB(t *testing.T) {
 	logger := zaptest.NewLogger(t)
@@ -1062,7 +1061,7 @@ func TestGroupRepo_ErrorPaths_OnClosedDB(t *testing.T) {
 	})
 
 	t.Run("SetQuota error", func(t *testing.T) {
-		err := groupRepo.SetQuota("some-id", nil, nil, nil, nil, nil)
+		err := groupRepo.SetQuota("some-id", nil, nil, nil, nil, nil, nil, nil, nil)
 		assert.Error(t, err)
 	})
 

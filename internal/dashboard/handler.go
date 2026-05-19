@@ -34,7 +34,7 @@ type Handler struct {
 	groupRepo         *db.GroupRepo
 	usageRepo         *db.UsageRepo
 	auditRepo         *db.AuditRepo
-	tokenRepo         *db.RefreshTokenRepo           // 可选，token 吊销
+	tokenRepo         *db.RefreshTokenRepo // 可选，token 吊销
 	adminPasswordHash string
 	tokenTTL          time.Duration
 	llmBindingRepo    *db.LLMBindingRepo             // 可选，LLM 绑定管理
@@ -430,8 +430,8 @@ func (h *Handler) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 	groups, _ := h.groupRepo.List()
 	h.renderPage(w, "users.html", usersPageData{
 		baseData: h.newBase(r),
-		Users:  users,
-		Groups: groups,
+		Users:    users,
+		Groups:   groups,
 	})
 }
 
@@ -588,7 +588,7 @@ func (h *Handler) handleGroupsPage(w http.ResponseWriter, r *http.Request) {
 	groups, _ := h.groupRepo.List()
 	h.renderPage(w, "groups.html", groupsPageData{
 		baseData: h.newBase(r),
-		Groups: groups,
+		Groups:   groups,
 	})
 }
 
@@ -604,11 +604,14 @@ func (h *Handler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g := &db.Group{
-		Name:              name,
-		DailyTokenLimit:   parseOptionalInt64(r.FormValue("daily_limit")),
-		MonthlyTokenLimit: parseOptionalInt64(r.FormValue("monthly_limit")),
-		RequestsPerMinute: parseOptionalInt(r.FormValue("rpm")),
-		CreatedAt:         time.Now(),
+		Name:                 name,
+		DailyTokenLimit:      parseOptionalInt64(r.FormValue("daily_limit")),
+		MonthlyTokenLimit:    parseOptionalInt64(r.FormValue("monthly_limit")),
+		RequestsPerMinute:    parseOptionalInt(r.FormValue("rpm")),
+		RequestsPer15Minutes: parseOptionalInt(r.FormValue("rpm_15m")),
+		RequestsPer30Minutes: parseOptionalInt(r.FormValue("rpm_30m")),
+		RequestsPerHour:      parseOptionalInt(r.FormValue("rph")),
+		CreatedAt:            time.Now(),
 	}
 	if err := h.groupRepo.Create(g); err != nil {
 		h.logger.Error("dashboard: create group failed", zap.String("name", name), zap.Error(err))
@@ -633,9 +636,12 @@ func (h *Handler) handleSetQuota(w http.ResponseWriter, r *http.Request) {
 	daily := parseOptionalInt64(r.FormValue("daily_limit"))
 	monthly := parseOptionalInt64(r.FormValue("monthly_limit"))
 	rpm := parseOptionalInt(r.FormValue("rpm"))
+	rpm15m := parseOptionalInt(r.FormValue("rpm_15m"))
+	rpm30m := parseOptionalInt(r.FormValue("rpm_30m"))
+	rph := parseOptionalInt(r.FormValue("rph"))
 	maxTokens := parseOptionalInt64(r.FormValue("max_tokens"))
 	concurrent := parseOptionalInt(r.FormValue("concurrent"))
-	if err := h.groupRepo.SetQuota(id, daily, monthly, rpm, maxTokens, concurrent); err != nil {
+	if err := h.groupRepo.SetQuota(id, daily, monthly, rpm, maxTokens, concurrent, rpm15m, rpm30m, rph); err != nil {
 		http.Redirect(w, r, "/dashboard/groups?error=更新失败", http.StatusFound)
 		return
 	}
@@ -644,6 +650,9 @@ func (h *Handler) handleSetQuota(w http.ResponseWriter, r *http.Request) {
 		"daily_limit":   daily,
 		"monthly_limit": monthly,
 		"rpm":           rpm,
+		"rpm_15m":       rpm15m,
+		"rpm_30m":       rpm30m,
+		"rph":           rph,
 		"max_tokens":    maxTokens,
 		"concurrent":    concurrent,
 	}); jerr == nil {
@@ -681,11 +690,11 @@ func (h *Handler) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 
 type logsPageData struct {
 	baseData
-	Logs            []db.UsageLog
-	FilterUserID    string
-	FilterUsername  string // 对应 FilterUserID 的用户名，用于筛选框回显
-	Limit           int
-	UserMap         map[string]string // id → username，用于模板显示用户名
+	Logs           []db.UsageLog
+	FilterUserID   string
+	FilterUsername string // 对应 FilterUserID 的用户名，用于筛选框回显
+	Limit          int
+	UserMap        map[string]string // id → username，用于模板显示用户名
 }
 
 func (h *Handler) handleLogsPage(w http.ResponseWriter, r *http.Request) {
@@ -792,8 +801,8 @@ func (h *Handler) handleAuditPage(w http.ResponseWriter, r *http.Request) {
 	logs, _ := h.auditRepo.ListRecent(limit)
 	h.renderPage(w, "audit.html", auditPageData{
 		baseData: h.newBase(r),
-		Logs:  logs,
-		Limit: limit,
+		Logs:     logs,
+		Limit:    limit,
 	})
 }
 
@@ -812,7 +821,7 @@ type topUserEntry struct {
 
 type trendsResponse struct {
 	DailyTokens        []db.DailyTokenRow `json:"daily_tokens"`
-	TopUsers           []topUserEntry     `json:"top_users"`            // Top 10 by token consumption
+	TopUsers           []topUserEntry     `json:"top_users"`             // Top 10 by token consumption
 	TopUsersByRequests []topUserEntry     `json:"top_users_by_requests"` // Top 10 by request count
 }
 
@@ -943,13 +952,13 @@ func (h *Handler) handleMyUsagePage(w http.ResponseWriter, r *http.Request) {
 type userStatsResponse struct {
 	UserID       string `json:"user_id"`
 	Username     string `json:"username"`
-	GroupID      string `json:"group_id"`   // 空字符串表示无分组
+	GroupID      string `json:"group_id"` // 空字符串表示无分组
 	GroupName    string `json:"group_name"`
 	TotalInput   int64  `json:"total_input"`
 	TotalOutput  int64  `json:"total_output"`
 	TotalTokens  int64  `json:"total_tokens"`
-	AvgDaily     int64  `json:"avg_daily"`    // 总 Tokens / 实际使用天数
-	AvgMonthly   int64  `json:"avg_monthly"`  // 总 Tokens / 使用月数
+	AvgDaily     int64  `json:"avg_daily"`   // 总 Tokens / 实际使用天数
+	AvgMonthly   int64  `json:"avg_monthly"` // 总 Tokens / 使用月数
 	DaysActive   int    `json:"days_active"`
 	MonthsActive int    `json:"months_active"`
 	FirstUsedAt  string `json:"first_used_at"` // YYYY-MM-DD；无记录时为空字符串
@@ -959,10 +968,10 @@ type userStatsResponse struct {
 
 // userStatsPageResponse 带分页信息的用户统计响应体
 type userStatsPageResponse struct {
-	Total      int                `json:"total"`
-	Page       int                `json:"page"`
-	PageSize   int                `json:"page_size"`
-	TotalPages int                `json:"total_pages"`
+	Total      int                 `json:"total"`
+	Page       int                 `json:"page"`
+	PageSize   int                 `json:"page_size"`
+	TotalPages int                 `json:"total_pages"`
 	Users      []userStatsResponse `json:"users"`
 }
 
@@ -1229,7 +1238,7 @@ type dashImportResult struct {
 // importPageData 是批量导入页面的模板数据。
 type importPageData struct {
 	baseData
-	Content string           // 回填原始文本，方便修改重试
+	Content string // 回填原始文本，方便修改重试
 	Result  dashImportResult
 }
 
@@ -1465,10 +1474,10 @@ func (h *Handler) handleAlertsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Flash":       r.URL.Query().Get("flash"),
-		"Error":       r.URL.Query().Get("error"),
+		"Flash":        r.URL.Query().Get("flash"),
+		"Error":        r.URL.Query().Get("error"),
 		"IsWorkerNode": h.isWorkerNode,
-		"ActiveTab":   activeTab,
+		"ActiveTab":    activeTab,
 	}
 	h.renderPage(w, "alerts.html", data)
 }

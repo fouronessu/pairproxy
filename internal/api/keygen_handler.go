@@ -30,8 +30,8 @@ import (
 type KeygenHandler struct {
 	logger       *zap.Logger
 	userRepo     *db.UserRepo
-	usageRepo    *db.UsageRepo  // 用量查询（可选，nil 时跳过用量相关端点）
-	groupRepo    *db.GroupRepo  // 分组配额查询（可选）
+	usageRepo    *db.UsageRepo // 用量查询（可选，nil 时跳过用量相关端点）
+	groupRepo    *db.GroupRepo // 分组配额查询（可选）
 	jwtMgr       *auth.Manager
 	keyCache     *keygen.KeyCache // 可选，改密后立即踢出旧 Key 缓存
 	isWorkerNode bool
@@ -138,6 +138,9 @@ type keygenQuotaResponse struct {
 	MonthlyUsed   int64 `json:"monthly_used"`
 	MonthlyRemain int64 `json:"monthly_remain"`
 	RPMLimit      int   `json:"rpm_limit"`
+	RPM15mLimit   int   `json:"rpm_15m_limit"`
+	RPM30mLimit   int   `json:"rpm_30m_limit"`
+	RPHLimit      int   `json:"rph_limit"`
 }
 
 func (h *KeygenHandler) handleStaticPage(w http.ResponseWriter, _ *http.Request) {
@@ -388,6 +391,15 @@ func (h *KeygenHandler) handleQuota(w http.ResponseWriter, r *http.Request) {
 				}
 				if group.RequestsPerMinute != nil {
 					resp.RPMLimit = *group.RequestsPerMinute
+				}
+				if group.RequestsPer15Minutes != nil {
+					resp.RPM15mLimit = *group.RequestsPer15Minutes
+				}
+				if group.RequestsPer30Minutes != nil {
+					resp.RPM30mLimit = *group.RequestsPer30Minutes
+				}
+				if group.RequestsPerHour != nil {
+					resp.RPHLimit = *group.RequestsPerHour
 				}
 			}
 		}

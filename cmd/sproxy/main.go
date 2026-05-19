@@ -1756,6 +1756,9 @@ var (
 	setQuotaDaily          int64
 	setQuotaMonthly        int64
 	setQuotaRPM            int
+	setQuotaRPM15m         int
+	setQuotaRPM30m         int
+	setQuotaRPH            int
 	setQuotaMaxReqTokens   int64
 	setQuotaConcurrentReqs int
 )
@@ -1780,7 +1783,7 @@ var adminGroupSetQuotaCmd = &cobra.Command{
 		}
 
 		var daily, monthly *int64
-		var rpm *int
+		var rpm, rpm15m, rpm30m, rph *int
 		var maxReqTokens *int64
 		var concurrentReqs *int
 		if cmd.Flags().Changed("daily") {
@@ -1792,16 +1795,25 @@ var adminGroupSetQuotaCmd = &cobra.Command{
 		if cmd.Flags().Changed("rpm") {
 			rpm = &setQuotaRPM
 		}
+		if cmd.Flags().Changed("rpm-15m") {
+			rpm15m = &setQuotaRPM15m
+		}
+		if cmd.Flags().Changed("rpm-30m") {
+			rpm30m = &setQuotaRPM30m
+		}
+		if cmd.Flags().Changed("rph") {
+			rph = &setQuotaRPH
+		}
 		if cmd.Flags().Changed("max-tokens-per-request") {
 			maxReqTokens = &setQuotaMaxReqTokens
 		}
 		if cmd.Flags().Changed("concurrent-requests") {
 			concurrentReqs = &setQuotaConcurrentReqs
 		}
-		if err := groupRepo.SetQuota(grp.ID, daily, monthly, rpm, maxReqTokens, concurrentReqs); err != nil {
+		if err := groupRepo.SetQuota(grp.ID, daily, monthly, rpm, maxReqTokens, concurrentReqs, rpm15m, rpm30m, rph); err != nil {
 			return err
 		}
-		auditCLI(database, zap.NewNop(), "group.set_quota", name, fmt.Sprintf("daily=%v monthly=%v rpm=%v", daily, monthly, rpm))
+		auditCLI(database, zap.NewNop(), "group.set_quota", name, fmt.Sprintf("daily=%v monthly=%v rpm=%v rpm15m=%v rpm30m=%v rph=%v", daily, monthly, rpm, rpm15m, rpm30m, rph))
 		fmt.Printf("Quota updated for group %q\n", name)
 		return nil
 	},
@@ -1811,6 +1823,9 @@ func init() {
 	adminGroupSetQuotaCmd.Flags().Int64Var(&setQuotaDaily, "daily", 0, "daily token limit (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().Int64Var(&setQuotaMonthly, "monthly", 0, "monthly token limit (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaRPM, "rpm", 0, "max requests per minute (0 = remove limit)")
+	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaRPM15m, "rpm-15m", 0, "max requests per 15 minutes (0 = remove limit)")
+	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaRPM30m, "rpm-30m", 0, "max requests per 30 minutes (0 = remove limit)")
+	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaRPH, "rph", 0, "max requests per hour (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().Int64Var(&setQuotaMaxReqTokens, "max-tokens-per-request", 0, "max max_tokens per request (0 = remove limit)")
 	adminGroupSetQuotaCmd.Flags().IntVar(&setQuotaConcurrentReqs, "concurrent-requests", 0, "max concurrent requests per user (0 = remove limit)")
 }

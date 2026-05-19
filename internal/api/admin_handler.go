@@ -425,26 +425,32 @@ func (h *AdminHandler) handleResetPassword(w http.ResponseWriter, r *http.Reques
 // ---------------------------------------------------------------------------
 
 type groupResponse struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	DailyTokenLimit     *int64 `json:"daily_token_limit"`
-	MonthlyTokenLimit   *int64 `json:"monthly_token_limit"`
-	RequestsPerMinute   *int   `json:"requests_per_minute"`
-	MaxTokensPerRequest *int64 `json:"max_tokens_per_request"`
-	ConcurrentRequests  *int   `json:"concurrent_requests"`
-	CreatedAt           string `json:"created_at"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	DailyTokenLimit      *int64 `json:"daily_token_limit"`
+	MonthlyTokenLimit    *int64 `json:"monthly_token_limit"`
+	RequestsPerMinute    *int   `json:"requests_per_minute"`
+	RequestsPer15Minutes *int   `json:"requests_per_15_minutes"`
+	RequestsPer30Minutes *int   `json:"requests_per_30_minutes"`
+	RequestsPerHour      *int   `json:"requests_per_hour"`
+	MaxTokensPerRequest  *int64 `json:"max_tokens_per_request"`
+	ConcurrentRequests   *int   `json:"concurrent_requests"`
+	CreatedAt            string `json:"created_at"`
 }
 
 func groupToResponse(g db.Group) groupResponse {
 	return groupResponse{
-		ID:                  g.ID,
-		Name:                g.Name,
-		DailyTokenLimit:     g.DailyTokenLimit,
-		MonthlyTokenLimit:   g.MonthlyTokenLimit,
-		RequestsPerMinute:   g.RequestsPerMinute,
-		MaxTokensPerRequest: g.MaxTokensPerRequest,
-		ConcurrentRequests:  g.ConcurrentRequests,
-		CreatedAt:           g.CreatedAt.UTC().Format(time.RFC3339),
+		ID:                   g.ID,
+		Name:                 g.Name,
+		DailyTokenLimit:      g.DailyTokenLimit,
+		MonthlyTokenLimit:    g.MonthlyTokenLimit,
+		RequestsPerMinute:    g.RequestsPerMinute,
+		RequestsPer15Minutes: g.RequestsPer15Minutes,
+		RequestsPer30Minutes: g.RequestsPer30Minutes,
+		RequestsPerHour:      g.RequestsPerHour,
+		MaxTokensPerRequest:  g.MaxTokensPerRequest,
+		ConcurrentRequests:   g.ConcurrentRequests,
+		CreatedAt:            g.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -463,12 +469,15 @@ func (h *AdminHandler) handleListGroups(w http.ResponseWriter, r *http.Request) 
 }
 
 type createGroupRequest struct {
-	Name                string `json:"name"`
-	DailyTokenLimit     *int64 `json:"daily_token_limit"`
-	MonthlyTokenLimit   *int64 `json:"monthly_token_limit"`
-	RequestsPerMinute   *int   `json:"requests_per_minute"`
-	MaxTokensPerRequest *int64 `json:"max_tokens_per_request"`
-	ConcurrentRequests  *int   `json:"concurrent_requests"`
+	Name                 string `json:"name"`
+	DailyTokenLimit      *int64 `json:"daily_token_limit"`
+	MonthlyTokenLimit    *int64 `json:"monthly_token_limit"`
+	RequestsPerMinute    *int   `json:"requests_per_minute"`
+	RequestsPer15Minutes *int   `json:"requests_per_15_minutes"`
+	RequestsPer30Minutes *int   `json:"requests_per_30_minutes"`
+	RequestsPerHour      *int   `json:"requests_per_hour"`
+	MaxTokensPerRequest  *int64 `json:"max_tokens_per_request"`
+	ConcurrentRequests   *int   `json:"concurrent_requests"`
 }
 
 func (h *AdminHandler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
@@ -482,13 +491,16 @@ func (h *AdminHandler) handleCreateGroup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	g := &db.Group{
-		Name:                req.Name,
-		DailyTokenLimit:     req.DailyTokenLimit,
-		MonthlyTokenLimit:   req.MonthlyTokenLimit,
-		RequestsPerMinute:   req.RequestsPerMinute,
-		MaxTokensPerRequest: req.MaxTokensPerRequest,
-		ConcurrentRequests:  req.ConcurrentRequests,
-		CreatedAt:           time.Now(),
+		Name:                 req.Name,
+		DailyTokenLimit:      req.DailyTokenLimit,
+		MonthlyTokenLimit:    req.MonthlyTokenLimit,
+		RequestsPerMinute:    req.RequestsPerMinute,
+		RequestsPer15Minutes: req.RequestsPer15Minutes,
+		RequestsPer30Minutes: req.RequestsPer30Minutes,
+		RequestsPerHour:      req.RequestsPerHour,
+		MaxTokensPerRequest:  req.MaxTokensPerRequest,
+		ConcurrentRequests:   req.ConcurrentRequests,
+		CreatedAt:            time.Now(),
 	}
 	if err := h.groupRepo.Create(g); err != nil {
 		h.logger.Error("create group failed", zap.String("name", req.Name), zap.Error(err))
@@ -505,11 +517,14 @@ func (h *AdminHandler) handleCreateGroup(w http.ResponseWriter, r *http.Request)
 }
 
 type setQuotaRequest struct {
-	DailyTokenLimit     *int64 `json:"daily_token_limit"`
-	MonthlyTokenLimit   *int64 `json:"monthly_token_limit"`
-	RequestsPerMinute   *int   `json:"requests_per_minute"`
-	MaxTokensPerRequest *int64 `json:"max_tokens_per_request"`
-	ConcurrentRequests  *int   `json:"concurrent_requests"`
+	DailyTokenLimit      *int64 `json:"daily_token_limit"`
+	MonthlyTokenLimit    *int64 `json:"monthly_token_limit"`
+	RequestsPerMinute    *int   `json:"requests_per_minute"`
+	RequestsPer15Minutes *int   `json:"requests_per_15_minutes"`
+	RequestsPer30Minutes *int   `json:"requests_per_30_minutes"`
+	RequestsPerHour      *int   `json:"requests_per_hour"`
+	MaxTokensPerRequest  *int64 `json:"max_tokens_per_request"`
+	ConcurrentRequests   *int   `json:"concurrent_requests"`
 }
 
 func (h *AdminHandler) handleSetGroupQuota(w http.ResponseWriter, r *http.Request) {
@@ -519,7 +534,7 @@ func (h *AdminHandler) handleSetGroupQuota(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if err := h.groupRepo.SetQuota(id, req.DailyTokenLimit, req.MonthlyTokenLimit, req.RequestsPerMinute, req.MaxTokensPerRequest, req.ConcurrentRequests); err != nil {
+	if err := h.groupRepo.SetQuota(id, req.DailyTokenLimit, req.MonthlyTokenLimit, req.RequestsPerMinute, req.MaxTokensPerRequest, req.ConcurrentRequests, req.RequestsPer15Minutes, req.RequestsPer30Minutes, req.RequestsPerHour); err != nil {
 		h.logger.Error("set group quota failed", zap.String("group_id", id), zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to update quota")
 		return
@@ -529,15 +544,21 @@ func (h *AdminHandler) handleSetGroupQuota(w http.ResponseWriter, r *http.Reques
 		zap.Any("daily", req.DailyTokenLimit),
 		zap.Any("monthly", req.MonthlyTokenLimit),
 		zap.Any("rpm", req.RequestsPerMinute),
+		zap.Any("rpm_15m", req.RequestsPer15Minutes),
+		zap.Any("rpm_30m", req.RequestsPer30Minutes),
+		zap.Any("rph", req.RequestsPerHour),
 		zap.Any("max_tokens_per_request", req.MaxTokensPerRequest),
 		zap.Any("concurrent_requests", req.ConcurrentRequests),
 	)
 	if detailBytes, jerr := json.Marshal(map[string]interface{}{
-		"daily_limit":            req.DailyTokenLimit,
-		"monthly_limit":          req.MonthlyTokenLimit,
-		"rpm":                    req.RequestsPerMinute,
-		"max_tokens_per_request": req.MaxTokensPerRequest,
-		"concurrent_requests":    req.ConcurrentRequests,
+		"daily_limit":              req.DailyTokenLimit,
+		"monthly_limit":            req.MonthlyTokenLimit,
+		"rpm":                      req.RequestsPerMinute,
+		"rpm_15m":                  req.RequestsPer15Minutes,
+		"rpm_30m":                  req.RequestsPer30Minutes,
+		"rph":                      req.RequestsPerHour,
+		"max_tokens_per_request":   req.MaxTokensPerRequest,
+		"concurrent_requests":      req.ConcurrentRequests,
 	}); jerr == nil {
 		if aerr := h.auditRepo.Create("admin", "group.set_quota", id, string(detailBytes)); aerr != nil {
 			h.logger.Warn("audit write failed", zap.Error(aerr))
@@ -1090,17 +1111,20 @@ func (h *AdminHandler) handleDeleteGroup(w http.ResponseWriter, r *http.Request)
 // ---------------------------------------------------------------------------
 
 type quotaStatusResponse struct {
-	UserID        string  `json:"user_id"`
-	Username      string  `json:"username"`
-	GroupID       string  `json:"group_id,omitempty"`
-	GroupName     string  `json:"group_name,omitempty"`
-	DailyUsed     int64   `json:"daily_used"`
-	DailyLimit    *int64  `json:"daily_limit"`
-	DailyStatus   string  `json:"daily_status"`   // "ok" | "warning" | "exceeded"
-	MonthlyUsed   int64   `json:"monthly_used"`
-	MonthlyLimit  *int64  `json:"monthly_limit"`
-	MonthlyStatus string  `json:"monthly_status"` // "ok" | "warning" | "exceeded"
-	RPMLimit      *int    `json:"rpm_limit,omitempty"`
+	UserID        string `json:"user_id"`
+	Username      string `json:"username"`
+	GroupID       string `json:"group_id,omitempty"`
+	GroupName     string `json:"group_name,omitempty"`
+	DailyUsed     int64  `json:"daily_used"`
+	DailyLimit    *int64 `json:"daily_limit"`
+	DailyStatus   string `json:"daily_status"` // "ok" | "warning" | "exceeded"
+	MonthlyUsed   int64  `json:"monthly_used"`
+	MonthlyLimit  *int64 `json:"monthly_limit"`
+	MonthlyStatus string `json:"monthly_status"` // "ok" | "warning" | "exceeded"
+	RPMLimit      *int   `json:"rpm_limit,omitempty"`
+	RPM15mLimit   *int   `json:"rpm_15m_limit,omitempty"`
+	RPM30mLimit   *int   `json:"rpm_30m_limit,omitempty"`
+	RPHLimit      *int   `json:"rph_limit,omitempty"`
 }
 
 func quotaLevel(used int64, limit *int64) string {
@@ -1171,6 +1195,9 @@ func (h *AdminHandler) handleQuotaStatus(w http.ResponseWriter, r *http.Request)
 		resp.DailyLimit = u.Group.DailyTokenLimit
 		resp.MonthlyLimit = u.Group.MonthlyTokenLimit
 		resp.RPMLimit = u.Group.RequestsPerMinute
+		resp.RPM15mLimit = u.Group.RequestsPer15Minutes
+		resp.RPM30mLimit = u.Group.RequestsPer30Minutes
+		resp.RPHLimit = u.Group.RequestsPerHour
 		resp.DailyStatus = quotaLevel(dailyUsed, u.Group.DailyTokenLimit)
 		resp.MonthlyStatus = quotaLevel(monthlyUsed, u.Group.MonthlyTokenLimit)
 	}
@@ -1279,11 +1306,11 @@ func (h *AdminHandler) handleDrainStatus(w http.ResponseWriter, r *http.Request)
 // ---------------------------------------------------------------------------
 
 type activeUserResponse struct {
-	ID           string  `json:"id"`
-	Username     string  `json:"username"`
-	GroupID      *string `json:"group_id,omitempty"`
-	GroupName    *string `json:"group_name,omitempty"`
-	LastLoginAt  *string `json:"last_login_at,omitempty"`
+	ID          string  `json:"id"`
+	Username    string  `json:"username"`
+	GroupID     *string `json:"group_id,omitempty"`
+	GroupName   *string `json:"group_name,omitempty"`
+	LastLoginAt *string `json:"last_login_at,omitempty"`
 }
 
 // handleGetActiveUsers 获取最近 N 天有活动的用户列表
