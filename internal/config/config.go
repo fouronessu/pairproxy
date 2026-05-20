@@ -152,7 +152,7 @@ type CProxyAuth struct {
 type LLMConfig struct {
 	LBStrategy     string        `yaml:"lb_strategy"`      // "round_robin"
 	RequestTimeout time.Duration `yaml:"request_timeout"`  // 默认 300s
-	MaxRetries     int           `yaml:"max_retries"`      // 上游失败时最大重试次数（不含首次），默认 2；0=不重试
+	MaxRetries     int           `yaml:"max_retries"`      // 上游失败时最大重试次数（不含首次），默认 2（0=默认）；-1=禁用重试
 	RecoveryDelay  time.Duration `yaml:"recovery_delay"`   // 熔断后自动恢复延迟，默认 60s；0=禁用自动恢复
 	FailThreshold  int           `yaml:"fail_threshold"`   // 被动熔断连续失败阈值，默认 3；达到后将节点移出调度池
 	RetryOnStatus  []int         `yaml:"retry_on_status"`  // 触发 try-next 的额外 HTTP 状态码（如 [429]），默认空=仅重试5xx/连接错误

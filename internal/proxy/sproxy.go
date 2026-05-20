@@ -1412,9 +1412,11 @@ func (sp *SProxy) buildRetryTransport(userID, groupID, effectivePath, requestedM
 		return sp.transport
 	}
 	maxRetries := sp.maxRetries
-	if maxRetries <= 0 {
-		maxRetries = 2
+	if maxRetries == 0 {
+		maxRetries = 2 // 未配置时的默认值
 	}
+	// maxRetries < 0：禁用重试；RetryTransport.MaxRetries=-1 时首次响应即返回，不切换 target。
+	// OnSuccess/OnFailure 回调仍会触发（保留被动熔断计数）。
 	return &lb.RetryTransport{
 		Inner:         sp.transport,
 		MaxRetries:    maxRetries,
