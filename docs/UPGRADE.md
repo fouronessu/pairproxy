@@ -52,6 +52,46 @@
 
 ## 版本变更记录
 
+### v3.2.0 — 多窗口限速 + 错误可观测性 + 配置修复
+
+**数据库 Schema 变更**
+
+`groups` 表新增三个限速字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `rpm_limit_15m` | integer | 15 分钟最大请求次数（0=不限） |
+| `rpm_limit_30m` | integer | 30 分钟最大请求次数（0=不限） |
+| `rpm_limit_1h`  | integer | 1 小时最大请求次数（0=不限） |
+
+`usage_logs` 表新增字段：`client_ip`、`model_router_*` 元数据字段。
+
+所有变更通过 `db.AutoMigrate` 自动应用，无需手动迁移。
+
+**行为变更（需注意）**
+
+| 变更项 | 旧行为 | 新行为 |
+|--------|--------|--------|
+| `llm.request_timeout` | 配置无效，永久等待 | **默认 300s**，等待响应头超时后断连 |
+| `llm.max_retries: -1` | 与 0 相同，回退到默认值 2 | 禁用重试，首次失败直接返回 |
+| SSE 嵌套错误（如 504） | 记录为 200（误报成功） | 正确记录为 502 + error_body |
+| 502 transport 错误 | `error_body` 为空 | 填充实际错误信息 |
+
+> ⚠️ **`request_timeout` 默认值生效**：若你的 LLM 后端正常情况下响应头延迟超过 5 分钟（极罕见），需在配置中显式设置更大的值：
+> ```yaml
+> llm:
+>   request_timeout: 600s  # 或 -1 禁用
+> ```
+
+**升级步骤**
+
+```bash
+# 无需手动迁移，AutoMigrate 自动处理
+systemctl restart sproxy
+```
+
+---
+
 ### v3.1.1 — Track / Peer 模式 / Model Router 问题修复
 
 **数据库 Schema 变更**
