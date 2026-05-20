@@ -1407,6 +1407,13 @@ func (sp *SProxy) candidatesByPath(path string) []LLMTarget {
 	return out
 }
 
+// isLLMCompletionPath 判断请求路径是否为 LLM 补全接口（需要路由的请求类型）。
+// 匹配 /v1/messages（Anthropic）和任意版本前缀的 chat/completions（OpenAI / Ollama）。
+func isLLMCompletionPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/messages") ||
+		strings.Contains(path, "chat/completions")
+}
+
 // preferredProvidersByPath 根据 API 路径返回期望的 provider 集合。
 func preferredProvidersByPath(path string) map[string]bool {
 	switch {
@@ -1618,7 +1625,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		cacheHitScene      int
 	)
 	if sp.groupMultiBindingFinder != nil && sp.modelRouterSelector != nil &&
-		sp.bindingResolver != nil && claims.GroupID != "" {
+		sp.bindingResolver != nil && claims.GroupID != "" &&
+		isLLMCompletionPath(r.URL.Path) {
 
 		// 检查用户是否有个人绑定（有则跳过 Router，直接用个人绑定）
 		_, userHasBinding := sp.bindingResolver(claims.UserID, "")
