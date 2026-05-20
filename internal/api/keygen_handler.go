@@ -754,7 +754,6 @@ const keygenHTML = `<!DOCTYPE html>
         <table class="min-w-full divide-y divide-gray-100 text-sm">
           <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
-              <th class="px-4 py-3 text-left w-4"></th>
               <th class="px-4 py-3 text-left">时间</th>
               <th class="px-4 py-3 text-left">接口</th>
               <th class="px-4 py-3 text-left">请求模型</th>
@@ -767,7 +766,7 @@ const keygenHTML = `<!DOCTYPE html>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-50 text-gray-700" id="logsBody">
-            <tr><td colspan="10" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
+            <tr><td colspan="9" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1015,13 +1014,13 @@ async function loadLogs(page) {
   const days = parseInt(document.getElementById('logsDaysSelect').value) || 7;
   const pageSize = parseInt(document.getElementById('logsPageSizeSelect').value) || 10;
   const tbody = document.getElementById('logsBody');
-  tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
 
   try {
     const url = '/keygen/api/logs?days=' + days + '&page=' + page + '&page_size=' + pageSize;
     const r = await fetch(url, {headers: {'Authorization': 'Bearer ' + sessionToken}});
     if (!r.ok) {
-      tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
       return;
     }
     const data = await r.json();
@@ -1030,28 +1029,31 @@ async function loadLogs(page) {
     renderLogsPagination(data.page, data.total_pages, data.total, data.page_size);
   } catch (e) {
     console.error('loadLogs failed:', e);
-    tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-red-400">请求失败</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-red-400">请求失败</td></tr>';
   }
 }
 
 function renderLogsTable(logs) {
   const tbody = document.getElementById('logsBody');
   if (!logs || logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
     return;
   }
   const rows = [];
-  logs.forEach(function(l, idx) {
-    const hasDetail = !!(l.error_body || l.request_path);
-    const detailId = 'log-detail-' + idx;
+  logs.forEach(function(l) {
     const isErr = l.status_code !== 200;
-    const trAttr = hasDetail
-      ? ' class="hover:bg-gray-50 cursor-pointer" onclick="toggleLogDetail(\'' + detailId + '\')"'
-      : ' class="hover:bg-gray-50"';
-    let tr = '<tr' + trAttr + '>';
-    tr += '<td class="px-3 py-3 text-center text-xs">' + (hasDetail ? '<span class="detail-arrow text-gray-400" style="display:inline-block;transition:transform .15s">▶</span>' : '') + '</td>';
+    let pathCell;
+    if (l.error_body) {
+      pathCell = '<td class="px-4 py-3">'
+        + '<span class="text-gray-400 text-xs font-mono">' + escHtml(l.request_path || '—') + '</span>'
+        + ' <span data-errtip="' + escAttr(l.error_body) + '" class="text-red-400 text-xs cursor-help align-middle">⚠</span>'
+        + '</td>';
+    } else {
+      pathCell = '<td class="px-4 py-3 text-gray-400 text-xs font-mono">' + (l.request_path || '<span class="text-gray-200">—</span>') + '</td>';
+    }
+    let tr = '<tr class="hover:bg-gray-50">';
     tr += '<td class="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">' + l.created_at + '</td>';
-    tr += '<td class="px-4 py-3 text-gray-400 text-xs font-mono">' + (l.request_path || '<span class="text-gray-200">—</span>') + '</td>';
+    tr += pathCell;
     tr += '<td class="px-4 py-3 text-gray-500 text-xs">' + (l.model || '—') + '</td>';
     tr += '<td class="px-4 py-3 text-xs">' + (l.actual_model ? '<span class="text-indigo-600">' + l.actual_model + '</span>' : '<span class="text-gray-300">—</span>') + '</td>';
     tr += '<td class="px-4 py-3 text-right text-xs">' + l.input_tokens.toLocaleString() + '</td>';
@@ -1061,34 +1063,18 @@ function renderLogsTable(logs) {
     tr += '<td class="px-4 py-3 text-xs">' + (isErr ? '<span class="text-red-500 font-medium">✗ ' + l.status_code + '</span>' : '<span class="text-green-600 font-medium">✓ 200</span>') + '</td>';
     tr += '</tr>';
     rows.push(tr);
-    if (hasDetail) {
-      let detailHtml = '';
-      if (l.error_body) {
-        detailHtml += '<div class="mb-1"><span class="text-xs font-semibold text-red-500 uppercase tracking-wide">错误详情</span>'
-          + '<pre class="mt-1 text-xs bg-red-50 border border-red-100 text-red-700 rounded px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all">'
-          + escHtml(l.error_body) + '</pre></div>';
-      }
-      rows.push('<tr id="' + detailId + '" class="hidden bg-gray-50"><td colspan="10" class="px-6 py-3">' + detailHtml + '</td></tr>');
-    }
   });
   tbody.innerHTML = rows.join('');
 }
 
 function escHtml(s) {
+  if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function toggleLogDetail(id) {
-  const row = document.getElementById(id);
-  if (!row) return;
-  const isHidden = row.classList.contains('hidden');
-  row.classList.toggle('hidden', !isHidden);
-  // 旋转展开箭头
-  const mainRow = row.previousElementSibling;
-  if (mainRow) {
-    const arrow = mainRow.querySelector('.detail-arrow');
-    if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
-  }
+function escAttr(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function renderLogsPagination(page, totalPages, total, pageSize) {
@@ -1192,6 +1178,28 @@ document.getElementById('loginUsername').addEventListener('keydown', function(e)
   if (!s) return;
   sessionToken = s.token;
   showDashboard(s.username, s.key);
+})();
+
+// ── 错误信息 Tooltip ────────────────────────────────────────────────────────
+(function() {
+  var tip = document.createElement('div');
+  tip.style.cssText = 'position:fixed;display:none;z-index:9999;max-width:480px;background:#1f2937;color:#fca5a5;font-size:12px;line-height:1.6;padding:8px 12px;border-radius:6px;white-space:pre-wrap;word-break:break-all;box-shadow:0 4px 16px rgba(0,0,0,.45);pointer-events:none;';
+  document.body.appendChild(tip);
+  function move(e) {
+    var x = e.clientX + 14, y = e.clientY + 14;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    var r = tip.getBoundingClientRect();
+    if (r.right > window.innerWidth - 8) tip.style.left = (e.clientX - r.width - 8) + 'px';
+    if (r.bottom > window.innerHeight - 8) tip.style.top = (e.clientY - r.height - 8) + 'px';
+  }
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest('[data-errtip]');
+    if (!el) { tip.style.display = 'none'; return; }
+    tip.textContent = el.dataset.errtip;
+    tip.style.display = 'block'; move(e);
+  });
+  document.addEventListener('mousemove', function(e) { if (tip.style.display !== 'none') move(e); });
+  document.addEventListener('mouseout', function(e) { if (!e.target.closest('[data-errtip]')) tip.style.display = 'none'; });
 })();
 </script>
 </body>
