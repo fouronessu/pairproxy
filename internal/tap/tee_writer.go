@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/l17728/pairproxy/internal/db"
+	"github.com/l17728/pairproxy/internal/tokenizer"
 )
 
 // TeeResponseWriter 包装 http.ResponseWriter，在不缓冲的情况下同时：
@@ -27,6 +28,10 @@ type TeeResponseWriter struct {
 	statusCode        int
 	isStreaming       bool
 	streamingRecorded bool // onComplete 回调已触发（message_stop 已收到）
+
+	// 失败响应 token 估算所需的请求上下文
+	requestBody []byte // 原始请求体，仅在响应失败且 input_tokens=0 时使用
+	requestPath string // 请求路径，用于判断 Anthropic/OpenAI 格式
 
 	// debug 支持
 	startTime     time.Time // 请求开始时间，用于计算 TTFB
@@ -48,6 +53,8 @@ func NewTeeResponseWriter(
 	provider string,
 	startTime time.Time,
 	onChunk func([]byte),
+	requestBody []byte,
+	requestPath string,
 ) *TeeResponseWriter {
 	tw := &TeeResponseWriter{
 		ResponseWriter: w,
@@ -57,6 +64,8 @@ func NewTeeResponseWriter(
 		statusCode:     http.StatusOK,
 		startTime:      startTime,
 		onChunk:        onChunk,
+		requestBody:    requestBody,
+		requestPath:    requestPath,
 	}
 
 	// 按 provider 创建解析器，注册 SSE 解析完成回调
@@ -150,6 +159,10 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 	)
 	r := tw.record
 	r.InputTokens = in
+	// 仅在失败响应且上游未返回 token 数时，按需估算 input tokens
+	if r.InputTokens == 0 && statusCode >= 400 {
+		r.InputTokens = tokenizer.EstimateInputTokens(tw.requestBody, tw.requestPath)
+	}
 	r.OutputTokens = out
 	r.StatusCode = statusCode
 	r.IsStreaming = false

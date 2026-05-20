@@ -2024,7 +2024,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	tw := tap.NewTeeResponseWriter(finalWriter, sp.logger, sp.writer, usageRecord, targetProvider, startTime, onChunk)
+	tw := tap.NewTeeResponseWriter(finalWriter, sp.logger, sp.writer, usageRecord, targetProvider, startTime, onChunk, bodyBytes, r.URL.Path)
 
 	// 构建 transport（配置均衡器时使用 RetryTransport；否则使用基础 transport）
 	transport := sp.buildRetryTransport(claims.UserID, claims.GroupID, effectivePath, requestedModel)
