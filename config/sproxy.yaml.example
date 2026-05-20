@@ -88,6 +88,17 @@ llm:
   #   vLLM / sglang        → 自动发现 GET /health（无需配置 key）
   #   Ollama               → 自动发现 GET /health
   # ─────────────────────────────────────────────────────────────────────────
+
+  # fail_threshold: 被动熔断的连续失败阈值（默认 3）
+  # 上游连续返回 5xx / 连接错误达到该次数后，将节点移出调度池。
+  # 调大可容忍更多偶发错误；调小可更快隔离故障节点。
+  # fail_threshold: 3
+
+  # recovery_delay: 节点被熔断后，多久自动尝试恢复（默认 60s；0=禁用自动恢复）
+  # 有主动健康检查配置时：等待后发起探活，探活成功才重新加入池。
+  # 无主动健康检查时：等待后直接放行（半开模式），靠下一次真实请求验证。
+  # recovery_delay: 60s
+
   targets:
     - url: "https://api.anthropic.com"
       api_key: "${ANTHROPIC_API_KEY_1}"   # 从环境变量读取，不要明文写 key

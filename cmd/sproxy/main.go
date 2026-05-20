@@ -415,8 +415,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 
 		llmBalancer := lb.NewWeightedRandom(lbLLMTargets)
+		failThreshold := cfg.LLM.FailThreshold
+		if failThreshold <= 0 {
+			failThreshold = 3
+		}
 		hcOpts := []lb.HealthCheckerOption{
-			lb.WithFailThreshold(3),
+			lb.WithFailThreshold(failThreshold),
 			lb.WithInterval(30 * time.Second),
 		}
 		if cfg.LLM.RecoveryDelay > 0 {
