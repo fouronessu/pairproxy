@@ -483,6 +483,8 @@ func (h *KeygenHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 		StatusCode   int     `json:"status_code"`
 		IsStreaming  bool    `json:"is_streaming"`
 		DurationMs   int64   `json:"duration_ms"`
+		RequestPath  string  `json:"request_path"`
+		ErrorBody    string  `json:"error_body"`
 	}
 	type logsResp struct {
 		Logs       []logEntry `json:"logs"`
@@ -544,6 +546,8 @@ func (h *KeygenHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 			StatusCode:   l.StatusCode,
 			IsStreaming:  l.IsStreaming,
 			DurationMs:   l.DurationMs,
+			RequestPath:  l.RequestPath,
+			ErrorBody:    l.ErrorBody,
 		})
 	}
 
@@ -750,7 +754,9 @@ const keygenHTML = `<!DOCTYPE html>
         <table class="min-w-full divide-y divide-gray-100 text-sm">
           <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
+              <th class="px-4 py-3 text-left w-4"></th>
               <th class="px-4 py-3 text-left">时间</th>
+              <th class="px-4 py-3 text-left">接口</th>
               <th class="px-4 py-3 text-left">请求模型</th>
               <th class="px-4 py-3 text-left">实际模型</th>
               <th class="px-4 py-3 text-right">输入</th>
@@ -761,7 +767,7 @@ const keygenHTML = `<!DOCTYPE html>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-50 text-gray-700" id="logsBody">
-            <tr><td colspan="8" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
+            <tr><td colspan="10" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
           </tbody>
         </table>
       </div>
@@ -782,11 +788,41 @@ const keygenHTML = `<!DOCTYPE html>
 
 <script>
 const BASE = window.location.origin;
+const SESSION_KEY = 'pp_keygen_session';
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 小时
 let sessionToken = '';
 let currentKey = '';
 let usageChart;
 let currentLogsPage = 1;
 let totalLogsPages = 1;
+
+// ── Session 持久化 ─────────────────────────────────────────────────────────────
+
+function saveSession(token, username, key) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      token, username, key,
+      expiresAt: Date.now() + SESSION_TTL_MS
+    }));
+  } catch(e) {}
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || !s.token || !s.expiresAt || Date.now() > s.expiresAt) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return s;
+  } catch(e) { return null; }
+}
+
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
+}
 
 // ── 登录 ──────────────────────────────────────────────────────────────────────
 
@@ -815,6 +851,7 @@ async function login() {
       return;
     }
     sessionToken = data.token;
+    saveSession(data.token, data.username, data.key);
     showDashboard(data.username, data.key);
   } catch (e) {
     errEl.textContent = '网络错误，请稍后重试';
@@ -841,6 +878,7 @@ function updateKeyDisplay(key) {
 }
 
 function logout() {
+  clearSession();
   sessionToken = ''; currentKey = '';
   document.getElementById('dashScreen').classList.add('hidden');
   document.getElementById('loginScreen').classList.remove('hidden');
@@ -977,13 +1015,13 @@ async function loadLogs(page) {
   const days = parseInt(document.getElementById('logsDaysSelect').value) || 7;
   const pageSize = parseInt(document.getElementById('logsPageSizeSelect').value) || 10;
   const tbody = document.getElementById('logsBody');
-  tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
 
   try {
     const url = '/keygen/api/logs?days=' + days + '&page=' + page + '&page_size=' + pageSize;
     const r = await fetch(url, {headers: {'Authorization': 'Bearer ' + sessionToken}});
     if (!r.ok) {
-      tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
       return;
     }
     const data = await r.json();
@@ -992,29 +1030,65 @@ async function loadLogs(page) {
     renderLogsPagination(data.page, data.total_pages, data.total, data.page_size);
   } catch (e) {
     console.error('loadLogs failed:', e);
-    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-red-400">请求失败</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-red-400">请求失败</td></tr>';
   }
 }
 
 function renderLogsTable(logs) {
   const tbody = document.getElementById('logsBody');
   if (!logs || logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
     return;
   }
-  tbody.innerHTML = logs.map(l => ` + "`" + `
-    <tr class="hover:bg-gray-50">
-      <td class="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">${l.created_at}</td>
-      <td class="px-4 py-3 text-gray-500 text-xs">${l.model || '—'}</td>
-      <td class="px-4 py-3 text-xs">${l.actual_model ? ` + "`" + `<span class="text-indigo-600">${l.actual_model}</span>` + "`" + ` : '<span class="text-gray-300">—</span>'}</td>
-      <td class="px-4 py-3 text-right text-xs">${l.input_tokens.toLocaleString()}</td>
-      <td class="px-4 py-3 text-right text-xs">${l.output_tokens.toLocaleString()}</td>
-      <td class="px-4 py-3 text-right text-xs text-amber-600">${l.cost_usd > 0 ? l.cost_usd.toFixed(4) : '<span class="text-gray-300">—</span>'}</td>
-      <td class="px-4 py-3 text-xs">${l.is_streaming ? '<span class="text-blue-500">流式</span>' : '<span class="text-gray-400">同步</span>'}</td>
-      <td class="px-4 py-3 text-xs">${l.status_code === 200
-        ? '<span class="text-green-600 font-medium">✓ 200</span>'
-        : '<span class="text-red-500 font-medium">✗ ' + l.status_code + '</span>'}</td>
-    </tr>` + "`" + `).join('');
+  const rows = [];
+  logs.forEach(function(l, idx) {
+    const hasDetail = !!(l.error_body || l.request_path);
+    const detailId = 'log-detail-' + idx;
+    const isErr = l.status_code !== 200;
+    const trAttr = hasDetail
+      ? ' class="hover:bg-gray-50 cursor-pointer" onclick="toggleLogDetail(\'' + detailId + '\')"'
+      : ' class="hover:bg-gray-50"';
+    let tr = '<tr' + trAttr + '>';
+    tr += '<td class="px-3 py-3 text-center text-xs">' + (hasDetail ? '<span class="detail-arrow text-gray-400" style="display:inline-block;transition:transform .15s">▶</span>' : '') + '</td>';
+    tr += '<td class="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">' + l.created_at + '</td>';
+    tr += '<td class="px-4 py-3 text-gray-400 text-xs font-mono">' + (l.request_path || '<span class="text-gray-200">—</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-gray-500 text-xs">' + (l.model || '—') + '</td>';
+    tr += '<td class="px-4 py-3 text-xs">' + (l.actual_model ? '<span class="text-indigo-600">' + l.actual_model + '</span>' : '<span class="text-gray-300">—</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs">' + l.input_tokens.toLocaleString() + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs">' + l.output_tokens.toLocaleString() + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs text-amber-600">' + (l.cost_usd > 0 ? l.cost_usd.toFixed(4) : '<span class="text-gray-300">—</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-xs">' + (l.is_streaming ? '<span class="text-blue-500">流式</span>' : '<span class="text-gray-400">同步</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-xs">' + (isErr ? '<span class="text-red-500 font-medium">✗ ' + l.status_code + '</span>' : '<span class="text-green-600 font-medium">✓ 200</span>') + '</td>';
+    tr += '</tr>';
+    rows.push(tr);
+    if (hasDetail) {
+      let detailHtml = '';
+      if (l.error_body) {
+        detailHtml += '<div class="mb-1"><span class="text-xs font-semibold text-red-500 uppercase tracking-wide">错误详情</span>'
+          + '<pre class="mt-1 text-xs bg-red-50 border border-red-100 text-red-700 rounded px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all">'
+          + escHtml(l.error_body) + '</pre></div>';
+      }
+      rows.push('<tr id="' + detailId + '" class="hidden bg-gray-50"><td colspan="10" class="px-6 py-3">' + detailHtml + '</td></tr>');
+    }
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function toggleLogDetail(id) {
+  const row = document.getElementById(id);
+  if (!row) return;
+  const isHidden = row.classList.contains('hidden');
+  row.classList.toggle('hidden', !isHidden);
+  // 旋转展开箭头
+  const mainRow = row.previousElementSibling;
+  if (mainRow) {
+    const arrow = mainRow.querySelector('.detail-arrow');
+    if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
+  }
 }
 
 function renderLogsPagination(page, totalPages, total, pageSize) {
@@ -1110,6 +1184,15 @@ document.getElementById('loginPassword').addEventListener('keydown', function(e)
 document.getElementById('loginUsername').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') document.getElementById('loginPassword').focus();
 });
+
+// ── 页面加载：尝试从 localStorage 恢复 session ─────────────────────────────────
+
+(function initSession() {
+  const s = loadSession();
+  if (!s) return;
+  sessionToken = s.token;
+  showDashboard(s.username, s.key);
+})();
 </script>
 </body>
 </html>`
