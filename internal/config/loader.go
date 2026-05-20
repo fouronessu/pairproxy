@@ -187,7 +187,7 @@ func applySProxyDefaults(cfg *SProxyFullConfig) {
 		cfg.Listen.Port = 9000
 	}
 	if cfg.LLM.RequestTimeout == 0 {
-		cfg.LLM.RequestTimeout = 300 * time.Second
+		cfg.LLM.RequestTimeout = Duration(300 * time.Second)
 	}
 	if cfg.LLM.MaxRetries == 0 {
 		cfg.LLM.MaxRetries = 2

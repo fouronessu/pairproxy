@@ -151,7 +151,7 @@ type CProxyAuth struct {
 // LLMConfig s-proxy 上游 LLM 配置
 type LLMConfig struct {
 	LBStrategy     string        `yaml:"lb_strategy"`      // "round_robin"
-	RequestTimeout time.Duration `yaml:"request_timeout"`  // 等待 LLM 响应头的超时（不含流式响应体），默认 300s；-1=禁用
+	RequestTimeout Duration      `yaml:"request_timeout"`  // 等待 LLM 响应头的超时（不含流式响应体），默认 300s；-1=禁用；支持裸整数（秒）
 	MaxRetries     int           `yaml:"max_retries"`      // 上游失败时最大重试次数（不含首次），默认 2（0=默认）；-1=禁用重试
 	RecoveryDelay  time.Duration `yaml:"recovery_delay"`   // 熔断后自动恢复延迟，默认 60s；0=禁用自动恢复
 	FailThreshold  int           `yaml:"fail_threshold"`   // 被动熔断连续失败阈值，默认 3；达到后将节点移出调度池
