@@ -2289,10 +2289,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.Int64("duration_ms", durationMs),
 				zap.Error(err),
 			)
-			// 记录失败请求（token 数为 0）
+			// 记录失败请求（token 数为 0，ErrorBody 存传输层错误信息）
 			errRecord := usageRecord
 			errRecord.StatusCode = http.StatusBadGateway
 			errRecord.DurationMs = durationMs
+			errRecord.ErrorBody = err.Error()
 			sp.writer.Record(errRecord)
 
 			writeJSONError(w, http.StatusBadGateway, "upstream_error", "upstream request failed")

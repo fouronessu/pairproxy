@@ -71,17 +71,9 @@ func NewTeeResponseWriter(
 	// 按 provider 创建解析器，注册 SSE 解析完成回调
 	tw.parser = NewResponseParser(provider, func(inputTokens, outputTokens int) {
 		tw.streamingRecorded = true
-		tw.logger.Debug("streaming token usage captured",
-			zap.String("request_id", record.RequestID),
-			zap.String("user_id", record.UserID),
-			zap.String("provider", provider),
-			zap.Int("input_tokens", inputTokens),
-			zap.Int("output_tokens", outputTokens),
-		)
 		r := tw.record
 		r.InputTokens = inputTokens
 		r.OutputTokens = outputTokens
-		r.StatusCode = tw.statusCode
 		r.IsStreaming = true
 		if !tw.startTime.IsZero() {
 			r.DurationMs = time.Since(tw.startTime).Milliseconds()
@@ -89,6 +81,33 @@ func NewTeeResponseWriter(
 		if r.CreatedAt.IsZero() {
 			r.CreatedAt = time.Now().UTC()
 		}
+
+		// SSE error 事件：修正状态码并填充 ErrorBody。
+		// HTTP 层状态码是 200（SSE 头已发出），但流内发生了错误，需要用 502 标记。
+		if tw.parser.HasError() {
+			r.StatusCode = http.StatusBadGateway
+			if r.InputTokens == 0 {
+				r.InputTokens = tokenizer.EstimateInputTokens(tw.requestBody, tw.requestPath)
+			}
+			if errData := tw.parser.SSEErrorData(); errData != "" {
+				r.ErrorBody = errData
+			}
+			tw.logger.Warn("SSE error event received, recording as 502",
+				zap.String("request_id", record.RequestID),
+				zap.String("user_id", record.UserID),
+				zap.String("error_data", tw.parser.SSEErrorData()),
+			)
+		} else {
+			r.StatusCode = tw.statusCode
+			tw.logger.Debug("streaming token usage captured",
+				zap.String("request_id", record.RequestID),
+				zap.String("user_id", record.UserID),
+				zap.String("provider", provider),
+				zap.Int("input_tokens", inputTokens),
+				zap.Int("output_tokens", outputTokens),
+			)
+		}
+
 		usageWriter.Record(r)
 	})
 
