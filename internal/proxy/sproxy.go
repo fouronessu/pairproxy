@@ -237,6 +237,21 @@ func (sp *SProxy) SetTransport(t http.RoundTripper) {
 	sp.transport = t
 }
 
+// SetRequestTimeout 配置转发到 LLM 时等待响应头的超时时间。
+// d == 0 时使用默认值 300s；d < 0 时不设置超时（保持无限等待）。
+// 该超时仅作用于等待响应头阶段；流式响应体的传输不受此限制。
+func (sp *SProxy) SetRequestTimeout(d time.Duration) {
+	if d < 0 {
+		return // 明确禁用超时，保持 http.DefaultTransport
+	}
+	if d == 0 {
+		d = 300 * time.Second
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = d
+	sp.transport = t
+}
+
 // SetDebugLogger 设置 debug 文件日志器。
 // 非 nil 时，每个请求的转发内容（请求体、响应体、SSE chunks）均会写入该 logger。
 func (sp *SProxy) SetDebugLogger(l *zap.Logger) {

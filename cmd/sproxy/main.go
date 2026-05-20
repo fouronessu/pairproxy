@@ -439,6 +439,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		sp.SetLLMHealthChecker(llmBalancer, llmHC)
 		sp.SetMaxRetries(cfg.LLM.MaxRetries)
 		sp.SetRetryOnStatus(cfg.LLM.RetryOnStatus)
+		sp.SetRequestTimeout(cfg.LLM.RequestTimeout)
 
 		// sp.targets 在 newSProxy 时来自 config（ID 均为 ""）。
 		// SyncLLMTargets 从 DB 重新加载，将 sp.targets 更新为带 UUID 的版本，

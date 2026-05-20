@@ -40,7 +40,8 @@ llm:
   # 可选：round_robin（默认）| random | weighted
   lb_strategy: "round_robin"
 
-  # request_timeout: 转发给 LLM 的请求超时（含流式响应）
+  # request_timeout: 等待 LLM 响应头的超时（不含流式响应体传输时间）
+  # 默认 300s；-1=禁用超时（谨慎使用，可能导致连接永久挂起）
   request_timeout: 300s
 
   # targets: 上游 LLM 节点列表
