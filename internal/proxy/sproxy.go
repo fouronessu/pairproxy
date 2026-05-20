@@ -1929,6 +1929,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		RouterResultStatus: routerResultStatus,
 		RouterResult:       routerResult,
 		CacheHitScene:      cacheHitScene,
+		RequestPath:        r.URL.Path,
 		CreatedAt:          time.Now().UTC(),
 	}
 	if usageRecord.Model != "" {
@@ -2116,6 +2117,15 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				zap.Bool("streaming", isStreaming),
 				zap.Int64("duration_ms", durationMs),
 			)
+			if resp.StatusCode >= 400 {
+				sp.logger.Warn("LLM target returned error",
+					zap.String("request_id", reqID),
+					zap.String("user_id", claims.UserID),
+					zap.String("target", firstInfo.URL),
+					zap.Int("status", resp.StatusCode),
+					zap.Int64("duration_ms", durationMs),
+				)
+			}
 
 			if dl != nil {
 				dl.Debug("← LLM response",
@@ -2138,7 +2148,6 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 						zap.Error(readErr),
 					)
 				}
-
 				// 协议転換：非流式響応処理
 				if readErr == nil && len(body) > 0 {
 					switch convDir {

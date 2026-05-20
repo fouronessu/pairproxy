@@ -43,6 +43,8 @@ type UsageRecord struct {
 	RouterResultStatus int    // 0=未调用, 1=调用成功, 2=调用失败
 	RouterResult       string // Router 返回的模型名
 	CacheHitScene      int    // 0=无缓存/未命中, 1=缓存满复用, 2=big模型复用, 3=未满非big调API
+	ErrorBody          string // 上游错误响应体（截取前 1024 字节，仅 status>=400 时写入）
+	RequestPath        string // 客户端请求路径（如 /v1/messages），不含 IP/端口
 	CreatedAt          time.Time
 }
 
@@ -274,6 +276,8 @@ func (w *UsageWriter) writeBatch(batch []UsageRecord) {
 			RouterResultStatus: r.RouterResultStatus,
 			RouterResult:       r.RouterResult,
 			CacheHitScene:      r.CacheHitScene,
+			ErrorBody:          r.ErrorBody,
+			RequestPath:        r.RequestPath,
 			CreatedAt:          r.CreatedAt,
 		})
 	}

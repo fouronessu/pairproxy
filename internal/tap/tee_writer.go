@@ -20,17 +20,17 @@ import (
 type TeeResponseWriter struct {
 	http.ResponseWriter // 原始 writer（透传 Header() 等方法）
 
-	logger           *zap.Logger
-	parser           ResponseParser
-	writer           *db.UsageWriter
-	record           db.UsageRecord // 预填充的 UsageRecord 模板（requestID、userID 等）
-	statusCode       int
-	isStreaming      bool
+	logger            *zap.Logger
+	parser            ResponseParser
+	writer            *db.UsageWriter
+	record            db.UsageRecord // 预填充的 UsageRecord 模板（requestID、userID 等）
+	statusCode        int
+	isStreaming       bool
 	streamingRecorded bool // onComplete 回调已触发（message_stop 已收到）
 
 	// debug 支持
-	startTime     time.Time  // 请求开始时间，用于计算 TTFB
-	firstByteAt   time.Time  // 第一个字节到达时间
+	startTime     time.Time // 请求开始时间，用于计算 TTFB
+	firstByteAt   time.Time // 第一个字节到达时间
 	firstByteOnce sync.Once
 	onChunk       func(p []byte) // debug 回调：每个 streaming chunk 调用，nil = 不调试
 }
@@ -154,6 +154,14 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 	r.StatusCode = statusCode
 	r.IsStreaming = false
 	r.DurationMs = durationMs
+	if statusCode >= 400 && len(body) > 0 {
+		const maxErrorBody = 1024
+		if len(body) > maxErrorBody {
+			r.ErrorBody = string(body[:maxErrorBody])
+		} else {
+			r.ErrorBody = string(body)
+		}
+	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now().UTC()
 	}

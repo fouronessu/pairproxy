@@ -267,6 +267,7 @@ func (h *Handler) handleDashboardUserLogs(w http.ResponseWriter, r *http.Request
 		StatusCode   int     `json:"status_code"`
 		IsStreaming  bool    `json:"is_streaming"`
 		DurationMs   int64   `json:"duration_ms"`
+		RequestPath  string  `json:"request_path"`
 	}
 
 	entries := make([]logEntry, 0, len(logs))
@@ -281,6 +282,7 @@ func (h *Handler) handleDashboardUserLogs(w http.ResponseWriter, r *http.Request
 			StatusCode:   l.StatusCode,
 			IsStreaming:  l.IsStreaming,
 			DurationMs:   l.DurationMs,
+			RequestPath:  l.RequestPath,
 		})
 	}
 

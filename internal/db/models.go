@@ -68,6 +68,8 @@ type UsageLog struct {
 	RouterResultStatus int       `gorm:"default:0"`           // 0=未调用, 1=调用成功, 2=调用失败
 	RouterResult       string    `gorm:"default:''"`          // Router 返回的模型名
 	CacheHitScene      int       `gorm:"default:0"`           // 0=无缓存/未命中, 1=缓存满复用, 2=big模型复用, 3=未满非big调API
+	ErrorBody          string    `gorm:"default:''"`          // 上游错误响应体（截取前 1024 字节，仅 status>=400 时写入）
+	RequestPath        string    `gorm:"default:''"`          // 客户端请求路径（如 /v1/messages），不含 IP/端口
 	CreatedAt          time.Time `gorm:"index"`
 }
 
