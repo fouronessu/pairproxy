@@ -42,6 +42,18 @@ func ClaimsFromContext(ctx context.Context) *auth.JWTClaims {
 // RequestIDMiddleware
 // ---------------------------------------------------------------------------
 
+// clientAddr 返回真实客户端地址：优先取 X-Forwarded-For 首项，其次 RemoteAddr。
+// 仅用于日志记录，不作为安全校验依据。
+func clientAddr(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if idx := strings.IndexByte(xff, ','); idx > 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	return r.RemoteAddr
+}
+
 // RequestIDMiddleware 为每个请求生成 UUID 写入 context 和响应头 X-Request-ID。
 func RequestIDMiddleware(logger *zap.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +68,7 @@ func RequestIDMiddleware(logger *zap.Logger, next http.Handler) http.Handler {
 			zap.String("request_id", reqID),
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
-			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("remote_addr", clientAddr(r)),
 		)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -95,7 +107,7 @@ func AuthMiddleware(logger *zap.Logger, jwtMgr *auth.Manager, checker UserActive
 				zap.String("request_id", reqID),
 				zap.String("path", r.URL.Path),
 				zap.String("method", r.Method),
-				zap.String("remote_addr", r.RemoteAddr),
+				zap.String("remote_addr", clientAddr(r)),
 			)
 			writeJSONError(w, http.StatusUnauthorized, "missing_auth_header", "X-PairProxy-Auth or Authorization: Bearer header is required")
 			return
