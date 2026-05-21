@@ -117,6 +117,9 @@ func AuthMiddleware(logger *zap.Logger, jwtMgr *auth.Manager, checker UserActive
 		if err != nil {
 			logger.Warn("invalid JWT",
 				zap.String("request_id", reqID),
+				zap.String("path", r.URL.Path),
+				zap.String("method", r.Method),
+				zap.String("remote_addr", clientAddr(r)),
 				zap.String("auth_source", authSource),
 				zap.Error(err),
 			)
