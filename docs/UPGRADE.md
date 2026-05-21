@@ -52,6 +52,29 @@
 
 ## 版本变更记录
 
+### v3.2.1 — UI 改进 + 配置增强 + 日志修复
+
+**数据库 Schema 变更**
+
+无。直接替换二进制重启即可。
+
+**行为变更**
+
+| 变更项 | 旧行为 | 新行为 |
+|--------|--------|--------|
+| `request_timeout` 填 `-1` | YAML 解析报错 | 禁用超时 |
+| `request_timeout` 填裸整数（如 `600`） | YAML 解析报错 | 按秒解析（600s） |
+| model_router 触发范围 | 所有代理路径 | 仅 `/v1/messages` 和 `*chat/completions` |
+| sproxy 日志 `remote_addr` | cproxy 地址 | 真实客户端 IP（via X-Forwarded-For） |
+
+**升级步骤**
+
+```bash
+systemctl restart sproxy
+```
+
+---
+
 ### v3.2.0 — 多窗口限速 + 错误可观测性 + 配置修复
 
 **数据库 Schema 变更**

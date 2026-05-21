@@ -1,5 +1,40 @@
 # PairProxy Changelog
 
+## [v3.2.1] - 2026-05-21
+
+### 🔧 改进 & 修复
+
+#### UI：error_body 以 Tooltip 方式展示在请求路径列
+
+keygen 页和 my-usage 页的请求记录表格中，有错误详情（error_body）的行在"接口"列路径旁显示 ⚠ 图标，鼠标悬停即弹出完整错误内容，不截断。tooltip 使用 `position:fixed` 实现，不受表格 `overflow-x-auto` 影响。
+
+keygen 页同步去掉了原有的点击展开行逻辑，简化为纯 tooltip 交互。
+
+#### 配置：`request_timeout` 支持裸整数和 -1
+
+之前 `request_timeout` 字段必须填带单位的字符串（如 `300s`），填裸整数（`600`）或 `-1` 会报 YAML 解析错误。现在：
+
+| 写法 | 含义 |
+|------|------|
+| `300s` / `5m` / `1h` | 标准 Go duration 字符串（原有支持） |
+| `600` | 裸整数，按秒解析（600s） |
+| `-1` | 禁用超时 |
+
+#### 日志：`remote_addr` 显示真实客户端 IP
+
+sproxy 的 `request received` 和 `missing authentication header` 日志原来记录 cproxy 的地址，现在优先取 `X-Forwarded-For` 首项（cproxy 注入的真实客户端 IP），无该头时回退到 `RemoteAddr`。
+
+#### model_router：仅对补全接口触发路由
+
+之前 model_router 在任何代理路径（包括 `/v1/models`、`/v1/tokenize` 等）都会被调用。现在限定为：
+
+- `/v1/messages`（Anthropic）
+- 含 `chat/completions` 的任意路径（OpenAI/Ollama，支持任意版本前缀）
+
+其他路径直接跳过，避免无效路由调用和空 body 传入 SelectModel。
+
+---
+
 ## [v3.2.0] - 2026-05-20
 
 ### ✨ 新特性
