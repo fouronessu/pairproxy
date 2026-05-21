@@ -52,6 +52,14 @@
 
 ## 版本变更记录
 
+### v3.2.2 — invalid JWT 日志增强
+
+**数据库 Schema 变更**：无，直接替换二进制重启即可。
+
+**变更内容**：`invalid JWT` warn 日志新增 `path`、`method`、`remote_addr` 字段，Dashboard 告警页同步展示。
+
+---
+
 ### v3.2.1 — UI 改进 + 配置增强 + 日志修复
 
 **数据库 Schema 变更**

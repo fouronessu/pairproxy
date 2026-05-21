@@ -355,6 +355,7 @@ This outputs all commands with syntax, flags, examples, and natural language tri
 
 ## Version-Specific Features
 
+- **v3.2.2**: invalid JWT warn log adds `path`/`method`/`remote_addr` fields; shown in Dashboard alerts
 - **v3.2.1**: UI tooltip for error_body on request path; `request_timeout` accepts bare int (seconds) and `-1`; real client IP in middleware logs; model_router restricted to completion paths only
 - **v3.2.0**: Multi-window rate limiting (15m/30m/1h); SSE 504 error recording; 502 ErrorBody populated; tiktoken input estimation; keygen page improvements; `llm.fail_threshold` configurable; `max_retries: -1` disables retry; `request_timeout` now applied (default 300s); client_ip in usage_logs
 - **v3.1.1**: Track/Peer/Model Router fixes (track.dir decoupled from database.path; peer mode source_node fix; alerts SSE removed → polling; model_router AtoO pre-conversion; track flush safety net; track dir 0o777 for cross-user writes; track error logging)

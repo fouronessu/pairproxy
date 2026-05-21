@@ -1,5 +1,21 @@
 # PairProxy Changelog
 
+## [v3.2.2] - 2026-05-21
+
+### 🐛 Bug 修复
+
+#### invalid JWT 日志补充请求上下文字段
+
+`invalid JWT` warn 日志原来只有 `request_id`、`auth_source`、`error` 三个字段，定位问题时需要回溯上一条 debug 日志才能得知请求路径和来源 IP。现在直接在该条日志中增加：
+
+- `path`：请求路径
+- `method`：HTTP 方法
+- `remote_addr`：真实客户端 IP（优先 X-Forwarded-For，回退 RemoteAddr）
+
+这些字段同时出现在 Dashboard 告警页中（eventlog 通过 zap core 自动捕获所有 WARN 结构化字段）。
+
+---
+
 ## [v3.2.1] - 2026-05-21
 
 ### 🔧 改进 & 修复
