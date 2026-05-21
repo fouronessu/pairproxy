@@ -40,8 +40,10 @@ const (
 )
 
 // detectConversionDirection 根据请求路径和目标 provider 判断协议转换方向。
+// 注意：仅匹配 /v1/messages 本身（含 query string），/v1/messages/count_tokens 等子路径不触发 AtoO，
+// 因为 OpenAI/Ollama 侧没有对等端点，强制转换只会产生错误请求。
 func detectConversionDirection(requestPath, targetProvider string) conversionDirection {
-	if strings.HasPrefix(requestPath, "/v1/messages") &&
+	if (requestPath == "/v1/messages" || strings.HasPrefix(requestPath, "/v1/messages?")) &&
 		(targetProvider == "openai" || targetProvider == "ollama") {
 		return conversionAtoO
 	}
@@ -696,10 +698,10 @@ type OpenAIToAnthropicStreamConverter struct {
 	textBlockOpen bool
 
 	// 工具调用块状态
-	toolBuffers    map[int]*toolCallBuffer
+	toolBuffers     map[int]*toolCallBuffer
 	toolBlockIdxMap map[int]int
-	toolOrder      []int
-	openToolBlocks map[int]bool
+	toolOrder       []int
+	openToolBlocks  map[int]bool
 
 	// 流末信息（在收到 [DONE] 时使用）
 	finishReason     string
@@ -710,7 +712,7 @@ type OpenAIToAnthropicStreamConverter struct {
 	done bool
 
 	// nonStreaming passthrough
-	firstWrite  bool
+	firstWrite   bool
 	nonStreaming bool
 }
 
@@ -1679,7 +1681,7 @@ type AnthropicToOpenAIStreamConverter struct {
 	// nonStreaming 为 true 时表示首次 Write 判断为非 SSE 数据。
 	// 为 true 时后续 Write 直接透传。
 	firstWrite   bool
-	nonStreaming  bool
+	nonStreaming bool
 }
 
 // NewAnthropicToOpenAIStreamConverter 创建 AnthropicToOpenAIStreamConverter。
