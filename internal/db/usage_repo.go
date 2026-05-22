@@ -36,6 +36,8 @@ type UsageRecord struct {
 	UpstreamURL        string
 	StatusCode         int
 	DurationMs         int64
+	TtftMs             int64
+	TpotMs             float64
 	SourceNode         string
 	ClientIP           string // 请求来源 IP
 	SessionID          string // 来自请求的真实 session_id，自动生成的留空
@@ -268,6 +270,8 @@ func (w *UsageWriter) writeBatch(batch []UsageRecord) {
 			UpstreamURL:        r.UpstreamURL,
 			StatusCode:         r.StatusCode,
 			DurationMs:         r.DurationMs,
+			TtftMs:             r.TtftMs,
+			TpotMs:             r.TpotMs,
 			CostUSD:            cost,
 			SourceNode:         r.SourceNode,
 			ClientIP:           r.ClientIP,
