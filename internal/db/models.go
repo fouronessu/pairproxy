@@ -59,6 +59,8 @@ type UsageLog struct {
 	UpstreamURL        string
 	StatusCode         int
 	DurationMs         int64
+	TtftMs             int64     `gorm:"default:0"`           // 首 token 延迟（ms）；仅 streaming 有效，0 表示未记录
+	TpotMs             float64   `gorm:"default:0"`           // 每输出 token 耗时（ms/token）；0 表示无效或无输出
 	CostUSD            float64   `gorm:"default:0"`           // 估算费用（USD）
 	SourceNode         string    `gorm:"default:'local'"`     // 数据来源节点 ID
 	Synced             bool      `gorm:"default:false;index"` // sp-2+ 用：是否已上报给 sp-1

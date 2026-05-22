@@ -78,6 +78,16 @@ func NewTeeResponseWriter(
 		if !tw.startTime.IsZero() {
 			r.DurationMs = time.Since(tw.startTime).Milliseconds()
 		}
+		// TTFT: first byte time ≈ first token time for SSE streams
+		if !tw.startTime.IsZero() && !tw.firstByteAt.IsZero() {
+			r.TtftMs = tw.firstByteAt.Sub(tw.startTime).Milliseconds()
+		}
+		// TPOT: decode phase duration divided by output token count
+		if outputTokens > 0 {
+			if decodeMs := float64(r.DurationMs - r.TtftMs); decodeMs > 0 {
+				r.TpotMs = decodeMs / float64(outputTokens)
+			}
+		}
 		if r.CreatedAt.IsZero() {
 			r.CreatedAt = time.Now().UTC()
 		}
@@ -186,6 +196,10 @@ func (tw *TeeResponseWriter) RecordNonStreaming(body []byte, statusCode int, dur
 	r.StatusCode = statusCode
 	r.IsStreaming = false
 	r.DurationMs = durationMs
+	// Non-streaming: TTFT not applicable; TPOT = total duration / output tokens
+	if out > 0 && durationMs > 0 {
+		r.TpotMs = float64(durationMs) / float64(out)
+	}
 	if statusCode >= 400 && len(body) > 0 {
 		const maxErrorBody = 1024
 		if len(body) > maxErrorBody {
@@ -229,6 +243,14 @@ func (tw *TeeResponseWriter) FlushPartialTokens(statusCode int, durationMs int64
 	r.StatusCode = statusCode
 	r.IsStreaming = true
 	r.DurationMs = durationMs
+	if !tw.startTime.IsZero() && !tw.firstByteAt.IsZero() {
+		r.TtftMs = tw.firstByteAt.Sub(tw.startTime).Milliseconds()
+	}
+	if r.OutputTokens > 0 {
+		if decodeMs := float64(durationMs - r.TtftMs); decodeMs > 0 {
+			r.TpotMs = decodeMs / float64(r.OutputTokens)
+		}
+	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now().UTC()
 	}

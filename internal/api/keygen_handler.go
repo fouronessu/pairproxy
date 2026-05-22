@@ -483,6 +483,8 @@ func (h *KeygenHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 		StatusCode   int     `json:"status_code"`
 		IsStreaming  bool    `json:"is_streaming"`
 		DurationMs   int64   `json:"duration_ms"`
+		TtftMs       int64   `json:"ttft_ms"`
+		TpotMs       float64 `json:"tpot_ms"`
 		RequestPath  string  `json:"request_path"`
 		ErrorBody    string  `json:"error_body"`
 	}
@@ -546,6 +548,8 @@ func (h *KeygenHandler) handleLogs(w http.ResponseWriter, r *http.Request) {
 			StatusCode:   l.StatusCode,
 			IsStreaming:  l.IsStreaming,
 			DurationMs:   l.DurationMs,
+			TtftMs:       l.TtftMs,
+			TpotMs:       l.TpotMs,
 			RequestPath:  l.RequestPath,
 			ErrorBody:    l.ErrorBody,
 		})
@@ -762,11 +766,14 @@ const keygenHTML = `<!DOCTYPE html>
               <th class="px-4 py-3 text-right">输出</th>
               <th class="px-4 py-3 text-right">费用($)</th>
               <th class="px-4 py-3 text-left">类型</th>
+              <th class="px-4 py-3 text-right">耗时</th>
+              <th class="px-4 py-3 text-right">TTFT</th>
+              <th class="px-4 py-3 text-right">TPOT</th>
               <th class="px-4 py-3 text-left">状态</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-50 text-gray-700" id="logsBody">
-            <tr><td colspan="9" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
+            <tr><td colspan="12" class="px-4 py-8 text-center text-gray-400 text-sm">加载中...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1014,13 +1021,13 @@ async function loadLogs(page) {
   const days = parseInt(document.getElementById('logsDaysSelect').value) || 7;
   const pageSize = parseInt(document.getElementById('logsPageSizeSelect').value) || 10;
   const tbody = document.getElementById('logsBody');
-  tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">加载中...</td></tr>';
 
   try {
     const url = '/keygen/api/logs?days=' + days + '&page=' + page + '&page_size=' + pageSize;
     const r = await fetch(url, {headers: {'Authorization': 'Bearer ' + sessionToken}});
     if (!r.ok) {
-      tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-red-400">加载失败</td></tr>';
       return;
     }
     const data = await r.json();
@@ -1033,10 +1040,20 @@ async function loadLogs(page) {
   }
 }
 
+function fmtMs(ms) {
+  if (!ms || ms === 0) return '<span class="text-gray-300">—</span>';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+function fmtTpot(tpot) {
+  if (!tpot || tpot === 0) return '<span class="text-gray-300">—</span>';
+  return tpot.toFixed(1) + 'ms/tok';
+}
+
 function renderLogsTable(logs) {
   const tbody = document.getElementById('logsBody');
   if (!logs || logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">暂无请求记录</td></tr>';
     return;
   }
   const rows = [];
@@ -1060,6 +1077,9 @@ function renderLogsTable(logs) {
     tr += '<td class="px-4 py-3 text-right text-xs">' + l.output_tokens.toLocaleString() + '</td>';
     tr += '<td class="px-4 py-3 text-right text-xs text-amber-600">' + (l.cost_usd > 0 ? l.cost_usd.toFixed(4) : '<span class="text-gray-300">—</span>') + '</td>';
     tr += '<td class="px-4 py-3 text-xs">' + (l.is_streaming ? '<span class="text-blue-500">流式</span>' : '<span class="text-gray-400">同步</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs text-gray-500">' + fmtMs(l.duration_ms) + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs text-gray-500">' + (l.is_streaming ? fmtMs(l.ttft_ms) : '<span class="text-gray-300">—</span>') + '</td>';
+    tr += '<td class="px-4 py-3 text-right text-xs text-gray-500">' + fmtTpot(l.tpot_ms) + '</td>';
     tr += '<td class="px-4 py-3 text-xs">' + (isErr ? '<span class="text-red-500 font-medium">✗ ' + l.status_code + '</span>' : '<span class="text-green-600 font-medium">✓ 200</span>') + '</td>';
     tr += '</tr>';
     rows.push(tr);
