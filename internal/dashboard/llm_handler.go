@@ -41,15 +41,6 @@ type bindingEntry struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-// bindingEntry is the JSON shape embedded in the page for client-side filtering.
-type bindingEntry struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Name      string `json:"name"`
-	TargetURL string `json:"targetURL"`
-	CreatedAt string `json:"createdAt"`
-}
-
 // llmTargetWithMeta 扩展的目标信息（用于 WebUI 显示）
 type llmTargetWithMeta struct {
 	ID              string

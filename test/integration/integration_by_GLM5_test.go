@@ -172,7 +172,7 @@ func TestQuotaEnforcement(t *testing.T) {
 	}
 
 	dailyLimit := int64(1000)
-	if err := groupRepo.SetQuota(group.ID, &dailyLimit, nil, nil, nil, nil); err != nil {
+	if err := groupRepo.SetQuota(group.ID, &dailyLimit, nil, nil, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("SetQuota: %v", err)
 	}
 
