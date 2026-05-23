@@ -41,6 +41,13 @@ func (r *LLMBindingRepo) Set(targetID string, userID, groupID *string) error {
 		targetURL = tgt.URL
 	}
 
+	// 查 target URL 冗余写入（便于直接读库）；找不到时回退用 targetID 本身（URL-as-ID 场景）
+	targetURL := targetID
+	var tgt LLMTarget
+	if err := r.db.Where("id = ?", targetID).First(&tgt).Error; err == nil {
+		targetURL = tgt.URL
+	}
+
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// 删除已有的同维度绑定
 		if userID != nil {

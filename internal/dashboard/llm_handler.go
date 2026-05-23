@@ -41,6 +41,15 @@ type bindingEntry struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// bindingEntry is the JSON shape embedded in the page for client-side filtering.
+type bindingEntry struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	TargetURL string `json:"targetURL"`
+	CreatedAt string `json:"createdAt"`
+}
+
 // llmTargetWithMeta 扩展的目标信息（用于 WebUI 显示）
 type llmTargetWithMeta struct {
 	ID              string
@@ -163,6 +172,33 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 		for _, g := range allGroups {
 			data.GroupIDToName[g.ID] = g.Name
 			data.Groups = append(data.Groups, g)
+		}
+	}
+
+	// 序列化绑定关系为 JSON（在 ID→名称映射填充完成后执行，避免模板 range 产生 trailing comma）
+	{
+		entries := make([]bindingEntry, 0, len(data.Bindings))
+		for _, b := range data.Bindings {
+			bType := "group"
+			name := ""
+			if b.UserID != nil {
+				bType = "user"
+				name = data.UserIDToName[*b.UserID]
+			} else if b.GroupID != nil {
+				name = data.GroupIDToName[*b.GroupID]
+			}
+			entries = append(entries, bindingEntry{
+				ID:        b.ID,
+				Type:      bType,
+				Name:      name,
+				TargetURL: b.TargetURL,
+				CreatedAt: b.CreatedAt.Format("2006-01-02 15:04"),
+			})
+		}
+		if bs, err := json.Marshal(entries); err == nil {
+			data.BindingsJSON = htmpl.JS(bs)
+		} else {
+			data.BindingsJSON = "[]"
 		}
 	}
 

@@ -497,7 +497,7 @@ func (sp *SProxy) loadAllTargets(repo *db.LLMTargetRepo) ([]config.LLMTarget, er
 			URL:             dt.URL,
 			APIKey:          apiKey,
 			Provider:        dt.Provider,
-			Name:            dt.Name,
+			Name:             dt.Name,
 			Weight:          dt.Weight,
 			HealthCheckPath: dt.HealthCheckPath,
 			ModelMapping:    modelMapping,

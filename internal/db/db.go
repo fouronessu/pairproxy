@@ -312,6 +312,10 @@ func Migrate(logger *zap.Logger, db *gorm.DB) error {
 	// 回填完成后补 NOT NULL 约束（预建列时为 nullable，数据填充后恢复意图约束）
 	postMigrateSetNotNull(logger, db, "llm_bindings", "target_id")
 
+	// 回填完成后补 NOT NULL 约束（预建列时为 nullable，数据填充后恢复意图约束）
+	postMigrateSetNotNull(logger, db, "llm_bindings", "target_id")
+	postMigrateSetNotNull(logger, db, "group_target_set_members", "target_id")
+
 	logger.Info("database migrations completed")
 	return nil
 }
