@@ -38,17 +38,6 @@ func NewModelRouterClient(cfg config.ModelRouterConfig, logger *zap.Logger) *Mod
 	}
 }
 
-// routerRequest 是发往 Router API 的最小化请求体。
-// 我们直接透传原始请求的字段（messages, model 等），并追加 session_id 和 candidate_models。
-type routerRequest struct {
-	// 以 map 接收并转发全部原始字段（不截断）
-	fields map[string]interface{}
-}
-
-func (rr *routerRequest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(rr.fields)
-}
-
 // routerResponse 对应 ModelRouterResponse schema。
 type routerResponse struct {
 	XSpanID       string      `json:"x_span_id"`
