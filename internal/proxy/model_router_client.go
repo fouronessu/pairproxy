@@ -171,7 +171,8 @@ func (c *ModelRouterClient) Route(
 // 按以下优先级：
 //  1. 请求体 JSON 字段 "session_id"
 //  2. 请求头 "X-Claude-Code-Session-Id"（Claude Code 标准头）
-//  3. 自动生成 "auto-session-{uuid}"
+//  3. 请求头 "X-Hermes-Session-Id"（Hermes Agent 标准头）
+//  4. 自动生成 "auto-session-{uuid}"
 func extractSessionID(r *http.Request, bodyBytes []byte) string {
 	// 1. 请求体中的 session_id
 	if len(bodyBytes) > 0 {
@@ -183,12 +184,17 @@ func extractSessionID(r *http.Request, bodyBytes []byte) string {
 		}
 	}
 
-	// 2. 请求头 X-Session-Id
+	// 2. 请求头 X-Claude-Code-Session-Id
 	if sid := r.Header.Get("X-Claude-Code-Session-Id"); sid != "" {
 		return sid
 	}
 
-	// 3. 自动生成
+	// 3. 请求头 X-Hermes-Session-Id
+	if sid := r.Header.Get("X-Hermes-Session-Id"); sid != "" {
+		return sid
+	}
+
+	// 4. 自动生成
 	return "auto-session-" + uuid.NewString()
 }
 
