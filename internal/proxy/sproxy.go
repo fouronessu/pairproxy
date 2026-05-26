@@ -1607,6 +1607,16 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// 提取请求中的真实 session ID，供 Model Router 和上游转发共用。
+	// 自动生成的 "auto-session-" 前缀 ID 不向上游透传。
+	var forwardSessionID string
+	{
+		sid := extractSessionID(r, bodyBytes)
+		if !strings.HasPrefix(sid, "auto") {
+			forwardSessionID = sid
+		}
+	}
+
 	// 分组多绑定智能路由（v3.1.0+）：
 	// 若分组绑定了 ≥2 个 LLM target 且用户无个人绑定，调用 Model Router 预选 target。
 	// 失败时 passthrough（routerBoundOverride=""），pickLLMTarget 回退到 bindingResolver 的首条分组绑定。
@@ -1639,10 +1649,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 				balTargets := sp.llmBalancerTargetsAsLBTargets()
 				candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
 				sessionID := extractSessionID(r, bodyBytes)
-				// 仅记录来自请求的真实 session_id，自动生成的（auto- 前缀）不写入日志
-				if !strings.HasPrefix(sessionID, "auto") {
-					routerSessionID = sessionID
-				}
+				routerSessionID = forwardSessionID
 
 				// 若组 provider 要求 AtoO，提前转换一次并缓存结果（转换后的 body 同时用于 Router 和转发）。
 				// nil modelMapping：model name 在选定 target 后再通过 applyModelToOpenAIBody 更新，代价极小。
@@ -2107,6 +2114,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			apiKey := firstInfo.APIKey
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 			req.Header.Del("X-Forwarded-For")
+
+			// 将真实 session ID 透传给上游（自动生成的不透传）
+			if forwardSessionID != "" {
+				req.Header.Set("X-Session-ID", forwardSessionID)
+			}
 
 			sp.logger.Debug("proxying request to LLM",
 				zap.String("request_id", reqID),
