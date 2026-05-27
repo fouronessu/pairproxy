@@ -336,6 +336,12 @@ async def chat_completions(request: Request):
         extra_headers["X-Session-ID"] = session_id[:50]
 
     stream = body.get("stream", False)
+
+    # 透传客户端的 Authorization 头，vLLM 如果配置了 --api-key 或 VLLM_API_KEY 环境变量时需要
+    upstream_headers: dict[str, str] = {"Content-Type": "application/json"}
+    if auth := request.headers.get("Authorization"):
+        upstream_headers["Authorization"] = auth
+
     conn_acquire(target)
 
     if stream:
@@ -346,7 +352,7 @@ async def chat_completions(request: Request):
                     "POST",
                     f"{target}/v1/chat/completions",
                     json=body,
-                    headers={"Content-Type": "application/json"},
+                    headers=upstream_headers,
                 ),
                 stream=True,
             )
@@ -387,7 +393,7 @@ async def chat_completions(request: Request):
             resp = await http_client.post(
                 f"{target}/v1/chat/completions",
                 json=body,
-                headers={"Content-Type": "application/json"},
+                headers=upstream_headers,
             )
         finally:
             conn_release(target)
