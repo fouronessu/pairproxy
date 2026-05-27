@@ -41,6 +41,9 @@ LONG_POOL = [
 # 分流阈值（估算 token 数）
 SPLIT_THRESHOLD = 30000
 
+# 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
+VLLM_MODEL_NAME = "MiniMax-M2.7"
+
 # 每个字符约等于多少 token（代码约 0.3，中文约 0.6）
 CHARS_PER_TOKEN = 0.3
 
@@ -334,6 +337,9 @@ async def chat_completions(request: Request):
     }
     if session_id:
         extra_headers["X-Session-ID"] = session_id[:50]
+
+    # 改写模型名：客户端传来的 model 字段可能是 Claude/OpenAI 模型名，vLLM 只认自己的 served-model-name
+    body["model"] = VLLM_MODEL_NAME
 
     stream = body.get("stream", False)
 
