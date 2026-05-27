@@ -2119,6 +2119,8 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			if forwardSessionID != "" {
 				req.Header.Set("X-Session-ID", forwardSessionID)
 			}
+			// 始终透传用户身份，供上游在无 session ID 时做保底亲和路由
+			req.Header.Set("X-User-ID", claims.UserID)
 
 			sp.logger.Debug("proxying request to LLM",
 				zap.String("request_id", reqID),
