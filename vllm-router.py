@@ -34,12 +34,12 @@ SHORT_POOL = [
 # 长请求池（input >= SPLIT_THRESHOLD token）
 # 建议配置: max-model-len 163840, max-num-seqs 8
 LONG_POOL = [
-    "http://10.195.176.45:1025",
+    "http://10.195.176.109:1025",
     "http://10.195.176.192:1025",
 ]
 
 # 分流阈值（估算 token 数）
-SPLIT_THRESHOLD = 30000
+SPLIT_THRESHOLD = 32768 + 16384  # 短池 max-model-len + 一个 prefill 窗口的余量
 
 # 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
 VLLM_MODEL_NAME = "MiniMax-M2.7"
