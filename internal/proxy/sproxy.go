@@ -1612,7 +1612,12 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	var forwardSessionID string
 	{
 		sid := extractSessionID(r, bodyBytes)
-		if !strings.HasPrefix(sid, "auto") {
+		if strings.HasPrefix(sid, "auto") {
+			sp.logger.Info("session ID not found, dumping headers for diagnosis",
+				zap.String("request_id", reqID),
+				zap.Any("headers", r.Header),
+			)
+		} else {
 			forwardSessionID = sid
 		}
 	}
