@@ -323,6 +323,7 @@ async def run_health_checks():
             healthy_short.add(url)
         elif url in healthy_short:
             healthy_short.discard(url)
+            session_table.remove_backend(url)
             logger.warning(f"实例不健康: {url}")
 
     for url in LONG_POOL:
@@ -420,10 +421,9 @@ async def chat_completions(request: Request):
         short_req_acquire(target)
 
     if stream:
-        stream_client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
         try:
-            resp = await stream_client.send(
-                stream_client.build_request(
+            resp = await http_client.send(
+                http_client.build_request(
                     "POST",
                     f"{target}/v1/chat/completions",
                     json=body,
@@ -436,17 +436,16 @@ async def chat_completions(request: Request):
                 long_req_release(target, is_overflow)
             else:
                 short_req_release(target)
-            await stream_client.aclose()
             raise
 
         if resp.status_code != 200:
             body_bytes = await resp.aread()
             await resp.aclose()
-            await stream_client.aclose()
             if is_long:
                 long_req_release(target, is_overflow)
             else:
                 short_req_release(target)
+            logger.warning(f"上游非200: target={target} status={resp.status_code} (stream)")
             return Response(
                 content=body_bytes,
                 status_code=resp.status_code,
@@ -460,7 +459,6 @@ async def chat_completions(request: Request):
                     yield chunk
             finally:
                 await resp.aclose()
-                await stream_client.aclose()
                 if is_long:
                     long_req_release(target, is_overflow)
                 else:
@@ -484,6 +482,8 @@ async def chat_completions(request: Request):
                 long_req_release(target, is_overflow)
             else:
                 short_req_release(target)
+        if resp.status_code != 200:
+            logger.warning(f"上游非200: target={target} status={resp.status_code}")
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -494,12 +494,19 @@ async def chat_completions(request: Request):
 
 @app.get("/v1/models")
 async def list_models():
-    all_h = list(healthy_short) + list(healthy_long)
-    if not all_h:
+    # 优先长池节点（通常支持更大 context），依次 fallback 直到有一个成功
+    candidates = [u for u in LONG_POOL if u in healthy_long] + \
+                 [u for u in SHORT_POOL if u in healthy_short]
+    if not candidates:
         return Response(content='{"error":"no backends"}', status_code=503)
-    resp = await http_client.get(f"{all_h[0]}/v1/models", timeout=10)
-    return Response(content=resp.content, status_code=resp.status_code,
-                    media_type="application/json")
+    for url in candidates:
+        try:
+            resp = await http_client.get(f"{url}/v1/models", timeout=10)
+            return Response(content=resp.content, status_code=resp.status_code,
+                            media_type="application/json")
+        except Exception:
+            logger.warning(f"/v1/models 请求失败: {url}")
+    return Response(content='{"error":"all backends unavailable"}', status_code=503)
 
 
 @app.get("/health")
