@@ -1,9 +1,19 @@
 """
-vLLM 长短请求分流路由（带会话亲和性）
-====================================
+vLLM 长短请求分流路由（带会话亲和性 + 短池空闲借用）
+====================================================
 路由策略:
-  短请求 (< SPLIT_THRESHOLD token): 最少连接数路由到短池，无会话绑定
-  长请求 (>= SPLIT_THRESHOLD token): 会话亲和路由到长池，新会话按最少连接数选实例
+  短请求 (< SPLIT_THRESHOLD token):
+    → 短池，最少总连接数
+
+  长请求 (>= SPLIT_THRESHOLD token):
+    1. 会话亲和优先（短池或长池均可）
+       - 亲和节点在长池且健康 → 直接复用
+       - 亲和节点在短池且健康且 short_pool_long_conns < MAX_LONG_OVERFLOW → 复用
+       - 否则重新选
+    2. 无亲和（或亲和节点不可用）→ 构建合并候选池：
+         长池健康节点
+       + 短池健康节点（当且仅当 short_pool_short_conns==0 AND short_pool_long_conns<3）
+       → 候选池中按最少活跃长请求数选实例，绑定会话
 
 启动方式:
     pip install fastapi uvicorn httpx
@@ -41,6 +51,9 @@ LONG_POOL = [
 # 分流阈值（估算 token 数）
 SPLIT_THRESHOLD = 32768 + 16384  # 短池 max-model-len + 一个 prefill 窗口的余量
 
+# 短池允许同时承载的最大长请求溢出数
+MAX_LONG_OVERFLOW = 3
+
 # 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
 VLLM_MODEL_NAME = "MiniMax-M2.7"
 
@@ -72,16 +85,43 @@ logger = logging.getLogger("vllm-router")
 # 全局共享 HTTP client（lifespan 初始化）
 http_client: httpx.AsyncClient | None = None
 
-# 各后端当前活跃请求数（用于最少连接数路由）
+# 各后端当前活跃总请求数
 active_conns: dict[str, int] = {}
 
+# 各后端当前活跃长请求数（用于长请求合并候选池的最少连接排序）
+long_active_conns: dict[str, int] = {}
 
-def conn_acquire(backend: str) -> None:
+# 短池粒度计数（用于溢出门控）
+short_pool_short_conns: int = 0   # 短池中活跃的短请求数
+short_pool_long_conns:  int = 0   # 短池中活跃的长请求（溢出）数
+
+
+def short_req_acquire(backend: str) -> None:
+    global short_pool_short_conns
     active_conns[backend] = active_conns.get(backend, 0) + 1
+    short_pool_short_conns += 1
 
 
-def conn_release(backend: str) -> None:
+def short_req_release(backend: str) -> None:
+    global short_pool_short_conns
     active_conns[backend] = max(0, active_conns.get(backend, 0) - 1)
+    short_pool_short_conns = max(0, short_pool_short_conns - 1)
+
+
+def long_req_acquire(backend: str, is_overflow: bool) -> None:
+    global short_pool_long_conns
+    active_conns[backend] = active_conns.get(backend, 0) + 1
+    long_active_conns[backend] = long_active_conns.get(backend, 0) + 1
+    if is_overflow:
+        short_pool_long_conns += 1
+
+
+def long_req_release(backend: str, is_overflow: bool) -> None:
+    global short_pool_long_conns
+    active_conns[backend] = max(0, active_conns.get(backend, 0) - 1)
+    long_active_conns[backend] = max(0, long_active_conns.get(backend, 0) - 1)
+    if is_overflow:
+        short_pool_long_conns = max(0, short_pool_long_conns - 1)
 
 
 # ============================================================
@@ -150,6 +190,8 @@ session_table = SessionTable()
 healthy_short: set[str] = set()
 healthy_long: set[str] = set()
 
+_short_pool_set = set(SHORT_POOL)
+
 
 # ============================================================
 # 会话 ID 提取（仅用于长请求）
@@ -209,36 +251,58 @@ def estimate_tokens(body: dict) -> int:
 
 
 def pick_least_conn(pool: list[str], healthy: set[str]) -> str | None:
-    """从健康实例中选活跃连接数最少的后端。"""
+    """从健康实例中选活跃总连接数最少的后端（用于短请求路由）。"""
     candidates = [u for u in pool if u in healthy]
     if not candidates:
         return None
     return min(candidates, key=lambda u: active_conns.get(u, 0))
 
 
-def pick_target(est_tokens: int, session_id: str | None) -> str | None:
+def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bool]:
     """
-    路由决策:
-    - 短请求: 最少连接数选短池实例，不做会话绑定
-    - 长请求: 查会话亲和 → 命中且健康则复用；未命中则最少连接数选长池实例并绑定
+    路由决策，返回 (target, is_overflow)。
+    is_overflow=True 表示长请求路由到了短池，需要更新短池溢出计数。
+
+    短请求: 短池最少总连接数，不绑定会话。
+    长请求:
+      1. 会话亲和优先（短池/长池均可）
+         - 亲和在长池且健康 → 复用
+         - 亲和在短池且健康且未超溢出 cap → 复用（不受短请求阻塞）
+      2. 无亲和/亲和失效 → 合并候选池（长池健康节点 + 短池溢出条件满足时）
+         → 按最少活跃长请求数选实例，绑定会话
     """
     if est_tokens < SPLIT_THRESHOLD:
-        # 短请求：直接按连接数路由，不涉及会话表
-        return pick_least_conn(SHORT_POOL, healthy_short)
+        return pick_least_conn(SHORT_POOL, healthy_short), False
 
-    # 长请求：优先复用已绑定实例（prefix cache 命中）
+    # 阶段一：会话亲和
     if session_id:
         cached = session_table.get(session_id)
-        if cached and cached in healthy_long:
-            return cached
+        if cached:
+            if cached in healthy_long:
+                return cached, False
+            if cached in healthy_short and cached in _short_pool_set:
+                if short_pool_long_conns < MAX_LONG_OVERFLOW:
+                    return cached, True
+                # cap 已满，放弃亲和，重新选
 
-    target = pick_least_conn(LONG_POOL, healthy_long)
-    if target and session_id:
+    # 阶段二：合并候选池，按最少活跃长请求数选实例
+    candidates = [u for u in LONG_POOL if u in healthy_long]
+    if short_pool_short_conns == 0 and short_pool_long_conns < MAX_LONG_OVERFLOW:
+        candidates += [u for u in SHORT_POOL if u in healthy_short]
+
+    if not candidates:
+        return None, False
+
+    target = min(candidates, key=lambda u: long_active_conns.get(u, 0))
+    is_overflow = target in _short_pool_set
+
+    if session_id:
         session_table.set(session_id, target)
         logger.info(
-            f"新绑定: session={session_id[:24]}, target={target}, tokens≈{est_tokens}"
+            f"新绑定: session={session_id[:24]}, target={target}, "
+            f"tokens≈{est_tokens}, overflow={is_overflow}"
         )
-    return target
+    return target, is_overflow
 
 
 # ============================================================
@@ -276,7 +340,8 @@ async def run_health_checks():
         f"长池:{len(healthy_long)}/{len(LONG_POOL)} "
         f"会话:{session_table.size} "
         f"亲和命中:{session_table.hit_rate:.0%} "
-        f"连接数:{dict(active_conns)}"
+        f"短池[短:{short_pool_short_conns} 溢出:{short_pool_long_conns}/{MAX_LONG_OVERFLOW}] "
+        f"长请求活跃:{dict(long_active_conns)}"
     )
 
 
@@ -297,7 +362,8 @@ async def health_check_loop():
 async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
-    logger.info(f"路由启动 | 短池:{SHORT_POOL} 长池:{LONG_POOL} 阈值:{SPLIT_THRESHOLD}tok")
+    logger.info(f"路由启动 | 短池:{SHORT_POOL} 长池:{LONG_POOL} 阈值:{SPLIT_THRESHOLD}tok "
+                f"最大溢出:{MAX_LONG_OVERFLOW}")
     await run_health_checks()
     task = asyncio.create_task(health_check_loop())
     yield
@@ -317,11 +383,10 @@ async def chat_completions(request: Request):
     body = await request.json()
     est_tokens = estimate_tokens(body)
 
-    # 短请求不提取 session_id；长请求无 X-Session-ID 时也不绑定（降级为最少连接数）
     is_long = est_tokens >= SPLIT_THRESHOLD
     session_id = extract_session_id(request) if is_long else None
 
-    target = pick_target(est_tokens, session_id)
+    target, is_overflow = pick_target(est_tokens, session_id)
 
     if not target:
         pool_name = "长" if is_long else "短"
@@ -348,7 +413,11 @@ async def chat_completions(request: Request):
     if auth := request.headers.get("Authorization"):
         upstream_headers["Authorization"] = auth
 
-    conn_acquire(target)
+    # 按请求类型计数
+    if is_long:
+        long_req_acquire(target, is_overflow)
+    else:
+        short_req_acquire(target)
 
     if stream:
         stream_client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
@@ -363,7 +432,10 @@ async def chat_completions(request: Request):
                 stream=True,
             )
         except Exception:
-            conn_release(target)
+            if is_long:
+                long_req_release(target, is_overflow)
+            else:
+                short_req_release(target)
             await stream_client.aclose()
             raise
 
@@ -371,7 +443,10 @@ async def chat_completions(request: Request):
             body_bytes = await resp.aread()
             await resp.aclose()
             await stream_client.aclose()
-            conn_release(target)
+            if is_long:
+                long_req_release(target, is_overflow)
+            else:
+                short_req_release(target)
             return Response(
                 content=body_bytes,
                 status_code=resp.status_code,
@@ -386,7 +461,10 @@ async def chat_completions(request: Request):
             finally:
                 await resp.aclose()
                 await stream_client.aclose()
-                conn_release(target)
+                if is_long:
+                    long_req_release(target, is_overflow)
+                else:
+                    short_req_release(target)
 
         return StreamingResponse(
             gen(),
@@ -402,7 +480,10 @@ async def chat_completions(request: Request):
                 headers=upstream_headers,
             )
         finally:
-            conn_release(target)
+            if is_long:
+                long_req_release(target, is_overflow)
+            else:
+                short_req_release(target)
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -449,11 +530,15 @@ async def stats():
             "instances": SHORT_POOL,
             "healthy": list(healthy_short),
             "active_conns": {u: active_conns.get(u, 0) for u in SHORT_POOL},
+            "short_reqs": short_pool_short_conns,
+            "long_overflow": short_pool_long_conns,
+            "max_overflow": MAX_LONG_OVERFLOW,
         },
         "long_pool": {
             "instances": LONG_POOL,
             "healthy": list(healthy_long),
             "active_conns": {u: active_conns.get(u, 0) for u in LONG_POOL},
+            "long_active": {u: long_active_conns.get(u, 0) for u in LONG_POOL},
         },
     }
 
