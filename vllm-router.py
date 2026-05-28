@@ -492,6 +492,21 @@ async def chat_completions(request: Request):
         )
 
 
+@app.post("/v1/messages/count_tokens")
+async def count_tokens(request: Request):
+    """本地粗略预估 input_tokens，按中文字符占比动态调整系数。"""
+    body = await request.json()
+    text = json.dumps(body, ensure_ascii=False)
+
+    cjk = sum(1 for c in text if '一' <= c <= '鿿')
+    ratio = cjk / len(text) if text else 0
+    divisor = 4 - 2 * ratio  # ratio=0 → 4，ratio=1 → 2
+    tokens = max(int(len(text) / divisor), 1)
+
+    logger.info(f"👉 count_tokens 本地预估 input_tokens={tokens} (中文占比 {ratio:.0%})")
+    return {"input_tokens": tokens}
+
+
 @app.get("/v1/models")
 async def list_models():
     # 优先长池节点（通常支持更大 context），依次 fallback 直到有一个成功
