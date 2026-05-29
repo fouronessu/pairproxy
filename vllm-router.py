@@ -52,7 +52,10 @@ LONG_POOL = [
 # 短池 ctx 已达 192K 足以承载，阈值仅用于把大请求导向低并发的长池、避免拖慢短池高并发吞吐。
 SPLIT_THRESHOLD = 32768 + 16384  # ≈49K，经验分流点
 
-# 短池允许同时承载的最大长请求溢出数
+# 短池作为长请求“备用池”：真实最多承载 MAX_LONG_OVERFLOW 个长请求溢出。
+# 路由比较时（见 _long_load）给短池叠加同等大小的“虚拟基线偏置”，使长池活跃长请求数
+# 涨到 MAX_LONG_OVERFLOW 之前，长请求都优先留在长池；短池等效负载范围 3→6（基线3 + 满载3）。
+# 偏置只用于比较、不写入计数器，因此日志里 short_pool_long_conns / long_active_conns 始终是真实值。
 MAX_LONG_OVERFLOW = 3
 
 # 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
@@ -271,6 +274,14 @@ def pick_least_conn(pool: list[str], healthy: set[str]) -> str | None:
     return min(candidates, key=lambda u: active_conns.get(u, 0))
 
 
+def _long_load(u: str) -> int:
+    """长请求选实例用的等效负载：短池叠加 MAX_LONG_OVERFLOW 的虚拟基线偏置，
+    使其仅在长池真正繁忙（活跃长请求数追平基线）时才被选中，落实“备用池”语义。
+    偏置只用于比较，不写入 long_active_conns，故日志仍是真实值。"""
+    base = MAX_LONG_OVERFLOW if u in _short_pool_set else 0
+    return long_active_conns.get(u, 0) + base
+
+
 def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bool]:
     """
     路由决策，返回 (target, is_overflow)。
@@ -278,11 +289,12 @@ def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bo
 
     短请求: 短池最少总连接数，不绑定会话。
     长请求:
-      1. 会话亲和优先（短池/长池均可）
+      1. 会话亲和优先
          - 亲和在长池且健康 → 复用
-         - 亲和在短池且健康且未超溢出 cap → 复用（不受短请求阻塞）
-      2. 无亲和/亲和失效 → 合并候选池（长池健康节点 + 短池溢出条件满足时）
-         → 按最少活跃长请求数选实例，绑定会话
+         - 亲和在短池且健康、短池无短请求、未超溢出 cap → 复用
+           （短池一旦有短请求，长请求一律回长池，避免拖慢短请求的响应延迟）
+      2. 无亲和/亲和失效 → 合并候选池（长池健康节点 + 短池满足溢出条件时）
+         → 按等效长请求负载 _long_load 选实例（短池带虚拟基线偏置，长池不忙时优先长池），绑定会话
     """
     if est_tokens < SPLIT_THRESHOLD:
         return pick_least_conn(SHORT_POOL, healthy_short), False
@@ -294,11 +306,12 @@ def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bo
             if cached in healthy_long:
                 return cached, False
             if cached in healthy_short and cached in _short_pool_set:
-                if short_pool_long_conns < MAX_LONG_OVERFLOW:
+                # 短池只在“无短请求且未超溢出 cap”时才复用亲和；否则长请求回长池
+                if short_pool_short_conns == 0 and short_pool_long_conns < MAX_LONG_OVERFLOW:
                     return cached, True
-                # cap 已满，放弃亲和，重新选
+                # 短池有短请求 或 cap 已满，放弃亲和，重新选
 
-    # 阶段二：合并候选池，按最少活跃长请求数选实例
+    # 阶段二：合并候选池，按等效长请求负载选实例（短池带基线偏置，仅长池繁忙时才被选中）
     candidates = [u for u in LONG_POOL if u in healthy_long]
     if short_pool_short_conns == 0 and short_pool_long_conns < MAX_LONG_OVERFLOW:
         candidates += [u for u in SHORT_POOL if u in healthy_short]
@@ -306,7 +319,7 @@ def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bo
     if not candidates:
         return None, False
 
-    target = min(candidates, key=lambda u: long_active_conns.get(u, 0))
+    target = min(candidates, key=_long_load)
     is_overflow = target in _short_pool_set
 
     if session_id:
