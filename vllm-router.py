@@ -36,20 +36,21 @@ from fastapi.responses import StreamingResponse
 # ============================================================
 
 # 短请求池（input < SPLIT_THRESHOLD token）
-# 建议配置: max-model-len 32768, max-num-seqs 20
+# 实际配置: max-model-len 192K, max-num-seqs 20（高并发，承载大量中小请求）
 SHORT_POOL = [
     "http://10.195.176.130:1025",
 ]
 
 # 长请求池（input >= SPLIT_THRESHOLD token）
-# 建议配置: max-model-len 163840, max-num-seqs 8
+# 建议配置: max-model-len 163840, max-num-seqs 8（低并发，承载大上下文请求）
 LONG_POOL = [
     "http://10.195.176.109:1025",
     "http://10.195.176.192:1025",
 ]
 
-# 分流阈值（估算 token 数）
-SPLIT_THRESHOLD = 32768 + 16384  # 短池 max-model-len + 一个 prefill 窗口的余量
+# 分流阈值（估算 token 数）：长/短请求的负载分配分界，非容量上限。
+# 短池 ctx 已达 192K 足以承载，阈值仅用于把大请求导向低并发的长池、避免拖慢短池高并发吞吐。
+SPLIT_THRESHOLD = 32768 + 16384  # ≈49K，经验分流点
 
 # 短池允许同时承载的最大长请求溢出数
 MAX_LONG_OVERFLOW = 3
@@ -57,15 +58,16 @@ MAX_LONG_OVERFLOW = 3
 # 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
 VLLM_MODEL_NAME = "MiniMax-M2.7"
 
-# 每个字符约等于多少 token（代码约 0.3，中文约 0.6）
-CHARS_PER_TOKEN = 0.3
-
 # 路由服务监听
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 3035
 
 # 超时（秒）
 REQUEST_TIMEOUT = 600
+
+# 上游连接级错误（keep-alive 复用到已被服务端关闭的连接 / 建连失败）的重试次数。
+# 仅在尚未收到任何响应字节时重试，对 LLM completions 而言重复一次是可接受的。
+UPSTREAM_CONNECT_RETRIES = 2
 
 # 健康检查间隔（秒）
 HEALTH_CHECK_INTERVAL = 10
@@ -215,39 +217,50 @@ def extract_session_id(request: Request) -> str | None:
 # Token 估算 & 路由
 # ============================================================
 
-def _count_chars(content) -> int:
-    """统计 content 字段的字符数，支持字符串和 text block 列表。"""
+def chars_to_tokens(text: str) -> int:
+    """按中文字符占比动态把字符数换算为 token：中文约 2 字符/token，英文/代码约 4 字符/token。"""
+    if not text:
+        return 0
+    cjk = sum(1 for c in text if '一' <= c <= '鿿')
+    ratio = cjk / len(text)
+    divisor = 4 - 2 * ratio  # ratio=0 → 4，ratio=1 → 2
+    return max(int(len(text) / divisor), 1)
+
+
+def _collect_text(content) -> str:
+    """提取 content 字段的文本，支持字符串和 text block 列表。"""
     if isinstance(content, str):
-        return len(content)
+        return content
     if isinstance(content, list):
-        return sum(
-            len(block.get("text", ""))
+        return "".join(
+            block.get("text", "")
             for block in content
             if isinstance(block, dict) and block.get("type") == "text"
         )
-    return 0
+    return ""
 
 
 def estimate_tokens(body: dict) -> int:
-    total_chars = 0
+    """估算请求 input token：先汇总所有文本，再用 CJK 感知的 chars_to_tokens 换算。"""
+    parts: list[str] = []
 
     # system prompt（Anthropic 格式顶层字段；OpenAI 格式 system 在 messages 里）
-    total_chars += _count_chars(body.get("system", ""))
+    parts.append(_collect_text(body.get("system", "")))
 
     for msg in body.get("messages", []):
         # content 字段：字符串或 text block 列表
-        total_chars += _count_chars(msg.get("content", ""))
+        parts.append(_collect_text(msg.get("content", "")))
         # OpenAI 格式工具调用（sproxy AtoO 转换后 tool_use → tool_calls）
         for tc in msg.get("tool_calls", []):
             fn = tc.get("function", {})
-            total_chars += len(fn.get("name", ""))
-            total_chars += len(fn.get("arguments", ""))
+            parts.append(fn.get("name", ""))
+            parts.append(fn.get("arguments", ""))
 
     # tools 定义（name + description + parameters schema）
     for tool in body.get("tools", []):
-        total_chars += len(json.dumps(tool))
+        parts.append(json.dumps(tool, ensure_ascii=False))
 
-    return int(total_chars * CHARS_PER_TOKEN)
+    return chars_to_tokens("".join(parts))
 
 
 def pick_least_conn(pool: list[str], healthy: set[str]) -> str | None:
@@ -379,6 +392,37 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+# 连接级错误：请求已发出但在收到响应头前连接断开/建连失败，重试通常会换一条新连接成功。
+# RemoteProtocolError 多见于复用了服务端已关闭的 keep-alive 连接。
+_RETRYABLE_CONN_ERRORS = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadError,
+)
+
+
+async def _send_upstream(
+    target: str, body: dict, headers: dict[str, str], stream: bool
+) -> httpx.Response:
+    """向上游发请求，对连接级错误自动重试。返回 httpx.Response（stream=True 时为未读取的流）。"""
+    last_exc: Exception | None = None
+    for attempt in range(UPSTREAM_CONNECT_RETRIES + 1):
+        try:
+            req = http_client.build_request(
+                "POST", f"{target}/v1/chat/completions", json=body, headers=headers
+            )
+            return await http_client.send(req, stream=stream)
+        except _RETRYABLE_CONN_ERRORS as e:
+            last_exc = e
+            logger.warning(
+                f"上游连接失败，重试 {attempt + 1}/{UPSTREAM_CONNECT_RETRIES}: "
+                f"target={target} err={e!r}"
+            )
+    assert last_exc is not None
+    raise last_exc
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
@@ -420,31 +464,30 @@ async def chat_completions(request: Request):
     else:
         short_req_acquire(target)
 
-    if stream:
-        try:
-            resp = await http_client.send(
-                http_client.build_request(
-                    "POST",
-                    f"{target}/v1/chat/completions",
-                    json=body,
-                    headers=upstream_headers,
-                ),
-                stream=True,
-            )
-        except Exception:
-            if is_long:
-                long_req_release(target, is_overflow)
-            else:
-                short_req_release(target)
-            raise
+    def release() -> None:
+        if is_long:
+            long_req_release(target, is_overflow)
+        else:
+            short_req_release(target)
 
+    # 建立上游连接（含连接级错误重试）。失败转成 502，避免裸 500 + traceback 冒泡给客户端。
+    try:
+        resp = await _send_upstream(target, body, upstream_headers, stream)
+    except Exception as e:
+        release()
+        logger.error(f"上游请求失败: target={target} err={e!r}")
+        return Response(
+            content=json.dumps({"error": "upstream request failed", "detail": str(e)}),
+            status_code=502,
+            media_type="application/json",
+            headers=extra_headers,
+        )
+
+    if stream:
         if resp.status_code != 200:
             body_bytes = await resp.aread()
             await resp.aclose()
-            if is_long:
-                long_req_release(target, is_overflow)
-            else:
-                short_req_release(target)
+            release()
             logger.warning(f"上游非200: target={target} status={resp.status_code} (stream)")
             return Response(
                 content=body_bytes,
@@ -459,10 +502,7 @@ async def chat_completions(request: Request):
                     yield chunk
             finally:
                 await resp.aclose()
-                if is_long:
-                    long_req_release(target, is_overflow)
-                else:
-                    short_req_release(target)
+                release()
 
         return StreamingResponse(
             gen(),
@@ -472,38 +512,24 @@ async def chat_completions(request: Request):
         )
     else:
         try:
-            resp = await http_client.post(
-                f"{target}/v1/chat/completions",
-                json=body,
-                headers=upstream_headers,
+            if resp.status_code != 200:
+                logger.warning(f"上游非200: target={target} status={resp.status_code}")
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type="application/json",
+                headers=extra_headers,
             )
         finally:
-            if is_long:
-                long_req_release(target, is_overflow)
-            else:
-                short_req_release(target)
-        if resp.status_code != 200:
-            logger.warning(f"上游非200: target={target} status={resp.status_code}")
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            media_type="application/json",
-            headers=extra_headers,
-        )
+            release()
 
 
 @app.post("/v1/messages/count_tokens")
 async def count_tokens(request: Request):
-    """本地粗略预估 input_tokens，按中文字符占比动态调整系数。"""
+    """本地粗略预估 input_tokens，与路由分流共用同一套 CJK 感知估算逻辑。"""
     body = await request.json()
-    text = json.dumps(body, ensure_ascii=False)
-
-    cjk = sum(1 for c in text if '一' <= c <= '鿿')
-    ratio = cjk / len(text) if text else 0
-    divisor = 4 - 2 * ratio  # ratio=0 → 4，ratio=1 → 2
-    tokens = max(int(len(text) / divisor), 1)
-
-    logger.info(f"👉 count_tokens 本地预估 input_tokens={tokens} (中文占比 {ratio:.0%})")
+    tokens = estimate_tokens(body)
+    logger.info(f"👉 count_tokens 本地预估 input_tokens={tokens}")
     return {"input_tokens": tokens}
 
 
