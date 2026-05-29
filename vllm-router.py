@@ -416,7 +416,7 @@ async def _send_upstream(
         except _RETRYABLE_CONN_ERRORS as e:
             last_exc = e
             logger.warning(
-                f"上游连接失败，重试 {attempt + 1}/{UPSTREAM_CONNECT_RETRIES}: "
+                f"上游连接失败 (尝试 {attempt + 1}/{UPSTREAM_CONNECT_RETRIES + 1}): "
                 f"target={target} err={e!r}"
             )
     assert last_exc is not None
