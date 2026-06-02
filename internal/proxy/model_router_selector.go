@@ -27,11 +27,17 @@ import (
 //  3. 规模感知决策 → 最近模型为 big 时直接复用
 type ModelRouterSelector struct {
 	client   *ModelRouterClient
-	redis    *redis.Client // nil = 无缓存，每次均调用 Route()
+	redis    modelRouterRedisClient // nil = 无缓存，每次均调用 Route()
 	querier  ModelSelectorQuerier
 	historyN int
 	redisTTL time.Duration
 	logger   *zap.Logger
+}
+
+type modelRouterRedisClient interface {
+	Get(context.Context, string) *redis.StringCmd
+	Set(context.Context, string, interface{}, time.Duration) *redis.StatusCmd
+	Expire(context.Context, string, time.Duration) *redis.BoolCmd
 }
 
 // ModelSelectorQuerier 是 ModelRouterSelector 对模型信息的查询接口。
@@ -82,7 +88,7 @@ func ModelSelectorQuerierFunc(
 //   - logger:   日志
 func NewModelRouterSelector(
 	client *ModelRouterClient,
-	rdb *redis.Client,
+	rdb modelRouterRedisClient,
 	querier ModelSelectorQuerier,
 	cfg config.ModelRouterConfig,
 	logger *zap.Logger,
@@ -218,6 +224,7 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.Int("history_n", s.historyN),
 			zap.String("model", last),
 		)
+		s.refreshRedisTTL(ctx, sessionID)
 		return SelectModelResult{Model: last, RouterResultStatus: 0, CacheHitScene: 1}, nil
 	}
 
@@ -241,6 +248,7 @@ func (s *ModelRouterSelector) SelectModel(
 			zap.Int("history_len", len(history)),
 			zap.Int("history_n", s.historyN),
 		)
+		s.refreshRedisTTL(ctx, sessionID)
 		return SelectModelResult{Model: last, RouterResultStatus: 0, CacheHitScene: 2}, nil
 	}
 
@@ -437,6 +445,7 @@ func (s *ModelRouterSelector) writeRedis(ctx context.Context, sessionID, model s
 			zap.Int("history_len", len(history)),
 			zap.Int("history_n", s.historyN),
 		)
+		s.refreshRedisTTL(ctx, sessionID)
 		return
 	}
 
@@ -464,6 +473,25 @@ func (s *ModelRouterSelector) writeRedis(ctx context.Context, sessionID, model s
 		zap.String("session_id", sessionID),
 		zap.String("model", model),
 		zap.Int("new_history_len", len(history)),
+		zap.Duration("ttl", s.redisTTL),
+	)
+}
+
+// refreshRedisTTL 将 session key 续期到最后一次匹配/复用的时间。
+func (s *ModelRouterSelector) refreshRedisTTL(ctx context.Context, sessionID string) {
+	if s.redis == nil || s.redisTTL <= 0 {
+		return
+	}
+	key := redisKey(sessionID)
+	if err := s.redis.Expire(ctx, key, s.redisTTL).Err(); err != nil {
+		s.logger.Warn("model_router_selector: Redis TTL refresh failed",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+		return
+	}
+	s.logger.Debug("model_router_selector: Redis TTL refreshed",
+		zap.String("session_id", sessionID),
 		zap.Duration("ttl", s.redisTTL),
 	)
 }

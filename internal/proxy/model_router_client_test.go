@@ -155,6 +155,39 @@ func TestGroupProviderFromTargets_EmptyInputs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// model_router input token 估算测试
+// ---------------------------------------------------------------------------
+
+func TestEstimateModelRouterInputTokens_MatchesVLLMRouterMethod(t *testing.T) {
+	body := []byte(`{
+		"system":"你是助手",
+		"messages":[
+			{"role":"user","content":"hello world"},
+			{"role":"assistant","content":[{"type":"text","text":"中文测试"},{"type":"image_url","image_url":{"url":"x"}}]},
+			{"role":"user","content":"run tool","tool_calls":[{"function":{"name":"search","arguments":"{\"q\":\"abc\"}"}}]}
+		],
+		"tools":[{"name":"search","description":"web search","parameters":{"type":"object"}}]
+	}`)
+
+	got, err := estimateModelRouterInputTokens(body)
+	require.NoError(t, err)
+	assert.Greater(t, got, 0)
+
+	cjkOnly, err := estimateModelRouterInputTokens([]byte(`{"messages":[{"content":"中文中文"}]}`))
+	require.NoError(t, err)
+	assert.Equal(t, 2, cjkOnly)
+
+	asciiOnly, err := estimateModelRouterInputTokens([]byte(`{"messages":[{"content":"abcdefghijkl"}]}`))
+	require.NoError(t, err)
+	assert.Equal(t, 3, asciiOnly)
+}
+
+func TestEstimateModelRouterInputTokens_InvalidJSON(t *testing.T) {
+	_, err := estimateModelRouterInputTokens([]byte(`{"messages":`))
+	assert.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
 // resolveModelToTarget 测试
 // ---------------------------------------------------------------------------
 

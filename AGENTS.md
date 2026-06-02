@@ -118,6 +118,7 @@ echo -e "testuser\ntestpass123" | ./cproxy.exe login --server http://localhost:9
 - **异步断言时序**: 不要在 `Start()` 后立即断言异步副作用（如健康状态变化），应等待最终状态或用 `Eventually` 轮询
 - **bodyclose lint**: 测试中 `http.Response` 即使不读 body 也必须 `defer resp.Body.Close()`，否则 `bodyclose` linter 报错
 - **gosimple lint**: `if x != nil && len(x) != 0` 应简化为 `if len(x) != 0`，nil slice 的 len 为 0
+- **Redis session TTL**: 会话缓存如果语义是“最后一次匹配后过期”，所有缓存命中/复用路径都必须刷新 TTL；判满逻辑必须用“已成功写入 N 条后才满”，测试要覆盖第 N 次仍写入、第 N+1 次才复用
 
 ### Concurrency Testing (v2.22.0+ Critical Requirements)
 

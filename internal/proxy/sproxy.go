@@ -94,11 +94,11 @@ type SProxy struct {
 	maxRetries      int                                         // RetryTransport 最大重试次数
 	retryOnStatus   []int                                       // 额外触发 try-next 的 HTTP 状态码（如 [429]）
 
-	debugLogger       atomic.Pointer[zap.Logger] // 可选，非 nil 时将转发内容写入独立 debug 文件
-	modelRouterLogger atomic.Pointer[zap.Logger] // 可选，非 nil 时将 model_router 调用写入独立文件
-	notifier     *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
-	convTracker  atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
-	corpusWriter atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
+	debugLogger       atomic.Pointer[zap.Logger]    // 可选，非 nil 时将转发内容写入独立 debug 文件
+	modelRouterLogger atomic.Pointer[zap.Logger]    // 可选，非 nil 时将 model_router 调用写入独立文件
+	notifier          *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
+	convTracker       atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
+	corpusWriter      atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
 
 	// 配置和数据库（用于 config target sync）
 	cfg          *config.SProxyFullConfig     // 可选，用于同步配置文件中的 LLM targets
@@ -108,8 +108,9 @@ type SProxy struct {
 	// 分组多绑定智能路由（v3.1.0+）
 	// groupMultiBindingFinder: 查询分组的全部 target ID 列表（来自 DB）
 	// modelRouterSelector: 带缓存和多模态感知的模型路由选择器
-	groupMultiBindingFinder func(groupID string) ([]string, error)
-	modelRouterSelector     *ModelRouterSelector
+	groupMultiBindingFinder   func(groupID string) ([]string, error)
+	modelRouterSelector       *ModelRouterSelector
+	modelRouterMaxInputTokens int
 
 	// userActiveChecker 用于 JWT 认证路径的逐请求用户状态校验。
 	// JWT 本身不携带 is_active 状态；不设置此字段时禁用用户的 JWT 在过期前仍可使用。
@@ -151,15 +152,16 @@ func newSProxy(
 		return nil, fmt.Errorf("at least one LLM target is required")
 	}
 	sp := &SProxy{
-		logger:     logger.Named("sproxy"),
-		jwtMgr:     jwtMgr,
-		writer:     writer,
-		targets:    targets,
-		transport:  http.DefaultTransport,
-		clusterMgr: clusterMgr,
-		sourceNode: sourceNode,
-		startTime:  time.Now(),
-		maxRetries: 2,
+		logger:                    logger.Named("sproxy"),
+		jwtMgr:                    jwtMgr,
+		writer:                    writer,
+		targets:                   targets,
+		transport:                 http.DefaultTransport,
+		clusterMgr:                clusterMgr,
+		sourceNode:                sourceNode,
+		startTime:                 time.Now(),
+		maxRetries:                2,
+		modelRouterMaxInputTokens: 96 * 1024,
 	}
 	return sp, nil
 }
@@ -212,6 +214,14 @@ func (sp *SProxy) SetGroupMultiBindingFinder(fn func(groupID string) ([]string, 
 // 仅当分组有多绑定时（≥2 个 target）才被调用，选取最优模型对应的 target。
 func (sp *SProxy) SetModelRouterSelector(s *ModelRouterSelector) {
 	sp.modelRouterSelector = s
+}
+
+// SetModelRouterMaxInputTokens 设置进入 model_router 的最大输入 token 估算值。
+func (sp *SProxy) SetModelRouterMaxInputTokens(n int) {
+	if n <= 0 {
+		n = 96 * 1024
+	}
+	sp.modelRouterMaxInputTokens = n
 }
 
 // SetUserActiveChecker 设置 JWT 认证路径的用户状态校验器。
@@ -1648,46 +1658,62 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 		if !userHasBinding {
 			groupTargetIDs, gErr := sp.groupMultiBindingFinder(claims.GroupID)
 			if gErr == nil && len(groupTargetIDs) >= 2 {
-				enteredModelRouter = true
-
-				// 展开候选模型列表
-				balTargets := sp.llmBalancerTargetsAsLBTargets()
-				candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
-				sessionID := extractSessionID(r, bodyBytes)
-				routerSessionID = forwardSessionID
-
-				// 若组 provider 要求 AtoO，提前转换一次并缓存结果（转换后的 body 同时用于 Router 和转发）。
-				// nil modelMapping：model name 在选定 target 后再通过 applyModelToOpenAIBody 更新，代价极小。
-				routerBody := bodyBytes
-				if groupProvider := groupProviderFromTargets(balTargets, groupTargetIDs); groupProvider != "" {
-					if detectConversionDirection(r.URL.Path, groupProvider) == conversionAtoO {
-						if converted, _, convErr := convertAnthropicToOpenAIRequest(bodyBytes, sp.logger, reqID, nil); convErr == nil {
-							preConvertedBody = converted
-							routerBody = converted
-						}
-					}
+				estimatedInputTokens, estimateErr := estimateModelRouterInputTokens(bodyBytes)
+				if estimateErr != nil {
+					sp.logger.Warn("model_router: input token estimate failed, continuing router flow",
+						zap.String("request_id", reqID),
+						zap.Error(estimateErr),
+					)
 				}
-
-				result, rErr := sp.modelRouterSelector.SelectModel(
-					r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, mrl,
-				)
-				if rErr != nil {
-					routerResultStatus = 2
-					sp.logger.Warn("model_router: routing failed, falling back to first group binding",
+				if estimateErr == nil && estimatedInputTokens > sp.modelRouterMaxInputTokens {
+					sp.logger.Info("model_router: request too large, skipping router",
 						zap.String("request_id", reqID),
 						zap.String("group_id", claims.GroupID),
-						zap.Error(rErr),
+						zap.Int("estimated_input_tokens", estimatedInputTokens),
+						zap.Int("max_input_tokens", sp.modelRouterMaxInputTokens),
 					)
-				} else if result.Model != "" {
-					routerResultStatus = result.RouterResultStatus
-					routerResult = result.RouterRawResponse
-					cacheHitScene = result.CacheHitScene
-					routerBoundOverride = resolveModelToTarget(result.Model, balTargets, groupTargetIDs)
-					sp.logger.Info("model_router: pre-selected target",
-						zap.String("request_id", reqID),
-						zap.String("selected_model", result.Model),
-						zap.String("target_id", routerBoundOverride),
+				} else {
+					enteredModelRouter = true
+
+					// 展开候选模型列表
+					balTargets := sp.llmBalancerTargetsAsLBTargets()
+					candidateModels := expandCandidateModels(balTargets, groupTargetIDs)
+					sessionID := extractSessionID(r, bodyBytes)
+					routerSessionID = forwardSessionID
+
+					// 若组 provider 要求 AtoO，提前转换一次并缓存结果（转换后的 body 同时用于 Router 和转发）。
+					// nil modelMapping：model name 在选定 target 后再通过 applyModelToOpenAIBody 更新，代价极小。
+					routerBody := bodyBytes
+					if groupProvider := groupProviderFromTargets(balTargets, groupTargetIDs); groupProvider != "" {
+						if detectConversionDirection(r.URL.Path, groupProvider) == conversionAtoO {
+							if converted, _, convErr := convertAnthropicToOpenAIRequest(bodyBytes, sp.logger, reqID, nil); convErr == nil {
+								preConvertedBody = converted
+								routerBody = converted
+							}
+						}
+					}
+
+					result, rErr := sp.modelRouterSelector.SelectModel(
+						r.Context(), reqID, claims.UserID, sessionID, routerBody, requestedModel, candidateModels, mrl,
 					)
+					if rErr != nil {
+						routerResultStatus = 2
+						sp.logger.Warn("model_router: routing failed, falling back to first group binding",
+							zap.String("request_id", reqID),
+							zap.String("group_id", claims.GroupID),
+							zap.Error(rErr),
+						)
+					} else if result.Model != "" {
+						routerResultStatus = result.RouterResultStatus
+						routerResult = result.RouterRawResponse
+						cacheHitScene = result.CacheHitScene
+						routerBoundOverride = resolveModelToTarget(result.Model, balTargets, groupTargetIDs)
+						sp.logger.Info("model_router: pre-selected target",
+							zap.String("request_id", reqID),
+							zap.String("selected_model", result.Model),
+							zap.String("target_id", routerBoundOverride),
+						)
+					}
 				}
 			}
 		}

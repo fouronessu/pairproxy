@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/l17728/pairproxy/internal/auth"
+	"github.com/l17728/pairproxy/internal/config"
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/lb"
 	"github.com/stretchr/testify/assert"
@@ -377,6 +378,75 @@ func TestE2E_AutoMode_FullFlow(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "claude-sonnet-4-20250514", receivedModel, "auto should be rewritten to actual model")
+}
+
+func TestE2E_ModelRouter_SkipsLargeInput(t *testing.T) {
+	var backendReceived bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendReceived = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-sonnet-4","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`))
+	}))
+	defer backend.Close()
+
+	var routerCalls int
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routerCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer router.Close()
+
+	logger := zaptest.NewLogger(t)
+	jwtMgr, err := auth.NewManager(logger, "test-secret")
+	require.NoError(t, err)
+
+	gormDB, err := db.Open(logger, ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Migrate(logger, gormDB))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Second)
+	writer.Start(ctx)
+	defer func() { cancel(); writer.Wait() }()
+
+	sp, err := NewSProxy(logger, jwtMgr, writer, []LLMTarget{
+		{ID: "t1", URL: backend.URL, APIKey: "anthropic-key", Provider: "anthropic", Weight: 1},
+		{ID: "t2", URL: "http://unused.example", APIKey: "anthropic-key", Provider: "anthropic", Weight: 1},
+	})
+	require.NoError(t, err)
+	sp.llmBalancer = lb.NewWeightedRandom([]lb.Target{
+		{ID: "t1", Addr: backend.URL, Weight: 1, Healthy: true, SupportedModels: []string{"claude-*"}},
+		{ID: "t2", Addr: "http://unused.example", Weight: 1, Healthy: true, SupportedModels: []string{"claude-*"}},
+	})
+	sp.SetBindingResolver(func(_, groupID string) (string, bool) {
+		if groupID == "" {
+			return "", false
+		}
+		return "t1", true
+	})
+	sp.SetGroupMultiBindingFinder(func(groupID string) ([]string, error) {
+		return []string{"t1", "t2"}, nil
+	})
+	client := NewModelRouterClient(config.ModelRouterConfig{URL: router.URL, Timeout: time.Second}, logger)
+	selector := NewModelRouterSelector(client, nil, fakeModelSelectorQuerier{}, config.ModelRouterConfig{}, logger)
+	sp.SetModelRouterSelector(selector)
+	sp.SetModelRouterMaxInputTokens(10)
+
+	token, err := jwtMgr.Sign(auth.JWTClaims{UserID: "user1", Username: "user1", GroupID: "group1"}, time.Hour)
+	require.NoError(t, err)
+
+	reqBody := `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}],"max_tokens":100}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PairProxy-Auth", token)
+
+	rec := httptest.NewRecorder()
+	sp.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, backendReceived)
+	assert.Equal(t, 0, routerCalls, "large input should not enter model_router")
 }
 
 func TestE2E_SeedThenWebUIUpdate_PreservesChanges(t *testing.T) {

@@ -67,6 +67,7 @@ type ModelRouterConfig struct {
 	URL             string        `yaml:"url"`               // 路由器端点，如 "https://api.router.com/v1/models/router"
 	Timeout         time.Duration `yaml:"timeout"`           // 调用 Router HTTP API 的超时，默认 3s
 	SessionHistoryN int           `yaml:"session_history_n"` // 每个 session 保留的最近模型历史条数，默认 5
+	MaxInputTokens  int           `yaml:"max_input_tokens"`  // 进入 Router 的最大输入 token 估算值，默认 96K
 	Redis           RedisConfig   `yaml:"redis"`             // Redis 缓存配置；Addr 为空时禁用缓存
 }
 
@@ -150,12 +151,12 @@ type CProxyAuth struct {
 
 // LLMConfig s-proxy 上游 LLM 配置
 type LLMConfig struct {
-	LBStrategy     string        `yaml:"lb_strategy"`      // "round_robin"
-	RequestTimeout Duration      `yaml:"request_timeout"`  // 等待 LLM 响应头的超时（不含流式响应体），默认 300s；-1=禁用；支持裸整数（秒）
-	MaxRetries     int           `yaml:"max_retries"`      // 上游失败时最大重试次数（不含首次），默认 2（0=默认）；-1=禁用重试
-	RecoveryDelay  time.Duration `yaml:"recovery_delay"`   // 熔断后自动恢复延迟，默认 60s；0=禁用自动恢复
-	FailThreshold  int           `yaml:"fail_threshold"`   // 被动熔断连续失败阈值，默认 3；达到后将节点移出调度池
-	RetryOnStatus  []int         `yaml:"retry_on_status"`  // 触发 try-next 的额外 HTTP 状态码（如 [429]），默认空=仅重试5xx/连接错误
+	LBStrategy     string        `yaml:"lb_strategy"`     // "round_robin"
+	RequestTimeout Duration      `yaml:"request_timeout"` // 等待 LLM 响应头的超时（不含流式响应体），默认 300s；-1=禁用；支持裸整数（秒）
+	MaxRetries     int           `yaml:"max_retries"`     // 上游失败时最大重试次数（不含首次），默认 2（0=默认）；-1=禁用重试
+	RecoveryDelay  time.Duration `yaml:"recovery_delay"`  // 熔断后自动恢复延迟，默认 60s；0=禁用自动恢复
+	FailThreshold  int           `yaml:"fail_threshold"`  // 被动熔断连续失败阈值，默认 3；达到后将节点移出调度池
+	RetryOnStatus  []int         `yaml:"retry_on_status"` // 触发 try-next 的额外 HTTP 状态码（如 [429]），默认空=仅重试5xx/连接错误
 	Targets        []LLMTarget   `yaml:"targets"`
 }
 

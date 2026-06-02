@@ -100,6 +100,9 @@ log:
 	if cfg.Cluster.Role != "primary" {
 		t.Errorf("Cluster.Role = %q, want primary", cfg.Cluster.Role)
 	}
+	if cfg.ModelRouter.MaxInputTokens != 96*1024 {
+		t.Errorf("ModelRouter.MaxInputTokens = %d, want %d", cfg.ModelRouter.MaxInputTokens, 96*1024)
+	}
 }
 
 func TestEnvVarSubstitution(t *testing.T) {

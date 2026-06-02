@@ -677,9 +677,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 		selector := proxy.NewModelRouterSelector(routerClient, rdb, querier, cfg.ModelRouter, logger)
 		sp.SetModelRouterSelector(selector)
+		sp.SetModelRouterMaxInputTokens(cfg.ModelRouter.MaxInputTokens)
 		logger.Info("model router selector configured",
 			zap.String("url", cfg.ModelRouter.URL),
 			zap.Int("session_history_n", cfg.ModelRouter.SessionHistoryN),
+			zap.Int("max_input_tokens", cfg.ModelRouter.MaxInputTokens),
 		)
 	}
 	adminHandler.SetLLMBindingRepo(llmBindingRepo)
@@ -1056,7 +1058,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// SIGHUP 热重载（Unix/Linux only；Windows 上为 no-op）
 	// 重新加载：log.level 动态切换；debug_file / model_router_file 开关切换；其他字段需重启生效。
-	currentDebugFile := cfg.Log.DebugFile       // 仅在 SIGHUP goroutine 中读写，无需加锁
+	currentDebugFile := cfg.Log.DebugFile // 仅在 SIGHUP goroutine 中读写，无需加锁
 	currentModelRouterFile := cfg.Log.ModelRouterFile
 	sighupCh := make(chan os.Signal, 1)
 	notifySIGHUP(sighupCh)

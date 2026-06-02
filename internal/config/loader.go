@@ -277,6 +277,9 @@ func applySProxyDefaults(cfg *SProxyFullConfig) {
 	if cfg.Corpus.MinOutputTokens == 0 {
 		cfg.Corpus.MinOutputTokens = 50
 	}
+	if cfg.ModelRouter.MaxInputTokens == 0 {
+		cfg.ModelRouter.MaxInputTokens = 96 * 1024
+	}
 	// 设置默认 LLM target 权重
 	for i := range cfg.LLM.Targets {
 		if cfg.LLM.Targets[i].Weight == 0 {
