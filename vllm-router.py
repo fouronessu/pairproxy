@@ -6,14 +6,13 @@ vLLM 长短请求分流路由（带会话亲和性 + 短池空闲借用）
     → 短池，最少总连接数
 
   长请求 (>= SPLIT_THRESHOLD token):
-    1. 会话亲和优先（短池或长池均可）
-       - 亲和节点在长池且健康 → 直接复用
-       - 亲和节点在短池且健康且 short_pool_long_conns < MAX_LONG_OVERFLOW → 复用
-       - 否则重新选
+    1. 真实会话亲和优先（仅 X-Session-ID，不用 X-User-ID 硬绑定）
+       - 亲和节点健康且未明显比最佳候选更忙 → 复用
+       - 亲和节点过载、短池不可溢出或后端故障 → 重新选并迁移绑定
     2. 无亲和（或亲和节点不可用）→ 构建合并候选池：
          长池健康节点
        + 短池健康节点（当且仅当 short_pool_short_conns==0 AND short_pool_long_conns<3）
-       → 候选池中按最少活跃长请求数选实例，绑定会话
+       → 候选池中按 token-aware 等效负载选实例，绑定会话
 
 启动方式:
     pip install fastapi uvicorn httpx
@@ -54,9 +53,18 @@ SPLIT_THRESHOLD = 32768 + 16384  # ≈49K，经验分流点
 
 # 短池作为长请求“备用池”：真实最多承载 MAX_LONG_OVERFLOW 个长请求溢出。
 # 路由比较时（见 _long_load）给短池叠加同等大小的“虚拟基线偏置”，使长池活跃长请求数
-# 涨到 MAX_LONG_OVERFLOW 之前，长请求都优先留在长池；短池等效负载范围 3→6（基线3 + 满载3）。
-# 偏置只用于比较、不写入计数器，因此日志里 short_pool_long_conns / long_active_conns 始终是真实值。
+# 涨到 MAX_LONG_OVERFLOW 附近之前，长请求都优先留在长池。
+# 偏置只用于比较、不写入计数器，因此日志里 short_pool_long_conns / long_active_conns / long_active_tokens 始终是真实值。
 MAX_LONG_OVERFLOW = 3
+
+# 长请求负载不仅看连接数，也按活跃 input token 折算额外压力。
+# 例如 50K prompt 约为 1 个连接 + 1 份 token 压力，150K prompt 约为 1 个连接 + 3 份 token 压力。
+LONG_TOKEN_WEIGHT_UNIT = SPLIT_THRESHOLD
+
+# 会话亲和是软约束：绑定节点负载只要没有明显高于最佳候选，就继续复用以保留 prefix cache。
+# 超过 best * ratio + margin 时打破亲和并迁移，避免单个重度会话/用户把实例打成热点。
+AFFINITY_BREAK_RATIO = 1.50
+AFFINITY_BREAK_MARGIN = 2.0
 
 # 转发给 vLLM 时统一使用的模型名（必须与 --served-model-name 一致）
 VLLM_MODEL_NAME = "MiniMax-M2.7"
@@ -87,14 +95,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("vllm-router")
 
+
+class HealthAccessFilter(logging.Filter):
+    """Suppress noisy /health access logs while keeping other uvicorn access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /health " not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(HealthAccessFilter())
+
 # 全局共享 HTTP client（lifespan 初始化）
 http_client: httpx.AsyncClient | None = None
 
 # 各后端当前活跃总请求数
 active_conns: dict[str, int] = {}
 
-# 各后端当前活跃长请求数（用于长请求合并候选池的最少连接排序）
+# 各后端当前活跃长请求数
 long_active_conns: dict[str, int] = {}
+
+# 各后端当前活跃长请求 input token 总量，用于 token-aware 负载估算
+long_active_tokens: dict[str, int] = {}
 
 # 短池粒度计数（用于溢出门控）
 short_pool_short_conns: int = 0   # 短池中活跃的短请求数
@@ -113,18 +134,20 @@ def short_req_release(backend: str) -> None:
     short_pool_short_conns = max(0, short_pool_short_conns - 1)
 
 
-def long_req_acquire(backend: str, is_overflow: bool) -> None:
+def long_req_acquire(backend: str, est_tokens: int, is_overflow: bool) -> None:
     global short_pool_long_conns
     active_conns[backend] = active_conns.get(backend, 0) + 1
     long_active_conns[backend] = long_active_conns.get(backend, 0) + 1
+    long_active_tokens[backend] = long_active_tokens.get(backend, 0) + est_tokens
     if is_overflow:
         short_pool_long_conns += 1
 
 
-def long_req_release(backend: str, is_overflow: bool) -> None:
+def long_req_release(backend: str, est_tokens: int, is_overflow: bool) -> None:
     global short_pool_long_conns
     active_conns[backend] = max(0, active_conns.get(backend, 0) - 1)
     long_active_conns[backend] = max(0, long_active_conns.get(backend, 0) - 1)
+    long_active_tokens[backend] = max(0, long_active_tokens.get(backend, 0) - est_tokens)
     if is_overflow:
         short_pool_long_conns = max(0, short_pool_long_conns - 1)
 
@@ -198,6 +221,21 @@ healthy_long: set[str] = set()
 _short_pool_set = set(SHORT_POOL)
 
 
+def short_value(value: str | None, limit: int = 24) -> str:
+    if not value:
+        return "-"
+    return value if len(value) <= limit else value[:limit]
+
+
+def request_source(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    if request.client:
+        return request.client.host
+    return "-"
+
+
 # ============================================================
 # 会话 ID 提取（仅用于长请求）
 # ============================================================
@@ -206,13 +244,12 @@ def extract_session_id(request: Request) -> str | None:
     """
     优先级:
     1. X-Session-ID  — sproxy 从 X-Claude-Code-Session-Id 转换透传，精确到单个对话
-    2. X-User-ID     — sproxy 始终透传的用户身份，无会话时做保底亲和（同用户共享前缀缓存）
-    3. None          — 两者均缺失，长请求降级为最少连接数路由，不绑定
+    2. None          — 缺失真实会话时，长请求降级为负载均衡路由，不绑定
+
+    不再使用 X-User-ID 做硬亲和：同一用户可能同时跑多个长上下文任务，用用户级绑定会制造热点。
     """
     if sid := request.headers.get("X-Session-ID"):
         return sid
-    if uid := request.headers.get("X-User-ID"):
-        return f"user:{uid}"
     return None
 
 
@@ -274,12 +311,20 @@ def pick_least_conn(pool: list[str], healthy: set[str]) -> str | None:
     return min(candidates, key=lambda u: active_conns.get(u, 0))
 
 
-def _long_load(u: str) -> int:
-    """长请求选实例用的等效负载：短池叠加 MAX_LONG_OVERFLOW 的虚拟基线偏置，
+def _long_load(u: str) -> float:
+    """长请求选实例用的等效负载：连接数 + 活跃 token 权重；短池叠加 MAX_LONG_OVERFLOW 的虚拟基线偏置，
     使其仅在长池真正繁忙（活跃长请求数追平基线）时才被选中，落实“备用池”语义。
-    偏置只用于比较，不写入 long_active_conns，故日志仍是真实值。"""
+    偏置只用于比较，不写入 long_active_conns / long_active_tokens，故日志仍是真实值。"""
     base = MAX_LONG_OVERFLOW if u in _short_pool_set else 0
-    return long_active_conns.get(u, 0) + base
+    token_load = long_active_tokens.get(u, 0) / LONG_TOKEN_WEIGHT_UNIT
+    return long_active_conns.get(u, 0) + token_load + base
+
+
+def _can_use_affinity(cached: str, best: str) -> bool:
+    """绑定节点没有明显过载时保留亲和；明显过载时迁移到最佳候选。"""
+    cached_load = _long_load(cached)
+    best_load = _long_load(best)
+    return cached_load <= best_load * AFFINITY_BREAK_RATIO + AFFINITY_BREAK_MARGIN
 
 
 def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bool]:
@@ -289,29 +334,17 @@ def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bo
 
     短请求: 短池最少总连接数，不绑定会话。
     长请求:
-      1. 会话亲和优先
-         - 亲和在长池且健康 → 复用
+      1. 软会话亲和优先
+         - 亲和在长池且健康且未明显过载 → 复用
          - 亲和在短池且健康、短池无短请求、未超溢出 cap → 复用
            （短池一旦有短请求，长请求一律回长池，避免拖慢短请求的响应延迟）
       2. 无亲和/亲和失效 → 合并候选池（长池健康节点 + 短池满足溢出条件时）
-         → 按等效长请求负载 _long_load 选实例（短池带虚拟基线偏置，长池不忙时优先长池），绑定会话
+         → 按 token-aware 等效长请求负载 _long_load 选实例（短池带虚拟基线偏置，长池不忙时优先长池），绑定会话
     """
     if est_tokens < SPLIT_THRESHOLD:
         return pick_least_conn(SHORT_POOL, healthy_short), False
 
-    # 阶段一：会话亲和
-    if session_id:
-        cached = session_table.get(session_id)
-        if cached:
-            if cached in healthy_long:
-                return cached, False
-            if cached in healthy_short and cached in _short_pool_set:
-                # 短池只在“无短请求且未超溢出 cap”时才复用亲和；否则长请求回长池
-                if short_pool_short_conns == 0 and short_pool_long_conns < MAX_LONG_OVERFLOW:
-                    return cached, True
-                # 短池有短请求 或 cap 已满，放弃亲和，重新选
-
-    # 阶段二：合并候选池，按等效长请求负载选实例（短池带基线偏置，仅长池繁忙时才被选中）
+    # 阶段一：合并候选池，按等效长请求负载找最佳实例。
     candidates = [u for u in LONG_POOL if u in healthy_long]
     if short_pool_short_conns == 0 and short_pool_long_conns < MAX_LONG_OVERFLOW:
         candidates += [u for u in SHORT_POOL if u in healthy_short]
@@ -319,15 +352,38 @@ def pick_target(est_tokens: int, session_id: str | None) -> tuple[str | None, bo
     if not candidates:
         return None, False
 
-    target = min(candidates, key=_long_load)
+    best = min(candidates, key=_long_load)
+    target = best
+    cached: str | None = None
+    migrated = False
+
+    # 阶段二：软会话亲和。绑定节点仍在候选中且没有明显过载时复用，否则迁移到最佳实例。
+    if session_id:
+        cached = session_table.get(session_id)
+        if cached and cached in candidates:
+            if _can_use_affinity(cached, best):
+                target = cached
+            else:
+                logger.info(
+                    f"迁移绑定: session={session_id[:24]}, from={cached}, to={best}, "
+                    f"from_load={_long_load(cached):.2f}, to_load={_long_load(best):.2f}, tokens≈{est_tokens}"
+                )
+                migrated = True
+
     is_overflow = target in _short_pool_set
 
     if session_id:
         session_table.set(session_id, target)
-        logger.info(
-            f"新绑定: session={session_id[:24]}, target={target}, "
-            f"tokens≈{est_tokens}, overflow={is_overflow}"
-        )
+        if cached is None:
+            logger.info(
+                f"新绑定: session={session_id[:24]}, target={target}, "
+                f"tokens≈{est_tokens}, overflow={is_overflow}"
+            )
+        elif cached not in candidates and not migrated:
+            logger.info(
+                f"重建绑定: session={session_id[:24]}, old={cached}, target={target}, "
+                f"tokens≈{est_tokens}, overflow={is_overflow}"
+            )
     return target, is_overflow
 
 
@@ -362,13 +418,15 @@ async def run_health_checks():
 
     session_table.cleanup_expired()
 
-    logger.info(
+    logger.debug(
         f"状态 - 短池:{len(healthy_short)}/{len(SHORT_POOL)} "
         f"长池:{len(healthy_long)}/{len(LONG_POOL)} "
         f"会话:{session_table.size} "
         f"亲和命中:{session_table.hit_rate:.0%} "
         f"短池[短:{short_pool_short_conns} 溢出:{short_pool_long_conns}/{MAX_LONG_OVERFLOW}] "
-        f"长请求活跃:{dict(long_active_conns)}"
+        f"长请求活跃:{dict(long_active_conns)} "
+        f"长请求tokens:{dict(long_active_tokens)} "
+        f"等效负载:{ {u: round(_long_load(u), 2) for u in LONG_POOL + SHORT_POOL} }"
     )
 
 
@@ -440,6 +498,7 @@ async def _send_upstream(
 async def chat_completions(request: Request):
     body = await request.json()
     est_tokens = estimate_tokens(body)
+    original_model = str(body.get("model", "-"))
 
     is_long = est_tokens >= SPLIT_THRESHOLD
     session_id = extract_session_id(request) if is_long else None
@@ -465,6 +524,7 @@ async def chat_completions(request: Request):
     body["model"] = VLLM_MODEL_NAME
 
     stream = body.get("stream", False)
+    request_kind = "long" if is_long else "short"
 
     # 透传客户端的 Authorization 头，vLLM 如果配置了 --api-key 或 VLLM_API_KEY 环境变量时需要
     upstream_headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -473,13 +533,26 @@ async def chat_completions(request: Request):
 
     # 按请求类型计数
     if is_long:
-        long_req_acquire(target, is_overflow)
+        long_req_acquire(target, est_tokens, is_overflow)
     else:
         short_req_acquire(target)
 
+    target_load = _long_load(target) if is_long else float(active_conns.get(target, 0))
+    route_context = (
+        f"src={request_source(request)} "
+        f"user={short_value(request.headers.get('X-User-ID'))} "
+        f"session={short_value(session_id)} "
+        f"req={short_value(request.headers.get('X-Request-ID') or request.headers.get('X-Request-Id'))} "
+        f"type={request_kind} stream={stream} tokens≈{est_tokens} model={short_value(original_model, 32)} "
+        f"-> target={target} overflow={is_overflow} "
+        f"active={active_conns.get(target, 0)} long_active={long_active_conns.get(target, 0)} "
+        f"long_tokens={long_active_tokens.get(target, 0)} load={target_load:.2f}"
+    )
+    logger.info(f"路由: {route_context}")
+
     def release() -> None:
         if is_long:
-            long_req_release(target, is_overflow)
+            long_req_release(target, est_tokens, is_overflow)
         else:
             short_req_release(target)
 
@@ -488,7 +561,7 @@ async def chat_completions(request: Request):
         resp = await _send_upstream(target, body, upstream_headers, stream)
     except Exception as e:
         release()
-        logger.error(f"上游请求失败: target={target} err={e!r}")
+        logger.error(f"上游请求失败: {route_context} err={e!r}")
         return Response(
             content=json.dumps({"error": "upstream request failed", "detail": str(e)}),
             status_code=502,
@@ -501,7 +574,7 @@ async def chat_completions(request: Request):
             body_bytes = await resp.aread()
             await resp.aclose()
             release()
-            logger.warning(f"上游非200: target={target} status={resp.status_code} (stream)")
+            logger.warning(f"上游非200: {route_context} status={resp.status_code} stream_response=true")
             return Response(
                 content=body_bytes,
                 status_code=resp.status_code,
@@ -526,7 +599,7 @@ async def chat_completions(request: Request):
     else:
         try:
             if resp.status_code != 200:
-                logger.warning(f"上游非200: target={target} status={resp.status_code}")
+                logger.warning(f"上游非200: {route_context} status={resp.status_code}")
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
@@ -591,6 +664,9 @@ async def stats():
             "instances": SHORT_POOL,
             "healthy": list(healthy_short),
             "active_conns": {u: active_conns.get(u, 0) for u in SHORT_POOL},
+            "long_active": {u: long_active_conns.get(u, 0) for u in SHORT_POOL},
+            "long_tokens": {u: long_active_tokens.get(u, 0) for u in SHORT_POOL},
+            "effective_load": {u: round(_long_load(u), 2) for u in SHORT_POOL},
             "short_reqs": short_pool_short_conns,
             "long_overflow": short_pool_long_conns,
             "max_overflow": MAX_LONG_OVERFLOW,
@@ -600,6 +676,8 @@ async def stats():
             "healthy": list(healthy_long),
             "active_conns": {u: active_conns.get(u, 0) for u in LONG_POOL},
             "long_active": {u: long_active_conns.get(u, 0) for u in LONG_POOL},
+            "long_tokens": {u: long_active_tokens.get(u, 0) for u in LONG_POOL},
+            "effective_load": {u: round(_long_load(u), 2) for u in LONG_POOL},
         },
     }
 
