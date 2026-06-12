@@ -778,7 +778,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 			)
 		} else {
 			sp.SetConvTracker(t)
+			sp.SetTrackAllEnabled(cfg.Track.AllEnabled)
 			logger.Info("conversation tracker initialized", zap.String("track_dir", trackDir))
+			if cfg.Track.AllEnabled {
+				logger.Info("track all enabled", zap.String("all_dir", t.AllDir()))
+			}
 		}
 	}
 

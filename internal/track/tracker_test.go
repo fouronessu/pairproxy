@@ -61,6 +61,49 @@ func TestTracker_Enable_Idempotent(t *testing.T) {
 	}
 }
 
+func TestTracker_SaveAllRequest(t *testing.T) {
+	tr := openTestTracker(t)
+
+	body := []byte(`{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}`)
+	if err := tr.SaveAllRequest("req-123", "session-abc", "user-1", body); err != nil {
+		t.Fatalf("SaveAllRequest: %v", err)
+	}
+
+	entries, err := os.ReadDir(tr.AllDir())
+	if err != nil {
+		t.Fatalf("ReadDir all: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("all entries len = %d, want 1", len(entries))
+	}
+
+	data, err := os.ReadFile(filepath.Join(tr.AllDir(), entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile all record: %v", err)
+	}
+	var got struct {
+		SessionID string          `json:"session_id"`
+		UserID    string          `json:"user_id"`
+		Request   json.RawMessage `json:"request"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal all record: %v", err)
+	}
+	if got.SessionID != "session-abc" {
+		t.Errorf("SessionID = %q, want session-abc", got.SessionID)
+	}
+	if got.UserID != "user-1" {
+		t.Errorf("UserID = %q, want user-1", got.UserID)
+	}
+	var req map[string]any
+	if err := json.Unmarshal(got.Request, &req); err != nil {
+		t.Fatalf("Unmarshal request: %v", err)
+	}
+	if req["model"] != "claude-test" {
+		t.Errorf("request.model = %v, want claude-test", req["model"])
+	}
+}
+
 func TestTracker_Disable_NonExistentIsOK(t *testing.T) {
 	tr := openTestTracker(t)
 	// 未 Enable 直接 Disable 不应报错

@@ -57,7 +57,8 @@ type TrackConfig struct {
 	// Dir 跟踪数据根目录。
 	// 默认值：SQLite 模式下为 <database.path 所在目录>/track，peer/postgres 模式下为 ./track。
 	// peer 模式建议显式配置绝对路径，避免依赖进程工作目录。
-	Dir string `yaml:"dir"`
+	Dir        string `yaml:"dir"`
+	AllEnabled bool   `yaml:"all_enabled"` // 启用后将所有用户请求体写入 <track.dir>/all/
 }
 
 // ModelRouterConfig 分组多绑定场景下的 MaaS 模型路由器配置（v3.1.0+）。

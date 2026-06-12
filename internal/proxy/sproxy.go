@@ -98,6 +98,7 @@ type SProxy struct {
 	modelRouterLogger atomic.Pointer[zap.Logger]    // 可选，非 nil 时将 model_router 调用写入独立文件
 	notifier          *alert.Notifier               // 可选，非 nil 时发送 high_load/load_recovered 告警
 	convTracker       atomic.Pointer[track.Tracker] // 可选，非 nil 时记录指定用户对话内容
+	trackAllEnabled   atomic.Bool                   // 启用后将所有用户请求体写入 track/all
 	corpusWriter      atomic.Pointer[corpus.Writer] // 可选，非 nil 时采集训练语料
 
 	// 配置和数据库（用于 config target sync）
@@ -295,6 +296,12 @@ func (sp *SProxy) SyncAndSetModelRouterLogger(l *zap.Logger) {
 // 非 nil 时，对已启用跟踪的用户，每次请求的输入消息和 LLM 回复均会写入文件。
 func (sp *SProxy) SetConvTracker(t *track.Tracker) {
 	sp.convTracker.Store(t)
+}
+
+// SetTrackAllEnabled 设置全量请求跟踪开关。
+// 启用后不依赖 per-user track marker，每个代理请求的原始请求体都会写入 <track.dir>/all/。
+func (sp *SProxy) SetTrackAllEnabled(enabled bool) {
+	sp.trackAllEnabled.Store(enabled)
 }
 
 // SetCorpusWriter 设置训练语料采集写入器。
@@ -1509,6 +1516,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// OpenAI 兼容：同时在此阶段注入 stream_options（无论是否有 quotaChecker）
 	var bodyBytes []byte
 	needBodyRead := sp.quotaChecker != nil ||
+		sp.trackAllEnabled.Load() ||
 		strings.HasPrefix(r.URL.Path, "/v1/chat/completions") ||
 		strings.HasPrefix(r.URL.Path, "/v1/messages")
 
@@ -1629,6 +1637,22 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			)
 		} else {
 			forwardSessionID = sid
+		}
+	}
+
+	if sp.trackAllEnabled.Load() {
+		if t := sp.convTracker.Load(); t != nil {
+			trackReqBody := bodyBytes
+			if debugReqBody != nil {
+				trackReqBody = debugReqBody
+			}
+			if err := t.SaveAllRequest(reqID, forwardSessionID, claims.UserID, trackReqBody); err != nil {
+				sp.logger.Warn("track all: failed to save request",
+					zap.String("request_id", reqID),
+					zap.String("user_id", claims.UserID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 

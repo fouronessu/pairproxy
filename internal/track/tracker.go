@@ -12,10 +12,13 @@
 package track
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Tracker 管理每用户跟踪状态（基于文件系统标记文件）。
@@ -27,7 +30,7 @@ type Tracker struct {
 // New 创建 Tracker 并确保目录结构存在。
 // dir 为跟踪根目录，如果目录不存在会自动创建。
 func New(dir string) (*Tracker, error) {
-	for _, sub := range []string{usersDir(dir), convsDir(dir)} {
+	for _, sub := range []string{usersDir(dir), convsDir(dir), allDir(dir)} {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			return nil, err
 		}
@@ -99,12 +102,56 @@ func (t *Tracker) UserConvDir(username string) string {
 	return userConvDir(t.dir, username)
 }
 
+// AllDir 返回全量请求记录目录路径。
+func (t *Tracker) AllDir() string {
+	return allDir(t.dir)
+}
+
+// AllRequestRecord 是 track.all_enabled 写入磁盘的全量请求记录格式。
+type AllRequestRecord struct {
+	SessionID string          `json:"session_id"`
+	UserID    string          `json:"user_id"`
+	Request   json.RawMessage `json:"request"`
+}
+
+// SaveAllRequest 将一次用户请求写入 <track.dir>/all/。
+// requestBody 必须是 JSON object；空或解析失败时写入 {}，保证 request 字段类型稳定。
+func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBody []byte) error {
+	req := json.RawMessage(`{}`)
+	if len(requestBody) > 0 && json.Valid(requestBody) {
+		var obj map[string]any
+		if err := json.Unmarshal(requestBody, &obj); err == nil && obj != nil {
+			req = append(json.RawMessage(nil), requestBody...)
+		}
+	}
+
+	data, err := json.Marshal(AllRequestRecord{
+		SessionID: sessionID,
+		UserID:    userID,
+		Request:   req,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(allDir(t.dir), 0o755); err != nil {
+		return err
+	}
+	ts := time.Now().UTC().Format("2006-01-02T15-04-05Z")
+	if requestID == "" {
+		requestID = "unknown"
+	}
+	path := filepath.Join(allDir(t.dir), fmt.Sprintf("%s-%s.json", ts, requestID))
+	return os.WriteFile(path, data, 0o644)
+}
+
 // ---------------------------------------------------------------------------
 // 内部路径工具
 // ---------------------------------------------------------------------------
 
-func usersDir(root string) string       { return filepath.Join(root, "users") }
-func convsDir(root string) string       { return filepath.Join(root, "conversations") }
+func usersDir(root string) string         { return filepath.Join(root, "users") }
+func convsDir(root string) string         { return filepath.Join(root, "conversations") }
+func allDir(root string) string           { return filepath.Join(root, "all") }
 func markerPath(root, user string) string { return filepath.Join(usersDir(root), user) }
 func userConvDir(root, user string) string {
 	return filepath.Join(convsDir(root), user)

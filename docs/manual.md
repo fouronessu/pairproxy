@@ -3415,12 +3415,15 @@ llm:
 ```yaml
 track:
   dir: "/data/pairproxy/track"   # 使用有写权限的绝对路径
+  all_enabled: false             # true 时额外保存所有用户请求到 <track.dir>/all/
 ```
 
 目录结构：
 
 ```
 <track.dir>/
+  all/
+    2026-03-07T12-34-56Z-req-abc123.json  ← all_enabled 全量请求记录
   users/
     alice          ← 标记文件（空文件，存在即表示 alice 已启用跟踪）
   conversations/

@@ -79,6 +79,9 @@ cluster:
   alert_threshold: 80
 log:
   level: info
+track:
+  dir: "./track"
+  all_enabled: true
 `
 	path := writeTempFile(t, yaml)
 	cfg, missing, err := LoadSProxyConfig(path)
@@ -102,6 +105,9 @@ log:
 	}
 	if cfg.ModelRouter.MaxInputTokens != 96*1024 {
 		t.Errorf("ModelRouter.MaxInputTokens = %d, want %d", cfg.ModelRouter.MaxInputTokens, 96*1024)
+	}
+	if !cfg.Track.AllEnabled {
+		t.Error("Track.AllEnabled = false, want true")
 	}
 }
 
