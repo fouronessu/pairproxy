@@ -1489,6 +1489,7 @@ func (sp *SProxy) buildRetryTransport(userID, groupID, effectivePath, requestedM
 //  4. 反向代理到 LLM
 //  5. （sp-1 模式）在响应中注入路由表更新头
 func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
+	requestReceivedAt := time.Now()
 	reqID := RequestIDFromContext(r.Context())
 	claims := ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -1646,7 +1647,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			if debugReqBody != nil {
 				trackReqBody = debugReqBody
 			}
-			if err := t.SaveAllRequest(reqID, forwardSessionID, claims.UserID, trackReqBody); err != nil {
+			if err := t.SaveAllRequest(reqID, forwardSessionID, claims.UserID, trackReqBody, requestReceivedAt); err != nil {
 				sp.logger.Warn("track all: failed to save request",
 					zap.String("request_id", reqID),
 					zap.String("user_id", claims.UserID),

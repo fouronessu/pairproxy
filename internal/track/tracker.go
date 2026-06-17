@@ -109,6 +109,7 @@ func (t *Tracker) AllDir() string {
 
 // AllRequestRecord 是 track.all_enabled 写入磁盘的全量请求记录格式。
 type AllRequestRecord struct {
+	CreatedAt string          `json:"created_at"`
 	SessionID string          `json:"session_id"`
 	UserID    string          `json:"user_id"`
 	Request   json.RawMessage `json:"request"`
@@ -116,7 +117,7 @@ type AllRequestRecord struct {
 
 // SaveAllRequest 将一次用户请求写入 <track.dir>/all/。
 // requestBody 必须是 JSON object；空或解析失败时写入 {}，保证 request 字段类型稳定。
-func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBody []byte) error {
+func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBody []byte, createdAt time.Time) error {
 	req := json.RawMessage(`{}`)
 	if len(requestBody) > 0 && json.Valid(requestBody) {
 		var obj map[string]any
@@ -125,7 +126,13 @@ func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBod
 		}
 	}
 
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	createdAt = createdAt.UTC().Truncate(time.Millisecond)
+
 	data, err := json.Marshal(AllRequestRecord{
+		CreatedAt: createdAt.Format("2006-01-02T15:04:05.000Z"),
 		SessionID: sessionID,
 		UserID:    userID,
 		Request:   req,

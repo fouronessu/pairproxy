@@ -65,7 +65,8 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 	tr := openTestTracker(t)
 
 	body := []byte(`{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}`)
-	if err := tr.SaveAllRequest("req-123", "session-abc", "user-1", body); err != nil {
+	createdAt := time.Date(2026, 6, 16, 12, 34, 56, 789123456, time.FixedZone("UTC+8", 8*60*60))
+	if err := tr.SaveAllRequest("req-123", "session-abc", "user-1", body, createdAt); err != nil {
 		t.Fatalf("SaveAllRequest: %v", err)
 	}
 
@@ -82,12 +83,16 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 		t.Fatalf("ReadFile all record: %v", err)
 	}
 	var got struct {
+		CreatedAt string          `json:"created_at"`
 		SessionID string          `json:"session_id"`
 		UserID    string          `json:"user_id"`
 		Request   json.RawMessage `json:"request"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal all record: %v", err)
+	}
+	if got.CreatedAt != "2026-06-16T04:34:56.789Z" {
+		t.Errorf("CreatedAt = %q, want 2026-06-16T04:34:56.789Z", got.CreatedAt)
 	}
 	if got.SessionID != "session-abc" {
 		t.Errorf("SessionID = %q, want session-abc", got.SessionID)
