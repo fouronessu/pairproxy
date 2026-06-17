@@ -70,15 +70,16 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 		t.Fatalf("SaveAllRequest: %v", err)
 	}
 
-	entries, err := os.ReadDir(tr.AllDir())
+	hourDir := filepath.Join(tr.AllDir(), "2026-06-16T04")
+	entries, err := os.ReadDir(hourDir)
 	if err != nil {
-		t.Fatalf("ReadDir all: %v", err)
+		t.Fatalf("ReadDir all hour: %v", err)
 	}
 	if len(entries) != 1 {
-		t.Fatalf("all entries len = %d, want 1", len(entries))
+		t.Fatalf("all hour entries len = %d, want 1", len(entries))
 	}
 
-	data, err := os.ReadFile(filepath.Join(tr.AllDir(), entries[0].Name()))
+	data, err := os.ReadFile(filepath.Join(hourDir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("ReadFile all record: %v", err)
 	}

@@ -115,7 +115,7 @@ type AllRequestRecord struct {
 	Request   json.RawMessage `json:"request"`
 }
 
-// SaveAllRequest 将一次用户请求写入 <track.dir>/all/。
+// SaveAllRequest 将一次用户请求写入 <track.dir>/all/YYYY-MM-DDTHH/。
 // requestBody 必须是 JSON object；空或解析失败时写入 {}，保证 request 字段类型稳定。
 func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBody []byte, createdAt time.Time) error {
 	req := json.RawMessage(`{}`)
@@ -141,14 +141,15 @@ func (t *Tracker) SaveAllRequest(requestID, sessionID, userID string, requestBod
 		return err
 	}
 
-	if err := os.MkdirAll(allDir(t.dir), 0o755); err != nil {
+	hourDir := filepath.Join(allDir(t.dir), createdAt.Format("2006-01-02T15"))
+	if err := os.MkdirAll(hourDir, 0o755); err != nil {
 		return err
 	}
 	ts := time.Now().UTC().Format("2006-01-02T15-04-05Z")
 	if requestID == "" {
 		requestID = "unknown"
 	}
-	path := filepath.Join(allDir(t.dir), fmt.Sprintf("%s-%s.json", ts, requestID))
+	path := filepath.Join(hourDir, fmt.Sprintf("%s-%s.json", ts, requestID))
 	return os.WriteFile(path, data, 0o644)
 }
 
