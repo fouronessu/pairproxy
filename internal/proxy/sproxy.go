@@ -1647,7 +1647,7 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			if debugReqBody != nil {
 				trackReqBody = debugReqBody
 			}
-			if err := t.SaveAllRequest(reqID, forwardSessionID, claims.UserID, trackReqBody, requestReceivedAt); err != nil {
+			if err := t.SaveAllRequest(reqID, forwardSessionID, claims.UserID, r.URL.Path, trackReqBody, requestReceivedAt); err != nil {
 				sp.logger.Warn("track all: failed to save request",
 					zap.String("request_id", reqID),
 					zap.String("user_id", claims.UserID),

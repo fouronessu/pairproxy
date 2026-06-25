@@ -66,11 +66,11 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 
 	body := []byte(`{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}`)
 	createdAt := time.Date(2026, 6, 16, 12, 34, 56, 789123456, time.FixedZone("UTC+8", 8*60*60))
-	if err := tr.SaveAllRequest("req-123", "session-abc", "user-1", body, createdAt); err != nil {
+	if err := tr.SaveAllRequest("req-123", "session-abc", "user-1", "/v1/messages", body, createdAt); err != nil {
 		t.Fatalf("SaveAllRequest: %v", err)
 	}
 
-	hourDir := filepath.Join(tr.AllDir(), "2026-06-16T04")
+	hourDir := filepath.Join(tr.AllDir(), "2026-06-16_12")
 	entries, err := os.ReadDir(hourDir)
 	if err != nil {
 		t.Fatalf("ReadDir all hour: %v", err)
@@ -78,28 +78,36 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("all hour entries len = %d, want 1", len(entries))
 	}
+	wantName := "2026-06-16_12-34-56_req-123.json"
+	if entries[0].Name() != wantName {
+		t.Fatalf("all record filename = %q, want %q", entries[0].Name(), wantName)
+	}
 
 	data, err := os.ReadFile(filepath.Join(hourDir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("ReadFile all record: %v", err)
 	}
 	var got struct {
-		CreatedAt string          `json:"created_at"`
-		SessionID string          `json:"session_id"`
-		UserID    string          `json:"user_id"`
-		Request   json.RawMessage `json:"request"`
+		CreatedAt   string          `json:"created_at"`
+		SessionID   string          `json:"session_id"`
+		UserID      string          `json:"user_id"`
+		RequestPath string          `json:"request_path"`
+		Request     json.RawMessage `json:"request"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal all record: %v", err)
 	}
-	if got.CreatedAt != "2026-06-16T04:34:56.789Z" {
-		t.Errorf("CreatedAt = %q, want 2026-06-16T04:34:56.789Z", got.CreatedAt)
+	if got.CreatedAt != "2026-06-16_12:34:56.789" {
+		t.Errorf("CreatedAt = %q, want 2026-06-16_12:34:56.789", got.CreatedAt)
 	}
 	if got.SessionID != "session-abc" {
 		t.Errorf("SessionID = %q, want session-abc", got.SessionID)
 	}
 	if got.UserID != "user-1" {
 		t.Errorf("UserID = %q, want user-1", got.UserID)
+	}
+	if got.RequestPath != "/v1/messages" {
+		t.Errorf("RequestPath = %q, want /v1/messages", got.RequestPath)
 	}
 	var req map[string]any
 	if err := json.Unmarshal(got.Request, &req); err != nil {
