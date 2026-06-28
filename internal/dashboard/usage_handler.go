@@ -263,10 +263,11 @@ func (h *Handler) handleDashboardUserLogs(w http.ResponseWriter, r *http.Request
 		ActualModel  string  `json:"actual_model"`
 		InputTokens  int     `json:"input_tokens"`
 		OutputTokens int     `json:"output_tokens"`
-		CostUSD      float64 `json:"cost_usd"`
 		StatusCode   int     `json:"status_code"`
 		IsStreaming  bool    `json:"is_streaming"`
 		DurationMs   int64   `json:"duration_ms"`
+		TtftMs       int64   `json:"ttft_ms"`
+		TpotMs       float64 `json:"tpot_ms"`
 		RequestPath  string  `json:"request_path"`
 		ErrorBody    string  `json:"error_body"`
 	}
@@ -279,10 +280,11 @@ func (h *Handler) handleDashboardUserLogs(w http.ResponseWriter, r *http.Request
 			ActualModel:  l.ActualModel,
 			InputTokens:  l.InputTokens,
 			OutputTokens: l.OutputTokens,
-			CostUSD:      l.CostUSD,
 			StatusCode:   l.StatusCode,
 			IsStreaming:  l.IsStreaming,
 			DurationMs:   l.DurationMs,
+			TtftMs:       l.TtftMs,
+			TpotMs:       l.TpotMs,
 			RequestPath:  l.RequestPath,
 			ErrorBody:    l.ErrorBody,
 		})
