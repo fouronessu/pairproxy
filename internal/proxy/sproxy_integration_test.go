@@ -15,7 +15,6 @@ import (
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/tap"
-	"github.com/l17728/pairproxy/internal/tokenizer"
 )
 
 // newIntegrationSProxy 创建一个完整的 SProxy（带内存 DB 和 UsageWriter）。
@@ -126,7 +125,10 @@ func TestAnthropicCountTokensHandledLocally(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	want := tokenizer.EstimateInputTokens(body, "/v1/messages/count_tokens")
+	want, err := estimateModelRouterInputTokens(body)
+	if err != nil {
+		t.Fatalf("estimateModelRouterInputTokens: %v", err)
+	}
 	if resp.InputTokens != want {
 		t.Fatalf("input_tokens = %d, want %d", resp.InputTokens, want)
 	}
@@ -156,6 +158,27 @@ func TestAnthropicCountTokensHandledLocally(t *testing.T) {
 	}
 	if log.Model != "claude-3-5-sonnet" {
 		t.Fatalf("Model = %q, want claude-3-5-sonnet", log.Model)
+	}
+}
+
+func TestAnthropicCountTokensUsesFastEstimator(t *testing.T) {
+	var sb strings.Builder
+	for i := 0; i < 200000; i++ {
+		sb.WriteByte('a')
+	}
+	body := []byte(`{"messages":[{"role":"user","content":"` + sb.String() + `"}]}`)
+
+	start := time.Now()
+	tokens, err := estimateModelRouterInputTokens(body)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("estimateModelRouterInputTokens: %v", err)
+	}
+	if tokens == 0 {
+		t.Fatal("expected positive token estimate")
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("fast count_tokens estimator took %s, want <= 200ms", elapsed)
 	}
 }
 

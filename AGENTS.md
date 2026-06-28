@@ -445,6 +445,10 @@ This outputs all commands with syntax, flags, examples, and natural language tri
 
 **原则**：一次痛苦只允许发生一次。发现问题的成本已经付出，不把它转化为系统性防护是对这笔成本的浪费。
 
+### Token 估算热路径性能规则
+
+`/v1/messages/count_tokens`、Model Router 分流、长短请求路由等高频预估路径必须使用 `estimateModelRouterInputTokens` 这类字符级快速估算，保持与 `vllm-router.py` 的 CJK 感知粗估口径一致；不得接入 `tiktoken-go` 精确编码器热路径。`tiktoken-go` 首次初始化可能读取/下载 cl100k 词表，大请求逐 token encode 也会显著放大延迟，只适合失败请求补记等非阻塞统计兜底。新增 count_tokens/路由预估逻辑必须包含大文本性能回归测试。
+
 ## Pre-commit Checklist
 
 - `make fmt` — format code

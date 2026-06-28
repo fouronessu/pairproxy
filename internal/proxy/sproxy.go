@@ -34,7 +34,6 @@ import (
 	"github.com/l17728/pairproxy/internal/metrics"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/tap"
-	"github.com/l17728/pairproxy/internal/tokenizer"
 	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
 )
@@ -1437,7 +1436,15 @@ func isAnthropicCountTokensPath(path string) bool {
 }
 
 func (sp *SProxy) handleCountTokens(w http.ResponseWriter, r *http.Request, body []byte, reqID string, claims *auth.JWTClaims, startedAt time.Time) {
-	inputTokens := tokenizer.EstimateInputTokens(body, r.URL.Path)
+	inputTokens, estimateErr := estimateModelRouterInputTokens(body)
+	if estimateErr != nil {
+		sp.logger.Warn("count_tokens: token estimate failed, returning zero",
+			zap.String("request_id", reqID),
+			zap.String("user_id", claims.UserID),
+			zap.Error(estimateErr),
+		)
+		inputTokens = 0
+	}
 	durationMs := time.Since(startedAt).Milliseconds()
 	sp.logger.Info("count_tokens handled locally",
 		zap.String("request_id", reqID),
