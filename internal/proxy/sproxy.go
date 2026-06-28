@@ -34,6 +34,7 @@ import (
 	"github.com/l17728/pairproxy/internal/metrics"
 	"github.com/l17728/pairproxy/internal/quota"
 	"github.com/l17728/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/tokenizer"
 	"github.com/l17728/pairproxy/internal/track"
 	"github.com/l17728/pairproxy/internal/version"
 )
@@ -1431,6 +1432,47 @@ func isLLMCompletionPath(path string) bool {
 		strings.Contains(path, "chat/completions")
 }
 
+func isAnthropicCountTokensPath(path string) bool {
+	return path == "/v1/messages/count_tokens"
+}
+
+func (sp *SProxy) handleCountTokens(w http.ResponseWriter, r *http.Request, body []byte, reqID string, claims *auth.JWTClaims, startedAt time.Time) {
+	inputTokens := tokenizer.EstimateInputTokens(body, r.URL.Path)
+	durationMs := time.Since(startedAt).Milliseconds()
+	sp.logger.Info("count_tokens handled locally",
+		zap.String("request_id", reqID),
+		zap.String("user_id", claims.UserID),
+		zap.Int("input_tokens", inputTokens),
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	statusCode := http.StatusOK
+	if err := json.NewEncoder(w).Encode(map[string]int{"input_tokens": inputTokens}); err != nil {
+		statusCode = http.StatusInternalServerError
+		sp.logger.Error("count_tokens: encode response failed",
+			zap.String("request_id", reqID),
+			zap.Error(err),
+		)
+	}
+
+	if sp.writer != nil {
+		sp.writer.Record(db.UsageRecord{
+			RequestID:    reqID,
+			UserID:       claims.UserID,
+			Model:        extractModelFromBody(body),
+			InputTokens:  inputTokens,
+			OutputTokens: 0,
+			IsStreaming:  false,
+			StatusCode:   statusCode,
+			DurationMs:   durationMs,
+			SourceNode:   sp.sourceNode,
+			ClientIP:     extractClientIP(r),
+			RequestPath:  r.URL.Path,
+			CreatedAt:    time.Now().UTC(),
+		})
+	}
+}
+
 // preferredProvidersByPath 根据 API 路径返回期望的 provider 集合。
 func preferredProvidersByPath(path string) map[string]bool {
 	switch {
@@ -1570,6 +1612,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			r.ContentLength = int64(len(bodyBytes))
 		}
+	}
+
+	if isAnthropicCountTokensPath(r.URL.Path) {
+		sp.handleCountTokens(w, r, bodyBytes, reqID, claims, requestReceivedAt)
+		return
 	}
 
 	if sp.quotaChecker != nil {

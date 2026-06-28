@@ -15,6 +15,7 @@ import (
 	"github.com/l17728/pairproxy/internal/auth"
 	"github.com/l17728/pairproxy/internal/db"
 	"github.com/l17728/pairproxy/internal/tap"
+	"github.com/l17728/pairproxy/internal/tokenizer"
 )
 
 // newIntegrationSProxy 创建一个完整的 SProxy（带内存 DB 和 UsageWriter）。
@@ -64,6 +65,98 @@ func signToken(t *testing.T, mgr *auth.Manager, userID, username string) string 
 		t.Fatalf("Sign: %v", err)
 	}
 	return token
+}
+
+func TestAnthropicCountTokensHandledLocally(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	jwtMgr, _ := auth.NewManager(logger, "secret")
+
+	gormDB, err := db.Open(logger, ":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.Migrate(logger, gormDB); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := db.NewUsageWriter(gormDB, logger, 100, time.Minute)
+	writer.Start(ctx)
+	defer func() {
+		cancel()
+		writer.Wait()
+	}()
+
+	upstreamHit := false
+	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		http.Error(w, "count_tokens should not be proxied", http.StatusTeapot)
+	}))
+	defer mockLLM.Close()
+
+	sp, err := NewSProxy(logger, jwtMgr, writer, []LLMTarget{{URL: mockLLM.URL, APIKey: "key"}})
+	if err != nil {
+		t.Fatalf("NewSProxy: %v", err)
+	}
+
+	body := []byte(`{
+		"model":"claude-3-5-sonnet",
+		"system":"You are concise.",
+		"messages":[{"role":"user","content":"Hello, count these tokens."}],
+		"tools":[{"name":"lookup","description":"Lookup facts","input_schema":{"type":"object"}}]
+	}`)
+	token := signToken(t, jwtMgr, "user-count-tokens", "count-tokens")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PairProxy-Auth", token)
+
+	rr := httptest.NewRecorder()
+	sp.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if upstreamHit {
+		t.Fatal("/v1/messages/count_tokens should be handled locally, but upstream was called")
+	}
+
+	var resp struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := tokenizer.EstimateInputTokens(body, "/v1/messages/count_tokens")
+	if resp.InputTokens != want {
+		t.Fatalf("input_tokens = %d, want %d", resp.InputTokens, want)
+	}
+
+	cancel()
+	writer.Wait()
+	repo := db.NewUsageRepo(gormDB, logger)
+	logs, err := repo.Query(db.UsageFilter{UserID: "user-count-tokens", Limit: 10})
+	if err != nil {
+		t.Fatalf("query usage logs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 count_tokens usage log, got %d", len(logs))
+	}
+	log := logs[0]
+	if log.RequestPath != "/v1/messages/count_tokens" {
+		t.Fatalf("RequestPath = %q, want /v1/messages/count_tokens", log.RequestPath)
+	}
+	if log.InputTokens != want {
+		t.Fatalf("InputTokens = %d, want %d", log.InputTokens, want)
+	}
+	if log.OutputTokens != 0 {
+		t.Fatalf("OutputTokens = %d, want 0", log.OutputTokens)
+	}
+	if log.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200", log.StatusCode)
+	}
+	if log.Model != "claude-3-5-sonnet" {
+		t.Fatalf("Model = %q, want claude-3-5-sonnet", log.Model)
+	}
 }
 
 // ---------------------------------------------------------------------------

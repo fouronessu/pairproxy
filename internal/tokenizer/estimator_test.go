@@ -79,6 +79,38 @@ func TestEstimateInputTokens_ArrayContent(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokens_IncludesToolsAndToolCalls(t *testing.T) {
+	withoutTools := []byte(`{
+		"model": "glm-4",
+		"messages": [
+			{"role": "user", "content": "Find the weather."}
+		]
+	}`)
+	withTools := []byte(`{
+		"model": "glm-4",
+		"messages": [
+			{"role": "user", "content": "Find the weather."},
+			{"role": "assistant", "content": "", "tool_calls": [{
+				"function": {"name": "get_weather", "arguments": "{\"city\":\"Shanghai\"}"}
+			}]}
+		],
+		"tools": [{
+			"type": "function",
+			"function": {
+				"name": "get_weather",
+				"description": "Get current weather for a city",
+				"parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+			}
+		}]
+	}`)
+
+	base := EstimateInputTokens(withoutTools, "/v1/chat/completions")
+	withToolTokens := EstimateInputTokens(withTools, "/v1/chat/completions")
+	if withToolTokens <= base {
+		t.Fatalf("expected tools/tool_calls to increase token estimate, base=%d with_tools=%d", base, withToolTokens)
+	}
+}
+
 func TestEstimateInputTokens_EmptyBody(t *testing.T) {
 	n := EstimateInputTokens(nil, "/v1/messages")
 	if n != 0 {

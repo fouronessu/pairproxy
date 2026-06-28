@@ -64,8 +64,9 @@ func EstimateInputTokens(body []byte, path string) int {
 // ── Anthropic 格式解析 (/v1/messages) ────────────────────────────────────────
 
 type anthropicRequest struct {
-	System   json.RawMessage  `json:"system"`
-	Messages []anthropicMsg   `json:"messages"`
+	System   json.RawMessage   `json:"system"`
+	Messages []anthropicMsg    `json:"messages"`
+	Tools    []json.RawMessage `json:"tools"`
 }
 
 type anthropicMsg struct {
@@ -86,17 +87,29 @@ func extractAnthropicTexts(body []byte) []string {
 			texts = append(texts, t)
 		}
 	}
+	texts = appendRawJSONTexts(texts, req.Tools)
 	return texts
 }
 
 // ── OpenAI 格式解析 (/v1/chat/completions) ───────────────────────────────────
 
 type openAIRequest struct {
-	Messages []openAIMsg `json:"messages"`
+	Messages []openAIMsg       `json:"messages"`
+	Tools    []json.RawMessage `json:"tools"`
 }
 
 type openAIMsg struct {
-	Content json.RawMessage `json:"content"`
+	Content   json.RawMessage  `json:"content"`
+	ToolCalls []openAIToolCall `json:"tool_calls"`
+}
+
+type openAIToolCall struct {
+	Function openAIFunctionCall `json:"function"`
+}
+
+type openAIFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 func extractOpenAITexts(body []byte) []string {
@@ -109,7 +122,16 @@ func extractOpenAITexts(body []byte) []string {
 		if t := extractRawText(m.Content); t != "" {
 			texts = append(texts, t)
 		}
+		for _, tc := range m.ToolCalls {
+			if tc.Function.Name != "" {
+				texts = append(texts, tc.Function.Name)
+			}
+			if tc.Function.Arguments != "" {
+				texts = append(texts, tc.Function.Arguments)
+			}
+		}
 	}
+	texts = appendRawJSONTexts(texts, req.Tools)
 	return texts
 }
 
@@ -143,6 +165,20 @@ func extractRawText(raw json.RawMessage) string {
 		}
 	}
 	return sb.String()
+}
+
+func appendRawJSONTexts(texts []string, raws []json.RawMessage) []string {
+	for _, raw := range raws {
+		if len(raw) == 0 {
+			continue
+		}
+		if compact, err := json.Marshal(json.RawMessage(raw)); err == nil {
+			texts = append(texts, string(compact))
+		} else {
+			texts = append(texts, string(raw))
+		}
+	}
+	return texts
 }
 
 // ── 降级：字符数估算 ─────────────────────────────────────────────────────────
