@@ -18,18 +18,18 @@ import (
 // llmPageData LLM 管理页数据
 type llmPageData struct {
 	baseData
-	Targets        []proxy.LLMTargetStatus
-	AllTargets     []llmTargetWithMeta // 合并后的目标列表（含 Source/IsEditable）
-	Bindings       []db.LLMBinding
-	BindingsJSON   htmpl.JS          // pre-serialized JSON for client-side pagination (safe, no HTML escaping)
-	BoundCount     map[string]int    // target URL → 绑定数量
-	UserIDToName   map[string]string // user ID → username（用于绑定列表显示）
-	GroupIDToName  map[string]string // group ID → group name
-	Users          []db.User
-	Groups         []db.Group
-	APIKeys        []db.APIKey
-	DrainStatus    proxy.DrainStatus // 排水状态
-	ActiveTab      string // targets | bindings
+	Targets       []proxy.LLMTargetStatus
+	AllTargets    []llmTargetWithMeta // 合并后的目标列表（含 Source/IsEditable）
+	Bindings      []db.LLMBinding
+	BindingsJSON  htmpl.JS          // pre-serialized JSON for client-side pagination (safe, no HTML escaping)
+	BoundCount    map[string]int    // target URL → 绑定数量
+	UserIDToName  map[string]string // user ID → username（用于绑定列表显示）
+	GroupIDToName map[string]string // group ID → group name
+	Users         []db.User
+	Groups        []db.Group
+	APIKeys       []db.APIKey
+	DrainStatus   proxy.DrainStatus // 排水状态
+	ActiveTab     string            // targets | bindings
 }
 
 // bindingEntry is the JSON shape embedded in the page for client-side filtering.
@@ -49,6 +49,7 @@ type llmTargetWithMeta struct {
 	Name            string
 	Weight          int
 	HealthCheckPath string
+	ModelEndpoint   string
 	APIKeyID        string
 	ModelMapping    string // ModelMappingJSON 原始值
 	SupportedModels string // SupportedModelsJSON 原始值
@@ -105,6 +106,7 @@ func (h *Handler) handleLLMPage(w http.ResponseWriter, r *http.Request) {
 					Name:            t.Name,
 					Weight:          t.Weight,
 					HealthCheckPath: t.HealthCheckPath,
+					ModelEndpoint:   t.ModelEndpoint,
 					APIKeyID:        apiKeyID,
 					ModelMapping:    t.ModelMappingJSON,
 					SupportedModels: t.SupportedModelsJSON,
@@ -404,6 +406,7 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 	name := r.FormValue("name")
 	weightStr := r.FormValue("weight")
 	healthCheckPath := r.FormValue("health_check_path")
+	modelEndpoint := r.FormValue("model_endpoint")
 	apiKeyID := r.FormValue("api_key_id")
 
 	if targetURL == "" || provider == "" {
@@ -447,6 +450,7 @@ func (h *Handler) handleLLMCreateTarget(w http.ResponseWriter, r *http.Request) 
 		Name:            name,
 		Weight:          weight,
 		HealthCheckPath: healthCheckPath,
+		ModelEndpoint:   modelEndpoint,
 		APIKeyID:        apiKeyIDPtr,
 		Source:          "database",
 		IsEditable:      true,
@@ -511,6 +515,7 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 	name := r.FormValue("name")
 	weightStr := r.FormValue("weight")
 	healthCheckPath := r.FormValue("health_check_path")
+	modelEndpoint := r.FormValue("model_endpoint")
 	apiKeyID := r.FormValue("api_key_id")
 
 	if targetURL == "" || provider == "" {
@@ -556,6 +561,7 @@ func (h *Handler) handleLLMUpdateTarget(w http.ResponseWriter, r *http.Request) 
 	existing.Name = name
 	existing.Weight = weight
 	existing.HealthCheckPath = healthCheckPath
+	existing.ModelEndpoint = modelEndpoint
 	existing.APIKeyID = apiKeyIDPtr
 
 	if err := h.llmTargetRepo.Update(existing); err != nil {

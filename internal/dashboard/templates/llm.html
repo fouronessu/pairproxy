@@ -122,6 +122,11 @@
         <input type="text" name="health_check_path" placeholder="/health"
                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
       </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Model Endpoint</label>
+        <input type="text" name="model_endpoint" placeholder="转发给上游的 model_endpoint 请求头"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
       <div class="flex gap-2">
         <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
           添加
@@ -197,6 +202,7 @@
                       data-name="{{.Name}}"
                       data-weight="{{.Weight}}"
                       data-health-check-path="{{.HealthCheckPath}}"
+			      data-model-endpoint="{{.ModelEndpoint}}"
                       data-api-key-id="{{.APIKeyID}}"
                       class="text-indigo-600 hover:text-indigo-800 text-xs">编辑</button>
               <form method="POST" action="/dashboard/llm/targets/{{.ID}}/delete" class="inline">
@@ -212,6 +218,7 @@
                     data-name="{{.Name}}"
                     data-weight="{{.Weight}}"
                     data-health-check-path="{{.HealthCheckPath}}"
+			    data-model-endpoint="{{.ModelEndpoint}}"
                     data-model-mapping="{{.ModelMapping}}"
                     data-supported-models="{{.SupportedModels}}"
                     data-auto-model="{{.AutoModel}}"
@@ -282,6 +289,11 @@
         <input type="text" name="health_check_path" id="edit_health_check_path"
                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
       </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Model Endpoint</label>
+        <input type="text" name="model_endpoint" id="edit_model_endpoint"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" />
+      </div>
       <div class="flex gap-2 pt-2">
         <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
           保存
@@ -304,6 +316,7 @@
       <div><span class="font-medium text-gray-700">名称:</span> <span id="view_name" class="text-gray-600"></span></div>
       <div><span class="font-medium text-gray-700">权重:</span> <span id="view_weight" class="text-gray-600"></span></div>
       <div><span class="font-medium text-gray-700">健康检查路径:</span> <span id="view_health_check_path" class="text-gray-600"></span></div>
+      <div><span class="font-medium text-gray-700">Model Endpoint:</span> <span id="view_model_endpoint" class="text-gray-600"></span></div>
       <div>
         <span class="font-medium text-gray-700">模型映射:</span>
         <span id="view_model_mapping" class="font-mono text-gray-600 break-all"></span>
@@ -655,6 +668,7 @@ function editTarget(btn) {
   document.getElementById('edit_name').value = d.name || '';
   document.getElementById('edit_weight').value = d.weight || 1;
   document.getElementById('edit_health_check_path').value = d.healthCheckPath || '';
+  document.getElementById('edit_model_endpoint').value = d.modelEndpoint || '';
   document.getElementById('edit_api_key_id').value = d.apiKeyId || '';
   document.getElementById('editTargetForm').action = '/dashboard/llm/targets/' + d.id + '/update';
   document.getElementById('editTargetModal').classList.remove('hidden');
@@ -671,6 +685,7 @@ function viewTargetDetails(btn) {
   document.getElementById('view_name').textContent = d.name || '（无）';
   document.getElementById('view_weight').textContent = d.weight || 1;
   document.getElementById('view_health_check_path').textContent = d.healthCheckPath || '（无）';
+  document.getElementById('view_model_endpoint').textContent = d.modelEndpoint || '（无）';
   document.getElementById('view_model_mapping').textContent = d.modelMapping || '{}';
   document.getElementById('view_supported_models').textContent = d.supportedModels || '[]';
   document.getElementById('view_auto_model').textContent = d.autoModel || '（无）';

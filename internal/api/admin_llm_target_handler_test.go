@@ -152,6 +152,7 @@ func TestCreateLLMTarget(t *testing.T) {
 		"name":              "New Target",
 		"weight":            1,
 		"health_check_path": "/health",
+		"model_endpoint":    "regional-model-a",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -168,6 +169,9 @@ func TestCreateLLMTarget(t *testing.T) {
 	var resp db.LLMTarget
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ModelEndpoint != "regional-model-a" {
+		t.Errorf("expected model_endpoint to be persisted, got %q", resp.ModelEndpoint)
 	}
 
 	if resp.ID == "" {
@@ -341,8 +345,9 @@ func TestUpdateLLMTarget(t *testing.T) {
 
 	// 更新请求
 	reqBody := map[string]interface{}{
-		"name":   "New Name",
-		"weight": 2,
+		"name":           "New Name",
+		"weight":         2,
+		"model_endpoint": "regional-model-b",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -367,6 +372,9 @@ func TestUpdateLLMTarget(t *testing.T) {
 	}
 	if updated.Weight != 2 {
 		t.Errorf("expected weight 2, got %d", updated.Weight)
+	}
+	if updated.ModelEndpoint != "regional-model-b" {
+		t.Errorf("expected model_endpoint 'regional-model-b', got %q", updated.ModelEndpoint)
 	}
 }
 

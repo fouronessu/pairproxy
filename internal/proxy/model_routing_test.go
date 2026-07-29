@@ -380,6 +380,30 @@ func TestE2E_AutoMode_FullFlow(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-20250514", receivedModel, "auto should be rewritten to actual model")
 }
 
+func TestForwardModelEndpointHeader(t *testing.T) {
+	var modelEndpoint string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelEndpoint = r.Header.Get("model_endpoint")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer backend.Close()
+
+	sp, cleanup := setupModelRoutingTest(t, []lb.Target{{ID: backend.URL, Addr: backend.URL, Weight: 1, Healthy: true}}, []LLMTarget{{
+		URL: backend.URL, APIKey: "test-key", Provider: "anthropic", Weight: 1, ModelEndpoint: "regional-model-a",
+	}})
+	defer cleanup()
+
+	token, err := sp.jwtMgr.Sign(auth.JWTClaims{UserID: "user1", Username: "user1"}, time.Hour)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-test","messages":[{"role":"user","content":"hello"}],"max_tokens":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PairProxy-Auth", token)
+	sp.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, "regional-model-a", modelEndpoint)
+}
+
 func TestE2E_ModelRouter_SkipsLargeInput(t *testing.T) {
 	var backendReceived bool
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

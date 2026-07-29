@@ -14,8 +14,9 @@ import (
 
 // LLMTargetInfo 携带 RetryTransport 执行单次请求所需的最小 target 信息。
 type LLMTargetInfo struct {
-	URL    string // 完整 URL，如 "https://api.anthropic.com"
-	APIKey string // Bearer token，用于 Authorization 头
+	URL           string // 完整 URL，如 "https://api.anthropic.com"
+	APIKey        string // Bearer token，用于 Authorization 头
+	ModelEndpoint string // 非空时作为 model_endpoint 请求头转发给上游
 }
 
 // RetryTransport 是带重试的 LLM 上游 http.RoundTripper。
@@ -136,6 +137,11 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		cloned.Host = nextURL.Host
 		if next.APIKey != "" {
 			cloned.Header.Set("Authorization", "Bearer "+next.APIKey)
+		}
+		if next.ModelEndpoint != "" {
+			cloned.Header.Set("model_endpoint", next.ModelEndpoint)
+		} else {
+			cloned.Header.Del("model_endpoint")
 		}
 
 		reason := "connection error"

@@ -89,6 +89,7 @@ func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *htt
 		Name            string            `json:"name"`
 		Weight          int               `json:"weight"`
 		HealthCheckPath string            `json:"health_check_path"`
+		ModelEndpoint   string            `json:"model_endpoint"`
 		SupportedModels []string          `json:"supported_models"`
 		AutoModel       string            `json:"auto_model"`
 		ModelMapping    map[string]string `json:"model_mapping"`
@@ -154,6 +155,7 @@ func (h *AdminLLMTargetHandler) handleCreateTarget(w http.ResponseWriter, r *htt
 		Name:                req.Name,
 		Weight:              req.Weight,
 		HealthCheckPath:     req.HealthCheckPath,
+		ModelEndpoint:       req.ModelEndpoint,
 		SupportedModelsJSON: supportedModelsJSON,
 		ModelMappingJSON:    modelMappingJSON,
 		AutoModel:           req.AutoModel,
@@ -251,6 +253,7 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 		Name            *string           `json:"name"`
 		Weight          *int              `json:"weight"`
 		HealthCheckPath *string           `json:"health_check_path"`
+		ModelEndpoint   *string           `json:"model_endpoint"`
 		SupportedModels []string          `json:"supported_models"`
 		AutoModel       *string           `json:"auto_model"`
 		ModelMapping    map[string]string `json:"model_mapping"` // nil = no change; empty map = clear
@@ -293,6 +296,11 @@ func (h *AdminLLMTargetHandler) handleUpdateTarget(w http.ResponseWriter, r *htt
 	if req.HealthCheckPath != nil && *req.HealthCheckPath != target.HealthCheckPath {
 		changes = append(changes, fmt.Sprintf("health_check_path: %s→%s", target.HealthCheckPath, *req.HealthCheckPath))
 		target.HealthCheckPath = *req.HealthCheckPath
+	}
+
+	if req.ModelEndpoint != nil && *req.ModelEndpoint != target.ModelEndpoint {
+		changes = append(changes, fmt.Sprintf("model_endpoint: %s→%s", target.ModelEndpoint, *req.ModelEndpoint))
+		target.ModelEndpoint = *req.ModelEndpoint
 	}
 
 	// 处理 supported_models（如果提供了值）

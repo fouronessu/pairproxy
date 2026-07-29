@@ -8,17 +8,17 @@ import (
 
 // Group 用户分组（配额管理）
 type Group struct {
-	ID                  string `gorm:"primarykey"`
-	Name                string `gorm:"uniqueIndex;not null"`
-	DailyTokenLimit     *int64 // NULL = 无限制
-	MonthlyTokenLimit   *int64 // NULL = 无限制
-	RequestsPerMinute   *int   // NULL = 无限制（每分钟请求数 RPM）
-	RequestsPer15Minutes *int  `gorm:"column:requests_per_15_minutes"` // NULL = 无限制（每15分钟请求数）
-	RequestsPer30Minutes *int  `gorm:"column:requests_per_30_minutes"` // NULL = 无限制（每30分钟请求数）
-	RequestsPerHour      *int  `gorm:"column:requests_per_hour"`       // NULL = 无限制（每小时请求数）
-	MaxTokensPerRequest *int64 // NULL = 无限制（单次请求 max_tokens 上限）
-	ConcurrentRequests  *int   // NULL = 无限制（每用户最大并发请求数）
-	CreatedAt           time.Time
+	ID                   string `gorm:"primarykey"`
+	Name                 string `gorm:"uniqueIndex;not null"`
+	DailyTokenLimit      *int64 // NULL = 无限制
+	MonthlyTokenLimit    *int64 // NULL = 无限制
+	RequestsPerMinute    *int   // NULL = 无限制（每分钟请求数 RPM）
+	RequestsPer15Minutes *int   `gorm:"column:requests_per_15_minutes"` // NULL = 无限制（每15分钟请求数）
+	RequestsPer30Minutes *int   `gorm:"column:requests_per_30_minutes"` // NULL = 无限制（每30分钟请求数）
+	RequestsPerHour      *int   `gorm:"column:requests_per_hour"`       // NULL = 无限制（每小时请求数）
+	MaxTokensPerRequest  *int64 // NULL = 无限制（单次请求 max_tokens 上限）
+	ConcurrentRequests   *int   // NULL = 无限制（每用户最大并发请求数）
+	CreatedAt            time.Time
 }
 
 // User 系统用户
@@ -140,6 +140,7 @@ type LLMTarget struct {
 	Name                string  // 显示名称
 	Weight              int     `gorm:"default:1"` // 负载均衡权重
 	HealthCheckPath     string  // 健康检查路径
+	ModelEndpoint       string  `gorm:"column:model_endpoint;default:''"`     // 非空时作为 model_endpoint 请求头转发给上游
 	ModelMappingJSON    string  `gorm:"column:model_mapping;default:'{}'"`    // JSON 序列化的 model_mapping（Anthropic→Ollama 模型名映射）
 	SupportedModelsJSON string  `gorm:"column:supported_models;default:'[]'"` // JSON array: ["claude-sonnet-4-*", "gpt-4o", "*"]，空表示支持所有模型
 	AutoModel           string  `gorm:"column:auto_model;default:''"`         // auto 模式下使用的模型名（空表示降级到 supported_models[0] 或透传）

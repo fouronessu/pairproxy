@@ -79,6 +79,7 @@ llm:
   # 若您已知目标的健康检查路径，可以通过 health_check_path 显式指定，跳过自动探测：
   #   health_check_path: "/health"      # 直接使用，不走自动探测
   #   health_check_path: "/v1/models"   # 对 Anthropic/OpenAI 适用
+  #   model_endpoint: "regional-model-a" # 非空时作为 model_endpoint 请求头转发给上游
   #
   # 各厂商推荐配置（无需手动指定，智能探活会自动发现）：
   #   Anthropic API        → 自动发现 GET /v1/models

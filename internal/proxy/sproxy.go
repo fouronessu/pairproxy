@@ -48,13 +48,14 @@ var ErrBoundTargetUnavailable = errors.New("assigned LLM target is currently una
 
 // LLMTarget 代表一个 LLM 后端（含 API Key 和 provider 类型）。
 type LLMTarget struct {
-	ID           string // UUID（来自 DB，运行时路由标识）
-	URL          string
-	APIKey       string
-	Provider     string            // "anthropic"（默认）| "openai" | "ollama"
-	Name         string            // 可选显示名，空则用 URL
-	Weight       int               // 负载均衡权重（≥1）
-	ModelMapping map[string]string // Anthropic→Ollama 模型名映射（可选）
+	ID            string // UUID（来自 DB，运行时路由标识）
+	URL           string
+	APIKey        string
+	Provider      string            // "anthropic"（默认）| "openai" | "ollama"
+	Name          string            // 可选显示名，空则用 URL
+	Weight        int               // 负载均衡权重（≥1）
+	ModelEndpoint string            // 非空时作为 model_endpoint 请求头转发给上游
+	ModelMapping  map[string]string // Anthropic→Ollama 模型名映射（可选）
 }
 
 // LLMTargetStatus 向 Admin/Dashboard 暴露的 LLM 目标运行时状态。
@@ -411,6 +412,7 @@ func (sp *SProxy) syncConfigTargetsToDatabase(repo *db.LLMTargetRepo) error {
 			Name:                ct.Name,
 			Weight:              ct.Weight,
 			HealthCheckPath:     ct.HealthCheckPath,
+			ModelEndpoint:       ct.ModelEndpoint,
 			ModelMappingJSON:    modelMappingJSON,
 			SupportedModelsJSON: supportedModelsJSON,
 			AutoModel:           ct.AutoModel,
@@ -517,6 +519,7 @@ func (sp *SProxy) loadAllTargets(repo *db.LLMTargetRepo) ([]config.LLMTarget, er
 			Name:            dt.Name,
 			Weight:          dt.Weight,
 			HealthCheckPath: dt.HealthCheckPath,
+			ModelEndpoint:   dt.ModelEndpoint,
 			ModelMapping:    modelMapping,
 			SupportedModels: supportedModels,
 			AutoModel:       dt.AutoModel,
@@ -745,13 +748,14 @@ func (sp *SProxy) SyncLLMTargets() {
 	newSpTargets := make([]LLMTarget, 0, len(loadedTargets))
 	for _, t := range loadedTargets {
 		newSpTargets = append(newSpTargets, LLMTarget{
-			ID:           t.ID,
-			URL:          t.URL,
-			APIKey:       t.APIKey,
-			Provider:     t.Provider,
-			Name:         t.Name,
-			Weight:       t.Weight,
-			ModelMapping: t.ModelMapping,
+			ID:            t.ID,
+			URL:           t.URL,
+			APIKey:        t.APIKey,
+			Provider:      t.Provider,
+			Name:          t.Name,
+			Weight:        t.Weight,
+			ModelEndpoint: t.ModelEndpoint,
+			ModelMapping:  t.ModelMapping,
 		})
 	}
 	sp.targets = newSpTargets
@@ -1238,7 +1242,7 @@ func (sp *SProxy) pickLLMTarget(path, userID, groupID, requestedModel string, tr
 		zap.String("url", t.URL),
 		zap.String("path", path),
 	)
-	return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey}, nil
+	return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey, ModelEndpoint: t.ModelEndpoint}, nil
 }
 
 // weightedPickExcluding 从 llmBalancer 中选取健康 target，排除 tried，并应用 provider 过滤、语义候选集过滤和模型过滤。
@@ -1330,7 +1334,7 @@ func (sp *SProxy) llmTargetInfoForID(targetID string) *lb.LLMTargetInfo {
 			id = t.URL
 		}
 		if id == targetID {
-			return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey}
+			return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey, ModelEndpoint: t.ModelEndpoint}
 		}
 	}
 	sp.logger.Warn("llmTargetInfoForID: target not found in sp.targets",
@@ -1344,7 +1348,7 @@ func (sp *SProxy) llmTargetInfoForID(targetID string) *lb.LLMTargetInfo {
 func (sp *SProxy) llmTargetInfoForURL(targetURL string) *lb.LLMTargetInfo {
 	for _, t := range sp.targets {
 		if t.URL == targetURL {
-			return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey}
+			return &lb.LLMTargetInfo{URL: t.URL, APIKey: t.APIKey, ModelEndpoint: t.ModelEndpoint}
 		}
 	}
 	return &lb.LLMTargetInfo{URL: targetURL}
@@ -2223,6 +2227,11 @@ func (sp *SProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			req.Header.Del("x-api-key")
 			apiKey := firstInfo.APIKey
 			req.Header.Set("Authorization", "Bearer "+apiKey)
+			if firstInfo.ModelEndpoint != "" {
+				req.Header.Set("model_endpoint", firstInfo.ModelEndpoint)
+			} else {
+				req.Header.Del("model_endpoint")
+			}
 			req.Header.Del("X-Forwarded-For")
 
 			// 将真实 session ID 透传给上游（自动生成的不透传）
