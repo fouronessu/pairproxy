@@ -70,7 +70,10 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 		t.Fatalf("SaveAllRequest: %v", err)
 	}
 
-	hourDir := filepath.Join(tr.AllDir(), "2026-06-16_12")
+	// SaveAllRequest 的契约是按运行环境本地时区归档；不能假定测试进程
+	// 位于 UTC+8，否则 GitHub Actions 的 UTC runner 会读取错误目录。
+	localCreatedAt := createdAt.Local().Truncate(time.Millisecond)
+	hourDir := filepath.Join(tr.AllDir(), localCreatedAt.Format("2006-01-02_15"))
 	entries, err := os.ReadDir(hourDir)
 	if err != nil {
 		t.Fatalf("ReadDir all hour: %v", err)
@@ -78,7 +81,7 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("all hour entries len = %d, want 1", len(entries))
 	}
-	wantName := "2026-06-16_12-34-56_req-123.json"
+	wantName := localCreatedAt.Format("2006-01-02_15-04-05") + "_req-123.json"
 	if entries[0].Name() != wantName {
 		t.Fatalf("all record filename = %q, want %q", entries[0].Name(), wantName)
 	}
@@ -97,8 +100,9 @@ func TestTracker_SaveAllRequest(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal all record: %v", err)
 	}
-	if got.CreatedAt != "2026-06-16_12:34:56.789" {
-		t.Errorf("CreatedAt = %q, want 2026-06-16_12:34:56.789", got.CreatedAt)
+	wantCreatedAt := localCreatedAt.Format("2006-01-02_15:04:05.000")
+	if got.CreatedAt != wantCreatedAt {
+		t.Errorf("CreatedAt = %q, want %q", got.CreatedAt, wantCreatedAt)
 	}
 	if got.SessionID != "session-abc" {
 		t.Errorf("SessionID = %q, want session-abc", got.SessionID)
